@@ -93,7 +93,10 @@ fn lint_resource(
         .par_iter()
         .filter(|file| targets.contains(&file.path))
         .map(|file| {
-            let file_config = config.for_file(&file.path);
+            let mut file_config = config.for_file(&file.path);
+            if resource.manifest.is_map_file(&file.relative) {
+                file_config.set(crate::rules::UNDEFINED_GLOBAL, crate::config::Level::Off);
+            }
             let diagnostics = check_file(&FileInput {
                 source: &file.source,
                 chunk: &file.chunk,

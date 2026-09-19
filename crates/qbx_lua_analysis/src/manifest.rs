@@ -93,6 +93,8 @@ pub struct Manifest {
     pub files: Vec<Entry>,
     pub dependencies: Vec<Entry>,
     pub ui_page: Option<Entry>,
+    /// Files named by `map '...'`; mapmanager runs them in its own environment (`spawnpoint` etc.).
+    pub maps: Vec<Entry>,
     pub directives: Vec<Directive>,
 }
 
@@ -105,6 +107,10 @@ impl Manifest {
             }
         }
         manifest
+    }
+
+    pub fn is_map_file(&self, relative_path: &str) -> bool {
+        self.maps.iter().any(|map| crate::glob::manifest_glob_match(&map.value, relative_path))
     }
 
     pub fn lua54_enabled(&self) -> bool {
@@ -146,6 +152,7 @@ impl Manifest {
             "file" | "files" => self.files.extend(first),
             "dependency" | "dependencies" => self.dependencies.extend(first),
             "ui_page" => self.ui_page = first.into_iter().next(),
+            "map" => self.maps.extend(first),
             "loadscreen" => self.files.extend(first),
             "data_file" => {
                 if let Some(paths) = arg_groups.get(1) {

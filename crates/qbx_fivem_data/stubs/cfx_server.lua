@@ -58,3 +58,12 @@ function PerformHttpRequest(url, cb, method, data, headers, options) end
 ---@return table<string, string> headers
 ---@return string? errorData
 function PerformHttpRequestAwait(url, method, data, headers, options) end
+
+---Writes a structured entry to the server log that RCON clients and txAdmin can read.
+---@param data table
+function RconLog(data) end
+
+---Returns the network endpoint (ip:port) of a player.
+---@param playerSrc integer|string
+---@return string endpoint
+function GetPlayerEP(playerSrc) end
