@@ -1,34 +1,34 @@
 use crate::ast::*;
 
-pub trait Visitor: Sized {
-    fn visit_block(&mut self, block: &Block) {
+pub trait Visitor<'ast>: Sized {
+    fn visit_block(&mut self, block: &'ast Block) {
         walk_block(self, block);
     }
 
-    fn visit_stmt(&mut self, stmt: &Stmt) {
+    fn visit_stmt(&mut self, stmt: &'ast Stmt) {
         walk_stmt(self, stmt);
     }
 
-    fn visit_expr(&mut self, expr: &Expr) {
+    fn visit_expr(&mut self, expr: &'ast Expr) {
         walk_expr(self, expr);
     }
 
-    fn visit_func_body(&mut self, func: &FuncBody) {
+    fn visit_func_body(&mut self, func: &'ast FuncBody) {
         walk_func_body(self, func);
     }
 }
 
-pub fn walk_block<V: Visitor>(v: &mut V, block: &Block) {
+pub fn walk_block<'ast, V: Visitor<'ast>>(v: &mut V, block: &'ast Block) {
     for stmt in &block.stmts {
         v.visit_stmt(stmt);
     }
 }
 
-pub fn walk_func_body<V: Visitor>(v: &mut V, func: &FuncBody) {
+pub fn walk_func_body<'ast, V: Visitor<'ast>>(v: &mut V, func: &'ast FuncBody) {
     v.visit_block(&func.body);
 }
 
-pub fn walk_stmt<V: Visitor>(v: &mut V, stmt: &Stmt) {
+pub fn walk_stmt<'ast, V: Visitor<'ast>>(v: &mut V, stmt: &'ast Stmt) {
     match &stmt.kind {
         StmtKind::Local { exprs, .. } => exprs.iter().for_each(|e| v.visit_expr(e)),
         StmtKind::LocalFunction { func, .. } | StmtKind::Function { func, .. } => v.visit_func_body(func),
@@ -76,7 +76,7 @@ pub fn walk_stmt<V: Visitor>(v: &mut V, stmt: &Stmt) {
     }
 }
 
-pub fn walk_expr<V: Visitor>(v: &mut V, expr: &Expr) {
+pub fn walk_expr<'ast, V: Visitor<'ast>>(v: &mut V, expr: &'ast Expr) {
     match &expr.kind {
         ExprKind::Function(func) => v.visit_func_body(func),
         ExprKind::Index { base, index, .. } => {

@@ -104,13 +104,13 @@ fn same_place(a: &Expr, b: &Expr) -> bool {
     }
 }
 
-impl Visitor for Flow<'_, '_> {
-    fn visit_block(&mut self, block: &Block) {
+impl<'ast> Visitor<'ast> for Flow<'_, '_> {
+    fn visit_block(&mut self, block: &'ast Block) {
         self.unreachable(block);
         visit::walk_block(self, block);
     }
 
-    fn visit_func_body(&mut self, func: &FuncBody) {
+    fn visit_func_body(&mut self, func: &'ast FuncBody) {
         for (i, param) in func.params.iter().enumerate() {
             if param.text != "_" && func.params[..i].iter().any(|p| p.text == param.text) {
                 self.sink.report(rules::DUPLICATE_ARGUMENT, param.span, format!("duplicate argument '{}'", param.text));
@@ -119,7 +119,7 @@ impl Visitor for Flow<'_, '_> {
         visit::walk_func_body(self, func);
     }
 
-    fn visit_stmt(&mut self, stmt: &Stmt) {
+    fn visit_stmt(&mut self, stmt: &'ast Stmt) {
         match &stmt.kind {
             StmtKind::Local { names, exprs, in_unpack: false } => self.balance(names.len(), exprs, stmt.span, true),
             StmtKind::Assign { targets, exprs } => {
@@ -157,7 +157,7 @@ impl Visitor for Flow<'_, '_> {
         visit::walk_stmt(self, stmt);
     }
 
-    fn visit_expr(&mut self, expr: &Expr) {
+    fn visit_expr(&mut self, expr: &'ast Expr) {
         match &expr.kind {
             ExprKind::Table(fields) => self.duplicate_keys(fields),
             ExprKind::Binary { op: BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge, lhs, rhs, .. }

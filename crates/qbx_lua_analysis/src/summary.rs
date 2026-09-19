@@ -52,14 +52,14 @@ impl FieldDefs<'_> {
     }
 }
 
-impl Visitor for FieldDefs<'_> {
-    fn visit_func_body(&mut self, func: &FuncBody) {
+impl<'ast> Visitor<'ast> for FieldDefs<'_> {
+    fn visit_func_body(&mut self, func: &'ast FuncBody) {
         self.depth += 1;
         visit::walk_func_body(self, func);
         self.depth -= 1;
     }
 
-    fn visit_stmt(&mut self, stmt: &Stmt) {
+    fn visit_stmt(&mut self, stmt: &'ast Stmt) {
         match &stmt.kind {
             StmtKind::Function { name, .. } if self.is_global(&name.base) => {
                 if let Some(member) = name.path.first().or(name.method.as_ref()) {

@@ -273,15 +273,15 @@ fn is_always_true(expr: &Expr) -> bool {
     matches!(expr.unparen().kind, ExprKind::True | ExprKind::Number(_))
 }
 
-impl Visitor for FiveM<'_, '_> {
-    fn visit_func_body(&mut self, func: &FuncBody) {
+impl<'ast> Visitor<'ast> for FiveM<'_, '_> {
+    fn visit_func_body(&mut self, func: &'ast FuncBody) {
         let deferred = self.deferred.contains(&func.span.start);
         self.functions.push(FunctionState { yielded_at: None, deferred });
         visit::walk_func_body(self, func);
         self.functions.pop();
     }
 
-    fn visit_stmt(&mut self, stmt: &Stmt) {
+    fn visit_stmt(&mut self, stmt: &'ast Stmt) {
         match &stmt.kind {
             StmtKind::While { cond, body } if is_always_true(cond) => self.check_infinite_loop(stmt, body),
             StmtKind::Repeat { body, cond } if matches!(cond.unparen().kind, ExprKind::False | ExprKind::Nil) => {
@@ -292,7 +292,7 @@ impl Visitor for FiveM<'_, '_> {
         visit::walk_stmt(self, stmt);
     }
 
-    fn visit_expr(&mut self, expr: &Expr) {
+    fn visit_expr(&mut self, expr: &'ast Expr) {
         match &expr.kind {
             ExprKind::Name(name) => self.check_source_read(name),
             ExprKind::Field { .. } => self.check_citizen_prefix(expr),
@@ -323,10 +323,10 @@ struct LoopScan<'c, 'a, 'b> {
     gotos: Vec<SmolStr>,
 }
 
-impl Visitor for LoopScan<'_, '_, '_> {
-    fn visit_func_body(&mut self, _func: &FuncBody) {}
+impl<'ast> Visitor<'ast> for LoopScan<'_, '_, '_> {
+    fn visit_func_body(&mut self, _func: &'ast FuncBody) {}
 
-    fn visit_stmt(&mut self, stmt: &Stmt) {
+    fn visit_stmt(&mut self, stmt: &'ast Stmt) {
         let is_loop = matches!(
             stmt.kind,
             StmtKind::While { .. }
@@ -346,7 +346,7 @@ impl Visitor for LoopScan<'_, '_, '_> {
         self.loop_depth -= u32::from(is_loop);
     }
 
-    fn visit_expr(&mut self, expr: &Expr) {
+    fn visit_expr(&mut self, expr: &'ast Expr) {
         match &expr.kind {
             ExprKind::Call { callee, .. } => match callee.dotted_path() {
                 Some(path) if looks_yielding(&path) => self.may_yield = true,

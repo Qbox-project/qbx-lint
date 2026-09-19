@@ -183,8 +183,8 @@ impl Fields<'_, '_> {
     }
 }
 
-impl Visitor for Fields<'_, '_> {
-    fn visit_stmt(&mut self, stmt: &Stmt) {
+impl<'ast> Visitor<'ast> for Fields<'_, '_> {
+    fn visit_stmt(&mut self, stmt: &'ast Stmt) {
         if let StmtKind::Assign { targets, exprs } = &stmt.kind {
             for target in targets {
                 match &target.kind {
@@ -198,7 +198,7 @@ impl Visitor for Fields<'_, '_> {
         visit::walk_stmt(self, stmt);
     }
 
-    fn visit_expr(&mut self, expr: &Expr) {
+    fn visit_expr(&mut self, expr: &'ast Expr) {
         if let ExprKind::Field { base, name, .. } = &expr.kind {
             if let ExprKind::Name(base) = &base.kind {
                 self.check_field(base, name);
