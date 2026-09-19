@@ -1,0 +1,10 @@
+[package]
+name = "qbx_lua_syntax"
+description = "Error-tolerant lexer and parser for Lua 5.4 with the CfxLua (FiveM) syntax extensions"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+smol_str.workspace = true

@@ -1,0 +1,36 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/qbx_lua_syntax",
+    "crates/qbx_lua_analysis",
+    "crates/qbx_fivem_data",
+    "crates/qbx_lint",
+    "xtask",
+]
+default-members = [
+    "crates/qbx_lua_syntax",
+    "crates/qbx_lua_analysis",
+    "crates/qbx_fivem_data",
+    "crates/qbx_lint",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/Qbox-project/qbx-lint"
+rust-version = "1.80"
+
+[workspace.dependencies]
+qbx_lua_syntax = { path = "crates/qbx_lua_syntax" }
+qbx_lua_analysis = { path = "crates/qbx_lua_analysis" }
+qbx_fivem_data = { path = "crates/qbx_fivem_data" }
+smol_str = "0.3"
+rustc-hash = "2"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = true
+panic = "abort"
