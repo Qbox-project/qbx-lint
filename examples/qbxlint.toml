@@ -1,0 +1,20 @@
+# Every key is optional. Place this file at the repository root.
+
+# Extra glob patterns to skip, relative to this file.
+exclude = ["web/**", "**/vendor/**"]
+
+# Globals that exist at runtime but cannot be discovered from fxmanifest.lua.
+globals = []
+
+# Locals and arguments starting with this prefix are never reported as unused.
+ignore_unused_prefix = "_"
+
+[rules]
+# Levels: "off", "hint", "info", "warning", "error". Run `qbx-lint --list-rules` for all codes.
+"unused-argument" = "off"
+"fivem/citizen-prefix" = "warning"
+"qbox/prefer-cache" = "info"
+
+[[overrides]]
+files = ["**/tests/**", "**/*.spec.lua"]
+rules = { "undefined-global" = "off" }

@@ -1,0 +1,76 @@
+name: Qbox Lua Lint
+description: Lint FiveM Lua resources with qbx-lint and annotate the pull request
+branding:
+  icon: check-circle
+  color: blue
+
+inputs:
+  paths:
+    description: Space separated files or directories to lint
+    default: "."
+  args:
+    description: Extra arguments passed to qbx-lint (for example "--max-warnings 0")
+    default: ""
+  version:
+    description: Release tag to download, or "latest"
+    default: latest
+  fail-on-error:
+    description: Fail the job when errors are found
+    default: "true"
+
+outputs:
+  sarif:
+    description: Path of the generated SARIF report
+    value: ${{ steps.lint.outputs.sarif }}
+
+runs:
+  using: composite
+  steps:
+    - name: Install qbx-lint
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        set -euo pipefail
+        case "${RUNNER_OS}-${RUNNER_ARCH}" in
+          Linux-X64) asset="qbx-lint-x86_64-unknown-linux-musl.tar.gz" ;;
+          Linux-ARM64) asset="qbx-lint-aarch64-unknown-linux-musl.tar.gz" ;;
+          macOS-ARM64) asset="qbx-lint-aarch64-apple-darwin.tar.gz" ;;
+          macOS-X64) asset="qbx-lint-x86_64-apple-darwin.tar.gz" ;;
+          Windows-X64) asset="qbx-lint-x86_64-pc-windows-msvc.zip" ;;
+          *) echo "unsupported runner ${RUNNER_OS}-${RUNNER_ARCH}" >&2; exit 1 ;;
+        esac
+        dest="${RUNNER_TEMP}/qbx-lint"
+        mkdir -p "${dest}"
+        if [ "${VERSION}" = "latest" ]; then
+          gh release download --repo Qbox-project/qbx-lint --pattern "${asset}" --dir "${dest}"
+        else
+          gh release download "${VERSION}" --repo Qbox-project/qbx-lint --pattern "${asset}" --dir "${dest}"
+        fi
+        case "${asset}" in
+          *.zip) unzip -q "${dest}/${asset}" -d "${dest}" ;;
+          *) tar -xzf "${dest}/${asset}" -C "${dest}" ;;
+        esac
+        echo "${dest}" >> "${GITHUB_PATH}"
+
+    - name: Lint
+      id: lint
+      shell: bash
+      env:
+        LINT_PATHS: ${{ inputs.paths }}
+        LINT_ARGS: ${{ inputs.args }}
+        FAIL_ON_ERROR: ${{ inputs.fail-on-error }}
+      run: |
+        set -uo pipefail
+        sarif="${RUNNER_TEMP}/qbx-lint.sarif"
+        echo "sarif=${sarif}" >> "${GITHUB_OUTPUT}"
+        # shellcheck disable=SC2086
+        qbx-lint ${LINT_PATHS} ${LINT_ARGS} --format sarif --output "${sarif}" --no-fail
+        # shellcheck disable=SC2086
+        qbx-lint ${LINT_PATHS} ${LINT_ARGS} --format github
+        status=$?
+        if [ "${FAIL_ON_ERROR}" != "true" ]; then
+          exit 0
+        fi
+        exit ${status}

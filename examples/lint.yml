@@ -1,0 +1,20 @@
+# Drop-in replacement for the iLLeniumStudios/fivem-lua-lint-action workflow.
+# Globals come from fxmanifest.lua, so there is no list of "extra libs" to maintain.
+name: Lint
+on:
+  push:
+    paths: ["**.lua", ".github/workflows/lint.yml", "qbxlint.toml"]
+  pull_request:
+    paths: ["**.lua", ".github/workflows/lint.yml", "qbxlint.toml"]
+
+jobs:
+  lint:
+    name: Lint Lua
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: Qbox-project/qbx-lint@v1
