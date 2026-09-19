@@ -1,7 +1,21 @@
 [package]
 name = "qbx_lua_analysis"
+description = "Scope resolution, fxmanifest-aware project model and lint rules for FiveM Lua"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+
+[features]
+docs = ["qbx_fivem_data/docs"]
 
 [dependencies]
+qbx_lua_syntax.workspace = true
+qbx_fivem_data.workspace = true
+smol_str.workspace = true
+rustc-hash.workspace = true
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+globset = "0.4"
+walkdir = "2"
+rayon = "1"

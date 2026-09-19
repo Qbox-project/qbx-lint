@@ -181,7 +181,10 @@ pub struct KnownImport {
 /// Globals provided by commonly imported `@resource/file.lua` scripts, used when the
 /// providing resource is not part of the linted tree (the usual case in single-repo CI).
 pub static KNOWN_IMPORTS: &[KnownImport] = &[
-    KnownImport { path: "@ox_lib/init.lua", globals: &["lib", "cache", "locale", "require", "SetInterval", "ClearInterval"] },
+    KnownImport {
+        path: "@ox_lib/init.lua",
+        globals: &["lib", "cache", "locale", "require", "SetInterval", "ClearInterval"],
+    },
     KnownImport { path: "@oxmysql/lib/MySQL.lua", globals: &["MySQL"] },
     KnownImport { path: "@qbx_core/modules/lib.lua", globals: &["qbx"] },
     KnownImport { path: "@qbx_core/modules/playerdata.lua", globals: &["QBX"] },

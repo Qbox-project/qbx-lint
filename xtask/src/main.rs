@@ -141,6 +141,12 @@ fn add_native(natives: &mut BTreeMap<String, Native>, ns: &str, hash: &str, nati
     for alias in native["aliases"].as_array().into_iter().flatten().filter_map(Value::as_str) {
         let alias_name = lua_name(alias);
         if alias_name != name {
+            if let Some(existing) = natives.get_mut(&alias_name) {
+                if existing.side != side {
+                    existing.side = 'b';
+                }
+                continue;
+            }
             natives.entry(alias_name).or_insert_with(|| Native {
                 side,
                 ns: ns.to_string(),
@@ -159,7 +165,11 @@ fn add_native(natives: &mut BTreeMap<String, Native>, ns: &str, hash: &str, nati
             natives.get_mut(&name).unwrap().side = 'b';
         }
         Some(existing) if existing.alias_of.is_none() => {}
-        _ => {
+        Some(existing) => {
+            let side = if existing.side == side { side } else { 'b' };
+            natives.insert(name, Native { side, ..entry });
+        }
+        None => {
             natives.insert(name, entry);
         }
     }
@@ -189,9 +199,8 @@ fn is_out_param(raw_name: &str, ty: &str) -> bool {
     if !ty.ends_with('*') || matches!(ty, "char*" | "Any*") {
         return false;
     }
-    let consumes_handle = raw_name.starts_with("DELETE_")
-        || raw_name.starts_with("REMOVE_")
-        || raw_name.contains("_AS_NO_LONGER_NEEDED");
+    let consumes_handle =
+        raw_name.starts_with("DELETE_") || raw_name.starts_with("REMOVE_") || raw_name.contains("_AS_NO_LONGER_NEEDED");
     !consumes_handle
 }
 

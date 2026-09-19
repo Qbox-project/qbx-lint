@@ -90,10 +90,7 @@ impl LineIndex {
         let offset = offset.min(self.len);
         let line = self.line_of(offset);
         let start = self.line_start(line) as usize;
-        let col = source
-            .get(start..offset as usize)
-            .map(|s| s.chars().count() as u32)
-            .unwrap_or(offset - start as u32);
+        let col = source.get(start..offset as usize).map(|s| s.chars().count() as u32).unwrap_or(offset - start as u32);
         LineCol { line, col }
     }
 

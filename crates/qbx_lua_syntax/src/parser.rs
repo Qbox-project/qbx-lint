@@ -589,7 +589,10 @@ impl<'a> Parser<'a> {
         let mut lhs = if let Some(op) = unary {
             self.bump();
             let operand = self.parse_sub_expr(UNARY_PRIORITY);
-            Expr { span: Span::new(start, operand.span.end.max(start)), kind: ExprKind::Unary { op, expr: Box::new(operand) } }
+            Expr {
+                span: Span::new(start, operand.span.end.max(start)),
+                kind: ExprKind::Unary { op, expr: Box::new(operand) },
+            }
         } else {
             self.parse_simple_expr()
         };
@@ -681,7 +684,10 @@ impl<'a> Parser<'a> {
             _ => {
                 let near = self.describe_current();
                 let span = Span::empty(self.prev_end());
-                self.error_at(if tok.kind == TokenKind::Eof { span } else { tok.span }, format!("unexpected symbol near '{near}'"));
+                self.error_at(
+                    if tok.kind == TokenKind::Eof { span } else { tok.span },
+                    format!("unexpected symbol near '{near}'"),
+                );
                 Expr { kind: ExprKind::Error, span }
             }
         }
@@ -727,7 +733,10 @@ impl<'a> Parser<'a> {
                         }
                         None => {
                             if !method.is_missing() {
-                                self.error_at(Span::empty(method.span.end), "expected function arguments after method name");
+                                self.error_at(
+                                    Span::empty(method.span.end),
+                                    "expected function arguments after method name",
+                                );
                             }
                             let args_span = Span::empty(self.prev_end());
                             ExprKind::MethodCall {

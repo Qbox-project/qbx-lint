@@ -51,19 +51,56 @@ pub struct Stmt {
 
 #[derive(Debug)]
 pub enum StmtKind {
-    Local { names: Vec<AttribName>, exprs: Vec<Expr>, in_unpack: bool },
-    LocalFunction { name: Name, func: Box<FuncBody> },
-    Function { name: FuncName, func: Box<FuncBody> },
-    Assign { targets: Vec<Expr>, exprs: Vec<Expr> },
-    CompoundAssign { target: Expr, op: BinOp, op_span: Span, expr: Expr },
+    Local {
+        names: Vec<AttribName>,
+        exprs: Vec<Expr>,
+        in_unpack: bool,
+    },
+    LocalFunction {
+        name: Name,
+        func: Box<FuncBody>,
+    },
+    Function {
+        name: FuncName,
+        func: Box<FuncBody>,
+    },
+    Assign {
+        targets: Vec<Expr>,
+        exprs: Vec<Expr>,
+    },
+    CompoundAssign {
+        target: Expr,
+        op: BinOp,
+        op_span: Span,
+        expr: Expr,
+    },
     /// An expression in statement position. Anything other than a call is also reported as a syntax error.
     Expr(Expr),
     Do(Block),
-    While { cond: Expr, body: Block },
-    Repeat { body: Block, cond: Expr },
-    If { branches: Vec<IfBranch>, else_block: Option<Block> },
-    NumericFor { var: Name, start: Expr, limit: Expr, step: Option<Expr>, body: Block },
-    GenericFor { names: Vec<Name>, exprs: Vec<Expr>, body: Block },
+    While {
+        cond: Expr,
+        body: Block,
+    },
+    Repeat {
+        body: Block,
+        cond: Expr,
+    },
+    If {
+        branches: Vec<IfBranch>,
+        else_block: Option<Block>,
+    },
+    NumericFor {
+        var: Name,
+        start: Expr,
+        limit: Expr,
+        step: Option<Expr>,
+        body: Block,
+    },
+    GenericFor {
+        names: Vec<Name>,
+        exprs: Vec<Expr>,
+        body: Block,
+    },
     Return(Vec<Expr>),
     Break,
     Goto(Name),

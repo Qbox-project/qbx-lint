@@ -161,7 +161,7 @@ ApplyPedBloodDamageByZone	c	PED	0x816F6981C60BF53B		ped:Ped,p1:any,p2:number,p3:
 ApplyPedBloodSpecific	c	PED	0xEF0D582CBF2D9B0F		ped:Ped,component:integer,u:number,v:number,rotation:number,scale:number,forcedFrame:integer,preAge:number,bloodName:string	
 ApplyPedDamageDecal	c	PED	0x397C38AA7B4A5F83		ped:Ped,damageZone:integer,xOffset:number,yOffset:number,heading:number,scale:number,alpha:number,variation:integer,fadeIn:boolean,decalName:string	
 ApplyPedDamagePack	c	PED	0x46DF918788CB093F		ped:Ped,damagePack:string,damage:number,mult:number	
-ApplyPedOverlay	c	PED	0x5F5D1665E352A839		ped:Ped,collection:Hash,overlay:Hash	AddPedDecorationFromHashes
+ApplyPedOverlay	b	PED	0x5F5D1665E352A839		ped:Ped,collection:Hash,overlay:Hash	AddPedDecorationFromHashes
 ApplyWeatherCycles	c	CFX	0x3422291C	boolean	numEntries:integer,msPerCycle:integer	
 AreAllNavmeshRegionsLoaded	c	PATHFIND	0x8415D95B194A3AEA	boolean		
 AreAllVehicleWindowsIntact	c	VEHICLE	0x11D862A3E977A9EF	boolean	vehicle:Vehicle	
@@ -1370,7 +1370,7 @@ GetHeightmapTopZForArea	c	PATHFIND	0x8ABE8608576D9CE3	number	x1:number,y1:number
 GetHeightmapTopZForPosition	c	PATHFIND	0x29C24BFBED8AB8FB	number	x:number,y:number	
 GetHeliBodyHealth	s	CFX	0xA886495D	integer	heli:Vehicle	
 GetHeliDisableExplodeFromBodyDamage	s	CFX	0x82AFC0A3	boolean	heli:Vehicle	
-GetHeliEngineHealth	s	CFX	0xA0FA0354	integer	heli:Vehicle	
+GetHeliEngineHealth	b	CFX	0xA0FA0354	integer	heli:Vehicle	
 GetHeliGasTankHealth	s	CFX	0xD4EC7858	integer	heli:Vehicle	
 GetHeliMainRotorDamageScale	s	CFX	0xC37D668	number	heli:Vehicle	
 GetHeliMainRotorHealth	b	VEHICLE	0xE4CB7541F413D2C5	number	vehicle:Vehicle	
@@ -2054,7 +2054,7 @@ GetVehicleCustomPrimaryColour	b	VEHICLE	0xB64CF2CCA9D95F52	integer,integer,integ
 GetVehicleCustomSecondaryColour	b	VEHICLE	0x8389CD56CA8072DC	integer,integer,integer	vehicle:Vehicle	
 GetVehicleDashboardBoost	c	CFX	0xDFFABA2A	number		
 GetVehicleDashboardColor	c	VEHICLE	0xB7635E80A5C31BFF	integer	vehicle:Vehicle	
-GetVehicleDashboardColour	s	CFX	0xA0DBD08D	integer	vehicle:Vehicle	
+GetVehicleDashboardColour	b	CFX	0xA0DBD08D	integer	vehicle:Vehicle	
 GetVehicleDashboardCurrentGear	c	CFX	0x435C86F4	number		
 GetVehicleDashboardFuel	c	CFX	0x19B0B2CE	number		
 GetVehicleDashboardLights	c	CFX	0x500FFE9D	integer		
@@ -2096,7 +2096,7 @@ GetVehicleHasFlag	c	CFX	0xD85C9F57	boolean	vehicle:Vehicle,flagIndex:integer
 GetVehicleHasKers	c	VEHICLE	0x50634E348C8D44EF	boolean	vehicle:Vehicle	
 GetVehicleHasLandingGear	c	VEHICLE	0xE43701C36CAFF1A4	boolean	vehicle:Vehicle	DoesVehicleHaveLandingGear
 GetVehicleHasParachute	c	VEHICLE	0xBC9CFF381338CB4F	boolean	vehicle:Vehicle	
-GetVehicleHeadlightsColour	s	CFX	0xD7147656	integer	vehicle:Vehicle	
+GetVehicleHeadlightsColour	b	CFX	0xD7147656	integer	vehicle:Vehicle	
 GetVehicleHealthPercentage	c	VEHICLE	0xB8EF61207C2393A9	number	vehicle:Vehicle	
 GetVehicleHighGear	c	CFX	0xF1D1D689	integer	vehicle:Vehicle	
 GetVehicleHomingLockonState	b	VEHICLE	0xE6B0E8CFC3633BF0	integer	vehicle:Vehicle	
@@ -2108,7 +2108,7 @@ GetVehicleIndexFromEntityIndex	c	ENTITY	0x4B53F92932ADFAC0	Vehicle	entity:Entity
 GetVehicleIndicatorLights	c	CFX	0x83070354	integer	vehicle:Vehicle	
 GetVehicleIndividualDoorLockStatus	c	VEHICLE	0xCA4AC3EAAE46EC7B	integer	vehicle:Vehicle,doorIndex:integer	
 GetVehicleInteriorColor	c	VEHICLE	0x7D1464D472D32136	integer	vehicle:Vehicle	
-GetVehicleInteriorColour	s	CFX	0xCCFF3B6E	integer	vehicle:Vehicle	
+GetVehicleInteriorColour	b	CFX	0xCCFF3B6E	integer	vehicle:Vehicle	
 GetVehicleIsMercenary	c	VEHICLE	0xD4C4642CB7F50B5D	boolean	vehicle:Vehicle	
 GetVehicleLandingGear	c	VEHICLE	0x9B0F3DCA3DB0F4CD	integer	vehicle:Vehicle	GetLandingGearState
 GetVehicleLayoutHash	c	VEHICLE	0x28D37D4F71AC5C58	Hash	vehicle:Vehicle	
@@ -2487,7 +2487,7 @@ IsBlipFlashing	c	HUD	0xA5E41FD83AD6CEF0	boolean	blip:Blip
 IsBlipOnMinimap	c	HUD	0xE41CA53051197A27	boolean	blip:Blip	
 IsBlipShortRange	c	HUD	0xDA5F8727EB75B926	boolean	blip:Blip	
 IsBoatAnchored	c	VEHICLE	0xB0AD1238A709B1A2	boolean	boat:Vehicle	
-IsBoatAnchoredAndFrozen	s	CFX	0xD5C39EE6	boolean	vehicle:Vehicle	
+IsBoatAnchoredAndFrozen	b	CFX	0xD5C39EE6	boolean	vehicle:Vehicle	
 IsBoatWrecked	s	CFX	0x9049DB44	boolean	vehicle:Vehicle	
 IsBonnetCinematicCamRendering	c	CAM	0xD7360051C885628B	boolean		
 IsBulletInAngledArea	c	MISC	0x1A8B5F3C01E2B477	boolean	x1:number,y1:number,z1:number,x2:number,y2:number,z2:number,width:number,ownedByPlayer:boolean	
@@ -5571,7 +5571,7 @@ N_0xcda1c62be2777802	c	MONEY	0xCDA1C62BE2777802		p0:any,p1:any,p2:any	NetworkEar
 N_0xcda42c4bb9bde779	c	AUDIO	0x0350E7E17BA767D0		vehicle:Vehicle,value:integer	SetVehicleHornVariation
 N_0xcdca26e80faecb8f	c	HUD	0xCDCA26E80FAECB8F			PauseMenuceptionTheKick
 N_0xce5aa445aba8dee0	c	STATS	0xCE5AA445ABA8DEE0	integer,integer		StatGetSaveMigrationConsumeContentUnlockStatus
-N_0xce5d0e5e315db238	c	HUD	0xCE5D0E5E315DB238	Blip	x:number,y:number,z:number,width:number,height:number	AddBlipForArea
+N_0xce5d0e5e315db238	b	HUD	0xCE5D0E5E315DB238	Blip	x:number,y:number,z:number,width:number,height:number	AddBlipForArea
 N_0xce6294a232d03786	c	ENTITY	0xCE6294A232D03786	vector3	entity:Entity,boneIndex:integer	GetEntityBoneRotation
 N_0xcea553e35c2246e1	c	STATS	0xCEA553E35C2246E1		p0:any,p1:any,vehicleHash:Hash	OrderedBossVehicle
 N_0xcea7c8e1b48ff68c	c	ENTITY	0xCEA7C8E1B48FF68C		p0:any,p1:any	
@@ -8503,7 +8503,7 @@ SetPedCoordsNoGang	c	PED	0x87052FE446E07247		ped:Ped,posX:number,posY:number,pos
 SetPedCoverClipsetOverride	c	PED	0x9DBA107B4937F809		ped:Ped,p1:string	
 SetPedCowerHash	c	PED	0xA549131166868ED3		ped:Ped,p1:string	
 SetPedCurrentWeaponVisible	c	WEAPON	0x0725A4CCFDED9A70		ped:Ped,visible:boolean,deselectWeapon:boolean,p3:boolean,p4:boolean	
-SetPedDecoration	c	PED	0x5F5D1665E352A839		ped:Ped,collection:Hash,overlay:Hash	AddPedDecorationFromHashes
+SetPedDecoration	b	PED	0x5F5D1665E352A839		ped:Ped,collection:Hash,overlay:Hash	AddPedDecorationFromHashes
 SetPedDefaultComponentVariation	b	PED	0x45EEE61580806D63		ped:Ped	
 SetPedDefensiveAreaAttachedToPed	c	PED	0x4EF47FE21698A8B6		ped:Ped,attachPed:Ped,p2:number,p3:number,p4:number,p5:number,p6:number,p7:number,p8:number,p9:boolean,p10:boolean	
 SetPedDefensiveAreaDirection	c	PED	0x413C6C763A4AFFAD		ped:Ped,p1:number,p2:number,p3:number,p4:boolean	
@@ -8539,7 +8539,7 @@ SetPedGestureGroup	c	PED	0xDDF803377F94AAA8		ped:Ped,animGroupGesture:string
 SetPedGetOutUpsideDownVehicle	c	PED	0xBC0ED94165A48BC2		ped:Ped,toggle:boolean	
 SetPedGravity	c	PED	0x9FF447B6B6AD960A		ped:Ped,toggle:boolean	
 SetPedGroupMemberPassengerIndex	c	PED	0x0BDDB8D9EC6BCF3C		ped:Ped,index:integer	
-SetPedHairColor	c	PED	0x4CFFC65454C93A49		ped:Ped,colorID:integer,highlightColorID:integer	SetPedHairTint
+SetPedHairColor	b	PED	0x4CFFC65454C93A49		ped:Ped,colorID:integer,highlightColorID:integer	SetPedHairTint
 SetPedHairTint	b	PED	0x4CFFC65454C93A49		ped:Ped,colorID:integer,highlightColorID:integer	
 SetPedHasAiBlip	c	HUD	0xD30C50DF888D58B5		ped:Ped,hasCone:boolean	
 SetPedHasAiBlipWithColor	c	HUD	0xB13DCB4C6FAAD238		ped:Ped,hasCone:boolean,color:integer	

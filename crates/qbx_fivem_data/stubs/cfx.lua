@@ -455,3 +455,97 @@ function Entity(entity) end
 ---@return PlayerInterface wrapper
 ---@nodiscard
 function Player(playerSrc) end
+
+---Removes leading and trailing characters from a string. CfxLua extension.
+---@param s string
+---@param chars? string Characters to strip; defaults to whitespace.
+---@return string
+function string.strtrim(s, chars) end
+
+---Splits a string on any of the delimiter characters and returns the pieces. CfxLua extension.
+---@param delimiter string
+---@param s string
+---@param pieces? integer Maximum number of pieces to return.
+---@return string ...
+function string.strsplit(delimiter, s, pieces) end
+
+---Joins the arguments into one string separated by the delimiter. CfxLua extension.
+---@param delimiter string
+---@param ... string|number
+---@return string
+function string.strjoin(delimiter, ...) end
+
+---Concatenates the string form of every argument. CfxLua extension.
+---@param ... any
+---@return string
+function string.strconcat(...) end
+
+---Creates a table with preallocated array and hash parts. CfxLua extension.
+---@param narr integer
+---@param nrec? integer
+---@return table
+function table.create(narr, nrec) end
+
+---Removes every key from the table and returns it. CfxLua extension.
+---@generic T: table
+---@param t T
+---@return T
+function table.wipe(t) end
+
+---Describes the table layout: "empty", "array", "hash" or "mixed". CfxLua extension.
+---@param t table
+---@return string
+function table.type(t) end
+
+---Returns a timestamp in microseconds. CfxLua extension.
+---@return integer
+function os.microtime() end
+
+---Returns a timestamp in nanoseconds. CfxLua extension.
+---@return integer
+function os.nanotime() end
+
+---Returns the difference between two timestamps. CfxLua extension.
+---@param a integer
+---@param b integer
+---@return integer
+function os.deltatime(a, b) end
+
+---Returns the processor time stamp counter. CfxLua extension.
+---@return integer
+function os.rdtsc() end
+
+---Returns the processor time stamp counter, serialized. CfxLua extension.
+---@return integer
+function os.rdtscp() end
+
+---Returns a shallow copy of the table. CfxLua extension.
+---@generic T: table
+---@param t T
+---@return T
+function table.clone(t) end
+
+---Converts every argument to a string and returns them all. CfxLua extension.
+---@param ... any
+---@return string ...
+function string.tostringall(...) end
+
+---Creates a mutable string buffer of the given length. CfxLua extension.
+---@param length integer
+---@return string
+function string.blob(length) end
+
+---Lists the entries of a directory. CfxLua extension, server only in practice.
+---@param path string
+---@return string[]
+function io.readdir(path) end
+
+---Builds a vector from its arguments; the result type depends on how many numbers are passed.
+---@param ... number
+---@return vector2|vector3|vector4|number
+function vector(...) end
+
+---Returns a to-be-closed value that runs `fn` when it goes out of scope: `local _ <close> = defer(fn)`.
+---@param fn fun()
+---@return table
+function defer(fn) end

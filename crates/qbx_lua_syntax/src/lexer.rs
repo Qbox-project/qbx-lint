@@ -465,9 +465,7 @@ impl Lexer<'_> {
             let exponent = if is_hex { matches!(c, b'p' | b'P') } else { matches!(c, b'e' | b'E') };
             if exponent && matches!(self.peek(1), b'+' | b'-') {
                 self.pos += 2;
-            } else if c.is_ascii_alphanumeric() || c == b'_' {
-                self.pos += 1;
-            } else if c == b'.' && self.peek(1) != b'.' {
+            } else if c.is_ascii_alphanumeric() || c == b'_' || (c == b'.' && self.peek(1) != b'.') {
                 self.pos += 1;
             } else {
                 break;
@@ -583,9 +581,9 @@ pub fn parse_number(text: &str) -> Option<NumberValue> {
             if hex.is_empty() || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
                 return None;
             }
-            let value = hex.bytes().fold(0u64, |acc, b| {
-                acc.wrapping_mul(16).wrapping_add((b as char).to_digit(16).unwrap_or(0) as u64)
-            });
+            let value = hex
+                .bytes()
+                .fold(0u64, |acc, b| acc.wrapping_mul(16).wrapping_add((b as char).to_digit(16).unwrap_or(0) as u64));
             return Some(NumberValue::Int(value as i64));
         }
         return parse_hex_float(hex).map(NumberValue::Float);
@@ -707,7 +705,9 @@ pub fn decode_string(raw: &str, token_start: u32) -> DecodedString {
             b'u' => {
                 let close = raw[i..].find('}');
                 let code = match (bytes.get(i), close) {
-                    (Some(b'{'), Some(close)) => u32::from_str_radix(&raw[i + 1..i + close], 16).ok().map(|c| (c, close)),
+                    (Some(b'{'), Some(close)) => {
+                        u32::from_str_radix(&raw[i + 1..i + close], 16).ok().map(|c| (c, close))
+                    }
                     _ => None,
                 };
                 match code {

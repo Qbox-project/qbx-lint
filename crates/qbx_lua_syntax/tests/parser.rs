@@ -102,9 +102,11 @@ fn numbers() {
 
 #[test]
 fn strings() {
-    let chunk = parse_ok(r#"return "a\n\x41\65\u{48}\z
+    let chunk = parse_ok(
+        r#"return "a\n\x41\65\u{48}\z
         b", [==[
-raw]]]==]"#);
+raw]]]==]"#,
+    );
     let StmtKind::Return(exprs) = &chunk.block.stmts[0].kind else { panic!() };
     assert_eq!(exprs[0].as_string().unwrap(), "a\nAAHb");
     assert_eq!(exprs[1].as_string().unwrap(), "raw]]");
@@ -133,7 +135,9 @@ fn recovers_from_incomplete_member_access() {
     assert_eq!(chunk.block.stmts.len(), 4);
     let StmtKind::Local { exprs, .. } = &chunk.block.stmts[0].kind else { panic!() };
     assert!(matches!(&exprs[0].kind, ExprKind::Field { name, .. } if name.is_missing()));
-    assert!(matches!(&chunk.block.stmts[2].kind, StmtKind::Expr(e) if matches!(&e.kind, ExprKind::MethodCall { method, .. } if method.is_missing())));
+    assert!(
+        matches!(&chunk.block.stmts[2].kind, StmtKind::Expr(e) if matches!(&e.kind, ExprKind::MethodCall { method, .. } if method.is_missing()))
+    );
 }
 
 #[test]
