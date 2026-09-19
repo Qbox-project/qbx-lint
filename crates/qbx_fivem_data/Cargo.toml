@@ -1,7 +1,10 @@
 [package]
 name = "qbx_fivem_data"
+description = "Embedded FiveM native signatures, CfxLua runtime stubs and well-known resource imports"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 
-[dependencies]
+[features]
+docs = []

@@ -1,1 +1,226 @@
-fn main() {}
+use std::collections::BTreeMap;
+use std::fmt::Write as _;
+use std::path::PathBuf;
+
+use serde_json::Value;
+
+const SOURCES: &[&str] =
+    &["https://runtime.fivem.net/doc/natives.json", "https://runtime.fivem.net/doc/natives_cfx.json"];
+
+struct Native {
+    side: char,
+    ns: String,
+    hash: String,
+    returns: Vec<String>,
+    params: Vec<(String, String)>,
+    alias_of: Option<String>,
+    docs: String,
+}
+
+fn main() {
+    let task = std::env::args().nth(1).unwrap_or_default();
+    match task.as_str() {
+        "natives" => generate_natives(),
+        _ => {
+            eprintln!("usage: cargo xtask natives");
+            std::process::exit(2);
+        }
+    }
+}
+
+fn generate_natives() {
+    let mut natives: BTreeMap<String, Native> = BTreeMap::new();
+    for url in SOURCES {
+        eprintln!("fetching {url}");
+        let body = ureq::get(url).call().expect("request failed").into_string_with_limit();
+        let json: Value = serde_json::from_str(&body).expect("invalid natives json");
+        for (ns, entries) in json.as_object().expect("namespace map") {
+            for (hash, native) in entries.as_object().expect("native map") {
+                add_native(&mut natives, ns, hash, native);
+            }
+        }
+    }
+
+    let mut signatures = String::new();
+    let mut docs = String::new();
+    for (name, native) in &natives {
+        let params: Vec<String> = native.params.iter().map(|(n, t)| format!("{n}:{t}")).collect();
+        writeln!(
+            signatures,
+            "{name}\t{}\t{}\t{}\t{}\t{}\t{}",
+            native.side,
+            native.ns,
+            native.hash,
+            native.returns.join(","),
+            params.join(","),
+            native.alias_of.as_deref().unwrap_or("")
+        )
+        .unwrap();
+        if native.alias_of.is_none() && !native.docs.is_empty() {
+            writeln!(docs, "{name}\t{}", escape(&native.docs)).unwrap();
+        }
+    }
+
+    let data_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../crates/qbx_fivem_data/data");
+    std::fs::create_dir_all(&data_dir).unwrap();
+    std::fs::write(data_dir.join("natives.tsv"), &signatures).unwrap();
+    std::fs::write(data_dir.join("natives_docs.tsv"), &docs).unwrap();
+    eprintln!(
+        "wrote {} natives ({} KiB signatures, {} KiB docs)",
+        natives.len(),
+        signatures.len() / 1024,
+        docs.len() / 1024
+    );
+}
+
+trait BodyExt {
+    fn into_string_with_limit(self) -> String;
+}
+
+impl BodyExt for ureq::Response {
+    fn into_string_with_limit(self) -> String {
+        let mut body = String::new();
+        std::io::Read::read_to_string(&mut self.into_reader(), &mut body).expect("read body");
+        body
+    }
+}
+
+fn add_native(natives: &mut BTreeMap<String, Native>, ns: &str, hash: &str, native: &Value) {
+    let game = native["game"].as_str();
+    if matches!(game, Some("rdr3" | "ny")) {
+        return;
+    }
+    let raw_name = native["name"].as_str().filter(|n| !n.is_empty()).unwrap_or(hash);
+    let name = lua_name(raw_name);
+    let side = match native["apiset"].as_str() {
+        Some("server") => 's',
+        Some("shared") => 'b',
+        _ => 'c',
+    };
+
+    let mut params = Vec::new();
+    let mut out_types = Vec::new();
+    let mut param_docs = String::new();
+    for param in native["params"].as_array().into_iter().flatten() {
+        let param_name = sanitize_param(param["name"].as_str().unwrap_or("arg"));
+        let ty = param["type"].as_str().unwrap_or("Any");
+        if is_out_param(raw_name, ty) {
+            out_types.push(lua_type(ty.trim_end_matches('*')));
+        } else {
+            params.push((param_name.clone(), lua_type(ty)));
+        }
+        if let Some(desc) = param["description"].as_str().filter(|d| !d.trim().is_empty()) {
+            writeln!(param_docs, "- `{param_name}`: {}", desc.trim().replace('\n', " ")).unwrap();
+        }
+    }
+
+    let mut returns = Vec::new();
+    let result = native["results"].as_str().unwrap_or("void");
+    if result != "void" {
+        returns.push(lua_type(result));
+    }
+    returns.extend(out_types);
+
+    let mut docs = native["description"].as_str().unwrap_or("").trim().to_string();
+    if !param_docs.is_empty() {
+        write!(docs, "\n\n**Parameters**\n{}", param_docs.trim_end()).unwrap();
+    }
+    if let Some(desc) = native["resultsDescription"].as_str().filter(|d| !d.trim().is_empty()) {
+        write!(docs, "\n\n**Returns** {}", desc.trim()).unwrap();
+    }
+    let lua_example = native["examples"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|e| e["lang"] == "lua")
+        .and_then(|e| e["code"].as_str());
+    if let Some(code) = lua_example {
+        write!(docs, "\n\n```lua\n{}\n```", code.trim()).unwrap();
+    }
+
+    for alias in native["aliases"].as_array().into_iter().flatten().filter_map(Value::as_str) {
+        let alias_name = lua_name(alias);
+        if alias_name != name {
+            natives.entry(alias_name).or_insert_with(|| Native {
+                side,
+                ns: ns.to_string(),
+                hash: hash.to_string(),
+                returns: returns.clone(),
+                params: params.clone(),
+                alias_of: Some(name.clone()),
+                docs: String::new(),
+            });
+        }
+    }
+
+    let entry = Native { side, ns: ns.to_string(), hash: hash.to_string(), returns, params, alias_of: None, docs };
+    match natives.get(&name) {
+        Some(existing) if existing.alias_of.is_none() && existing.side != side => {
+            natives.get_mut(&name).unwrap().side = 'b';
+        }
+        Some(existing) if existing.alias_of.is_none() => {}
+        _ => {
+            natives.insert(name, entry);
+        }
+    }
+}
+
+/// Mirrors the name mangling of the official FiveM Lua native codegen.
+fn lua_name(raw: &str) -> String {
+    let lower = raw.to_ascii_lowercase().replace("0x", "n_0x");
+    let mut out = String::with_capacity(lower.len());
+    let mut chars = lower.chars().peekable();
+    while let Some(c) = chars.next() {
+        match chars.peek() {
+            Some(next) if c == '_' && next.is_ascii_alphabetic() => {
+                out.push(next.to_ascii_uppercase());
+                chars.next();
+            }
+            _ => out.push(c),
+        }
+    }
+    if let Some(first) = out.chars().next().filter(char::is_ascii_alphabetic) {
+        out.replace_range(..1, &first.to_ascii_uppercase().to_string());
+    }
+    out
+}
+
+fn is_out_param(raw_name: &str, ty: &str) -> bool {
+    if !ty.ends_with('*') || matches!(ty, "char*" | "Any*") {
+        return false;
+    }
+    let consumes_handle = raw_name.starts_with("DELETE_")
+        || raw_name.starts_with("REMOVE_")
+        || raw_name.contains("_AS_NO_LONGER_NEEDED");
+    !consumes_handle
+}
+
+fn lua_type(ty: &str) -> String {
+    match ty {
+        "int" | "long" | "uint" | "Hash*" | "int*" => "integer".into(),
+        "float" | "float*" => "number".into(),
+        "BOOL" | "bool" | "BOOL*" => "boolean".into(),
+        "char*" => "string".into(),
+        "Vector3" | "Vector3*" => "vector3".into(),
+        "Any" | "Any*" => "any".into(),
+        "func" => "function".into(),
+        "object" => "table".into(),
+        other => other.trim_end_matches('*').to_string(),
+    }
+}
+
+fn sanitize_param(name: &str) -> String {
+    let cleaned: String = name.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '_').collect();
+    match cleaned.as_str() {
+        "" => "arg".into(),
+        "end" | "repeat" | "function" | "local" | "in" | "until" | "then" | "nil" | "true" | "false" | "and" | "or"
+        | "not" | "if" | "else" | "elseif" | "for" | "while" | "do" | "return" | "break" | "goto" => {
+            format!("_{cleaned}")
+        }
+        _ => cleaned,
+    }
+}
+
+fn escape(text: &str) -> String {
+    text.replace('\\', "\\\\").replace('\r', "").replace('\n', "\\n").replace('\t', " ")
+}

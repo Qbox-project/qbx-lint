@@ -1,0 +1,244 @@
+use std::sync::OnceLock;
+
+static NATIVES: &str = include_str!("../data/natives.tsv");
+#[cfg(feature = "docs")]
+static NATIVE_DOCS: &str = include_str!("../data/natives_docs.tsv");
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Side {
+    Client,
+    Server,
+    Shared,
+}
+
+impl Side {
+    pub fn is_available_on(self, script_side: Side) -> bool {
+        self == Side::Shared || script_side == Side::Shared || self == script_side
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Side::Client => "client",
+            Side::Server => "server",
+            Side::Shared => "shared",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct Native {
+    pub name: &'static str,
+    pub side: Side,
+    pub namespace: &'static str,
+    pub hash: &'static str,
+    returns: &'static str,
+    params: &'static str,
+    pub alias_of: Option<&'static str>,
+}
+
+impl Native {
+    fn from_line(line: &'static str) -> Option<Self> {
+        let mut cols = line.split('\t');
+        let name = cols.next()?;
+        let side = match cols.next()? {
+            "c" => Side::Client,
+            "s" => Side::Server,
+            _ => Side::Shared,
+        };
+        let namespace = cols.next()?;
+        let hash = cols.next()?;
+        let returns = cols.next()?;
+        let params = cols.next()?;
+        let alias_of = cols.next().filter(|a| !a.is_empty());
+        Some(Self { name, side, namespace, hash, returns, params, alias_of })
+    }
+
+    pub fn returns(&self) -> impl Iterator<Item = &'static str> {
+        self.returns.split(',').filter(|r| !r.is_empty())
+    }
+
+    /// `(name, type)` pairs.
+    pub fn params(&self) -> impl Iterator<Item = (&'static str, &'static str)> {
+        self.params.split(',').filter_map(|p| p.split_once(':'))
+    }
+
+    pub fn signature(&self) -> String {
+        let params: Vec<String> = self.params().map(|(n, t)| format!("{n}: {t}")).collect();
+        let returns: Vec<&str> = self.returns().collect();
+        let mut out = format!("function {}({})", self.name, params.join(", "));
+        if !returns.is_empty() {
+            out.push_str(": ");
+            out.push_str(&returns.join(", "));
+        }
+        out
+    }
+}
+
+struct LineTable {
+    text: &'static str,
+    starts: Vec<u32>,
+}
+
+impl LineTable {
+    fn new(text: &'static str) -> Self {
+        let mut starts = vec![0u32];
+        starts.extend(text.bytes().enumerate().filter(|(_, b)| *b == b'\n').map(|(i, _)| i as u32 + 1));
+        if starts.last().is_some_and(|&s| s as usize >= text.len()) {
+            starts.pop();
+        }
+        Self { text, starts }
+    }
+
+    fn line(&self, index: usize) -> &'static str {
+        let start = self.starts[index] as usize;
+        let end = self.starts.get(index + 1).map_or(self.text.len(), |&e| e as usize);
+        self.text[start..end].trim_end_matches(['\n', '\r'])
+    }
+
+    fn key(line: &str) -> &str {
+        line.split('\t').next().unwrap_or(line)
+    }
+
+    fn find(&self, key: &str) -> Option<&'static str> {
+        let (mut lo, mut hi) = (0usize, self.starts.len());
+        while lo < hi {
+            let mid = (lo + hi) / 2;
+            let line = self.line(mid);
+            match Self::key(line).cmp(key) {
+                std::cmp::Ordering::Equal => return Some(line),
+                std::cmp::Ordering::Less => lo = mid + 1,
+                std::cmp::Ordering::Greater => hi = mid,
+            }
+        }
+        None
+    }
+}
+
+fn native_table() -> &'static LineTable {
+    static TABLE: OnceLock<LineTable> = OnceLock::new();
+    TABLE.get_or_init(|| LineTable::new(NATIVES))
+}
+
+pub fn native(name: &str) -> Option<Native> {
+    native_table().find(name).and_then(Native::from_line)
+}
+
+pub fn natives() -> impl Iterator<Item = Native> {
+    let table = native_table();
+    (0..table.starts.len()).filter_map(|i| Native::from_line(table.line(i)))
+}
+
+pub fn native_count() -> usize {
+    native_table().starts.len()
+}
+
+/// Every native is also callable through its hash as `N_0x...`, whether or not it is documented.
+pub fn is_hash_native_name(name: &str) -> bool {
+    name.strip_prefix("N_0x").is_some_and(|hex| !hex.is_empty() && hex.bytes().all(|b| b.is_ascii_hexdigit()))
+}
+
+#[cfg(feature = "docs")]
+pub fn native_docs(name: &str) -> Option<String> {
+    static TABLE: OnceLock<LineTable> = OnceLock::new();
+    let table = TABLE.get_or_init(|| LineTable::new(NATIVE_DOCS));
+    let target = native(name).and_then(|n| n.alias_of).unwrap_or(name);
+    let line = table.find(target)?;
+    let (_, escaped) = line.split_once('\t')?;
+    let mut out = String::with_capacity(escaped.len());
+    let mut chars = escaped.chars();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('n') => out.push('\n'),
+            Some(other) => out.push(other),
+            None => {}
+        }
+    }
+    Some(out)
+}
+
+pub struct Stub {
+    pub name: &'static str,
+    pub side: Side,
+    pub source: &'static str,
+}
+
+pub static STUBS: &[Stub] = &[
+    Stub { name: "lua54.lua", side: Side::Shared, source: include_str!("../stubs/lua54.lua") },
+    Stub { name: "cfx.lua", side: Side::Shared, source: include_str!("../stubs/cfx.lua") },
+    Stub { name: "cfx_client.lua", side: Side::Client, source: include_str!("../stubs/cfx_client.lua") },
+    Stub { name: "cfx_server.lua", side: Side::Server, source: include_str!("../stubs/cfx_server.lua") },
+];
+
+pub struct KnownImport {
+    pub path: &'static str,
+    pub globals: &'static [&'static str],
+}
+
+/// Globals provided by commonly imported `@resource/file.lua` scripts, used when the
+/// providing resource is not part of the linted tree (the usual case in single-repo CI).
+pub static KNOWN_IMPORTS: &[KnownImport] = &[
+    KnownImport { path: "@ox_lib/init.lua", globals: &["lib", "cache", "locale", "require", "SetInterval", "ClearInterval"] },
+    KnownImport { path: "@oxmysql/lib/MySQL.lua", globals: &["MySQL"] },
+    KnownImport { path: "@qbx_core/modules/lib.lua", globals: &["qbx"] },
+    KnownImport { path: "@qbx_core/modules/playerdata.lua", globals: &["QBX"] },
+    KnownImport { path: "@qbx_core/shared/locale.lua", globals: &["Lang", "Locale"] },
+    KnownImport { path: "@qb-core/shared/locale.lua", globals: &["Lang", "Locale"] },
+    KnownImport { path: "@es_extended/imports.lua", globals: &["ESX"] },
+    KnownImport { path: "@es_extended/locale.lua", globals: &["Locales", "Translate", "TranslateCap", "_U", "_"] },
+    KnownImport { path: "@ox_core/lib/init.lua", globals: &["Ox"] },
+    KnownImport { path: "@ox_core/imports/client.lua", globals: &["Ox", "player", "NetEventHandler"] },
+    KnownImport { path: "@ox_core/imports/server.lua", globals: &["Ox"] },
+    KnownImport { path: "@PolyZone/client.lua", globals: &["PolyZone"] },
+    KnownImport { path: "@PolyZone/BoxZone.lua", globals: &["BoxZone"] },
+    KnownImport { path: "@PolyZone/CircleZone.lua", globals: &["CircleZone"] },
+    KnownImport { path: "@PolyZone/ComboZone.lua", globals: &["ComboZone"] },
+    KnownImport { path: "@PolyZone/EntityZone.lua", globals: &["EntityZone"] },
+    KnownImport { path: "@menuv/menuv.lua", globals: &["MenuV"] },
+    KnownImport { path: "@mysql-async/lib/MySQL.lua", globals: &["MySQL"] },
+    KnownImport { path: "@async/async.lua", globals: &["Async"] },
+];
+
+pub fn known_import(path: &str) -> Option<&'static KnownImport> {
+    KNOWN_IMPORTS.iter().find(|import| import.path.eq_ignore_ascii_case(path))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn looks_up_natives() {
+        let native = native("GetEntityCoords").unwrap();
+        assert_eq!(native.returns().collect::<Vec<_>>(), ["vector3"]);
+        assert_eq!(native.params().next(), Some(("entity", "Entity")));
+        assert_eq!(super::native("GetPlayerIdentifier").unwrap().side, Side::Server);
+        assert!(super::native("NotARealNative").is_none());
+        assert!(native_count() > 6000);
+    }
+
+    #[test]
+    fn natives_are_sorted_for_binary_search() {
+        let names: Vec<&str> = natives().map(|n| n.name).collect();
+        assert!(names.windows(2).all(|w| w[0] < w[1]));
+        assert!(names.iter().all(|n| native(n).is_some()));
+    }
+
+    #[test]
+    fn hash_names() {
+        assert!(is_hash_native_name("N_0xabcdef12"));
+        assert!(!is_hash_native_name("N_0x"));
+        assert!(!is_hash_native_name("Foo"));
+    }
+
+    #[cfg(feature = "docs")]
+    #[test]
+    fn docs_are_unescaped() {
+        let docs = native_docs("GetEntityCoords").unwrap();
+        assert!(docs.contains("coordinates"));
+        assert!(docs.contains('\n'));
+    }
+}
