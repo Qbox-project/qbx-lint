@@ -1,1 +1,187 @@
-fn main() {}
+mod output;
+
+use std::io::IsTerminal;
+use std::path::PathBuf;
+use std::process::ExitCode;
+use std::time::Instant;
+
+use clap::{Parser, ValueEnum};
+use qbx_lua_analysis::lint::{lint_paths, FileReport};
+use qbx_lua_analysis::{apply_fixes, rules, Config, Level, Severity};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub enum Format {
+    Pretty,
+    Compact,
+    Json,
+    Junit,
+    Github,
+    Sarif,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+enum MinSeverity {
+    Hint,
+    Info,
+    Warning,
+    Error,
+}
+
+impl From<MinSeverity> for Severity {
+    fn from(value: MinSeverity) -> Self {
+        match value {
+            MinSeverity::Hint => Severity::Hint,
+            MinSeverity::Info => Severity::Info,
+            MinSeverity::Warning => Severity::Warning,
+            MinSeverity::Error => Severity::Error,
+        }
+    }
+}
+
+/// A fast linter for FiveM Lua resources.
+#[derive(Parser, Debug)]
+#[command(name = "qbx-lint", version, about)]
+struct Cli {
+    /// Files or directories to lint.
+    #[arg(default_value = ".")]
+    paths: Vec<PathBuf>,
+
+    /// Output format.
+    #[arg(short, long, value_enum, default_value = "pretty")]
+    format: Format,
+
+    /// Write the report to a file instead of stdout.
+    #[arg(short, long)]
+    output: Option<PathBuf>,
+
+    /// Path to a qbxlint.toml; by default it is searched for upwards from the first path.
+    #[arg(short, long)]
+    config: Option<PathBuf>,
+
+    /// Apply every available automatic fix, then report what is left.
+    #[arg(long)]
+    fix: bool,
+
+    /// Lowest severity to report.
+    #[arg(long, value_enum, default_value = "info")]
+    min_severity: MinSeverity,
+
+    /// Exit with a failure when more than this many warnings are found.
+    #[arg(long)]
+    max_warnings: Option<usize>,
+
+    /// Override a rule level, e.g. --rule unused-argument=off. May be repeated.
+    #[arg(long = "rule", value_name = "CODE=LEVEL")]
+    rule_overrides: Vec<String>,
+
+    /// Never fail the process because of lint findings.
+    #[arg(long)]
+    no_fail: bool,
+
+    /// Disable colored output.
+    #[arg(long)]
+    no_color: bool,
+
+    /// Print every rule with its default level and exit.
+    #[arg(long)]
+    list_rules: bool,
+}
+
+fn main() -> ExitCode {
+    let cli = Cli::parse();
+    if cli.list_rules {
+        print_rules();
+        return ExitCode::SUCCESS;
+    }
+    match run(&cli) {
+        Ok(code) => code,
+        Err(message) => {
+            eprintln!("qbx-lint: {message}");
+            ExitCode::from(2)
+        }
+    }
+}
+
+fn print_rules() {
+    for rule in rules::RULES {
+        let level = rule.default.map_or("off", Severity::label);
+        let fixable = if rule.fixable { " (fixable)" } else { "" };
+        println!("{:<32} {:<8} {:<12} {}{fixable}", rule.code, level, rule.category.label(), rule.summary);
+    }
+}
+
+fn parse_level(text: &str) -> Option<Level> {
+    Some(match text {
+        "off" => Level::Off,
+        "hint" => Level::Hint,
+        "info" => Level::Info,
+        "warn" | "warning" => Level::Warning,
+        "error" => Level::Error,
+        _ => return None,
+    })
+}
+
+fn load_config(cli: &Cli) -> Result<Config, String> {
+    if let Some(path) = &cli.config {
+        return Config::load(path);
+    }
+    let start = cli.paths.first().cloned().unwrap_or_else(|| PathBuf::from("."));
+    let start = std::path::absolute(&start).unwrap_or(start);
+    Ok(Config::discover(&start)?.unwrap_or_default())
+}
+
+fn run(cli: &Cli) -> Result<ExitCode, String> {
+    for path in &cli.paths {
+        if !path.exists() {
+            return Err(format!("path does not exist: {}", path.display()));
+        }
+    }
+    let mut config = load_config(cli)?;
+    for entry in &cli.rule_overrides {
+        let (code, level) = entry.split_once('=').ok_or_else(|| format!("expected CODE=LEVEL, got '{entry}'"))?;
+        let rule = rules::find(code).ok_or_else(|| format!("unknown rule '{code}'"))?;
+        let level = parse_level(level).ok_or_else(|| format!("unknown level '{level}'"))?;
+        config.set_rule(rule.code, level);
+    }
+
+    let started = Instant::now();
+    let mut reports = lint_paths(&cli.paths, &config);
+    let mut fixed = 0usize;
+    if cli.fix {
+        for report in &reports {
+            let (new_source, applied) = apply_fixes(&report.source, &report.diagnostics);
+            if applied > 0 {
+                std::fs::write(&report.path, new_source).map_err(|e| format!("{}: {e}", report.path.display()))?;
+                fixed += applied;
+            }
+        }
+        if fixed > 0 {
+            reports = lint_paths(&cli.paths, &config);
+        }
+    }
+
+    let min: Severity = cli.min_severity.into();
+    for report in &mut reports {
+        report.diagnostics.retain(|d| d.severity >= min);
+    }
+    let elapsed = started.elapsed();
+
+    let count = |reports: &[FileReport], severity: Severity| {
+        reports.iter().flat_map(|r| &r.diagnostics).filter(|d| d.severity == severity).count()
+    };
+    let errors = count(&reports, Severity::Error);
+    let warnings = count(&reports, Severity::Warning);
+
+    let color = !cli.no_color
+        && cli.output.is_none()
+        && std::env::var_os("NO_COLOR").is_none()
+        && std::io::stdout().is_terminal();
+    let rendered = output::render(&reports, cli.format, &output::Options { color, fixed, elapsed });
+    match &cli.output {
+        Some(path) => std::fs::write(path, rendered).map_err(|e| format!("{}: {e}", path.display()))?,
+        None => print!("{rendered}"),
+    }
+
+    let failed = errors > 0 || cli.max_warnings.is_some_and(|max| warnings > max);
+    Ok(if failed && !cli.no_fail { ExitCode::from(1) } else { ExitCode::SUCCESS })
+}

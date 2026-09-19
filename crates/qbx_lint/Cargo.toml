@@ -1,7 +1,17 @@
 [package]
 name = "qbx_lint"
+description = "A fast linter for FiveM Lua that understands fxmanifest.lua, natives and the CfxLua runtime"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "qbx-lint"
+path = "src/main.rs"
 
 [dependencies]
+qbx_lua_syntax.workspace = true
+qbx_lua_analysis.workspace = true
+clap = { version = "4", features = ["derive"] }
+serde_json = "1"
