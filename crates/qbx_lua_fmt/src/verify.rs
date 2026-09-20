@@ -11,7 +11,8 @@ fn significant(lexed: &Lexed) -> Vec<Token> {
         .enumerate()
         .filter(|(i, t)| {
             let before_brace = tokens.get(i + 1).is_some_and(|next| next.kind == TokenKind::RBrace);
-            !(t.kind == TokenKind::Semi && !before_brace) && !(is_separator(t.kind) && before_brace)
+            let dropped = if before_brace { is_separator(t.kind) } else { t.kind == TokenKind::Semi };
+            !dropped
         })
         .map(|(_, t)| *t)
         .collect()

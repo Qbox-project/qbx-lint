@@ -1,8 +1,11 @@
+mod crossfile;
 mod fivem;
 mod flow;
 mod globals;
+mod locale;
 mod locals;
 pub mod manifest;
+mod security;
 
 use qbx_fivem_data::Side;
 use qbx_lua_syntax::ast::Chunk;
@@ -26,6 +29,9 @@ pub struct FileInput<'a> {
     /// `None` when the manifest does not list the file as a script, or there is no manifest.
     pub side: Option<Side>,
     pub resource: Option<ResourceInput<'a>>,
+    /// Event handlers and exports of the other files; without it the cross-file rules stay silent.
+    pub crossrefs: Option<&'a crate::crossref::CrossRefs>,
+    pub locale: Option<&'a crate::locale::LocaleFile>,
 }
 
 #[derive(Clone, Copy)]
@@ -80,6 +86,9 @@ pub fn check_file(input: &FileInput) -> Vec<Diagnostic> {
     flow::check(input, &mut sink);
     globals::check(input, &mut sink);
     fivem::check(input, &mut sink);
+    crossfile::check(input, &mut sink);
+    security::check(input, &mut sink);
+    locale::check(input, &mut sink);
 
     let mut diagnostics = sink.finish();
     let line_index = LineIndex::new(input.source);

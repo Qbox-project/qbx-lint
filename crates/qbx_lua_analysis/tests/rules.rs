@@ -1,22 +1,119 @@
 use qbx_lua_analysis::scope::resolve;
 use qbx_lua_analysis::summary::summarize;
-use qbx_lua_analysis::{check_file, FileConfig, FileInput, Level};
+use qbx_lua_analysis::crossref::CrossRefs;
+use qbx_lua_analysis::locale::LocaleFile;
+use qbx_lua_analysis::{check_file, FileConfig, FileInput, Level, Side};
 use qbx_lua_syntax::parse;
 
 fn codes_with(source: &str, config: &FileConfig) -> Vec<&'static str> {
+    codes_in_project(source, config, None, &[], None)
+}
+
+/// Lints `source` as a file on `side`, with `others` (side, source) providing handlers and exports
+/// as the resource `other`.
+fn codes_in_project(
+    source: &str,
+    config: &FileConfig,
+    side: Option<Side>,
+    others: &[(Option<Side>, &str)],
+    locale: Option<&str>,
+) -> Vec<&'static str> {
     let chunk = parse(source);
     let resolution = resolve(&chunk);
     let summary = summarize(&chunk, &resolution);
+    let mut crossrefs = CrossRefs::default();
+    crossrefs.collect(&chunk, side, None);
+    for (other_side, other) in others {
+        crossrefs.collect(&parse(other), *other_side, Some("other"));
+    }
+    let locale = locale.map(|json| LocaleFile::parse("locales/en.json".into(), json.to_string()));
     let input = FileInput {
         source,
         chunk: &chunk,
         resolution: &resolution,
         summary: &summary,
         config,
-        side: None,
+        side,
         resource: None,
+        crossrefs: Some(&crossrefs),
+        locale: locale.as_ref(),
     };
     check_file(&input).into_iter().map(|d| d.code).collect()
+}
+
+fn project(source: &str, side: Side, others: &[(Option<Side>, &str)]) -> Vec<&'static str> {
+    codes_in_project(source, &FileConfig::default(), Some(side), others, None)
+}
+
+#[test]
+fn events_are_checked_against_their_handlers() {
+    let server = (Some(Side::Server), "RegisterNetEvent('shop:buy', function(item, amount) print(item, amount) end)");
+    assert_eq!(project("TriggerServerEvent('shop:buy', 'water', 2)", Side::Client, &[server]), Vec::<&str>::new());
+    assert_eq!(project("TriggerServerEvent('shop:buy', 'water', 2, 3)", Side::Client, &[server]), ["fivem/event-argument-count"]);
+    assert_eq!(project("TriggerServerEvent('shop:buy', 'water')", Side::Client, &[server]), ["fivem/event-missing-arguments"]);
+    assert_eq!(project("TriggerServerEvent('shop:buy', table.unpack({ 1 }))", Side::Client, &[server]), Vec::<&str>::new());
+    assert_eq!(project("TriggerServerEvent('unknown:event', 1)", Side::Client, &[server]), Vec::<&str>::new());
+
+    let variadic = (Some(Side::Server), "RegisterNetEvent('log', function(...) print(...) end)");
+    assert_eq!(project("TriggerServerEvent('log', 1, 2, 3)", Side::Client, &[variadic]), Vec::<&str>::new());
+
+    let client = (Some(Side::Client), "RegisterNetEvent('hud:update', function(value) print(value) end)");
+    assert_eq!(project("TriggerServerEvent('hud:update', 1)", Side::Client, &[client]), ["fivem/event-wrong-side"]);
+    assert_eq!(project("TriggerClientEvent('hud:update', -1, 1)", Side::Server, &[client]), Vec::<&str>::new());
+    assert_eq!(project("TriggerClientEvent('hud:update', -1, 1, 2)", Side::Server, &[client]), ["fivem/event-argument-count"]);
+}
+
+#[test]
+fn exports_are_checked_against_their_definition() {
+    let other = (Some(Side::Server), "local function getPlayer(id) return id end\nexports('GetPlayer', getPlayer)");
+    assert_eq!(project("print(exports.other:GetPlayer(1))", Side::Server, &[other]), Vec::<&str>::new());
+    assert_eq!(project("print(exports.other:GetPlayer(1, 2))", Side::Server, &[other]), ["fivem/export-argument-count"]);
+    assert_eq!(project("print(exports['other']:Missing())", Side::Server, &[other]), ["fivem/unknown-export"]);
+    assert_eq!(project("print(exports.notIndexed:Anything(1, 2, 3))", Side::Server, &[other]), Vec::<&str>::new());
+}
+
+#[test]
+fn server_handlers_must_not_trust_the_client() {
+    let trusting = "RegisterNetEvent('bank:deposit', function(src, amount)\n    local player = exports.qbx_core:GetPlayer(src)\n    player.Functions.AddMoney('bank', amount)\nend)";
+    assert_eq!(project(trusting, Side::Server, &[]), ["security/client-supplied-source", "security/unvalidated-event-argument"]);
+
+    let checked = "RegisterNetEvent('bank:deposit', function(amount)\n    local player = exports.qbx_core:GetPlayer(source)\n    if type(amount) ~= 'number' or amount <= 0 then return end\n    player.Functions.AddMoney('bank', amount)\nend)";
+    assert_eq!(project(checked, Side::Server, &[]), Vec::<&str>::new());
+
+    let split = "RegisterNetEvent('run')\nAddEventHandler('run', function(code) load(code)() end)";
+    assert_eq!(project(split, Side::Server, &[]), ["security/unvalidated-event-argument"]);
+
+    assert_eq!(project(trusting, Side::Client, &[]), Vec::<&str>::new(), "client handlers receive data from the server");
+}
+
+#[test]
+fn sql_must_use_placeholders() {
+    let config = {
+        let mut config = FileConfig::default();
+        config.globals.push("MySQL".into());
+        config
+    };
+    let lint = |source: &str| codes_in_project(source, &config, Some(Side::Server), &[], None);
+    assert_eq!(lint("local id = 1\nMySQL.query('SELECT * FROM players WHERE id = ' .. id)"), ["security/sql-concatenation"]);
+    assert_eq!(lint("local id = 1\nMySQL.query.await(('SELECT * FROM players WHERE id = %s'):format(id))"), ["security/sql-concatenation"]);
+    assert_eq!(lint("local id = 1\nMySQL.query('SELECT * FROM players WHERE id = ?', { id })"), Vec::<&str>::new());
+    assert_eq!(lint("MySQL.query('SELECT * FROM ' .. 'players')"), Vec::<&str>::new());
+    assert_eq!(lint("local where, values = 'id = ?', { 1 }\nMySQL.query('SELECT * FROM players WHERE ' .. where, values)"), Vec::<&str>::new());
+    assert_eq!(lint("local name = 'players'\nMySQL.query(('SHOW COLUMNS FROM `%s`'):format(name))"), Vec::<&str>::new());
+}
+
+#[test]
+fn locale_keys_must_exist() {
+    let config = {
+        let mut config = FileConfig::default();
+        config.globals.push("locale".into());
+        config
+    };
+    let json = r#"{ "error": { "not_online": "Offline" }, "ok": "Fine" }"#;
+    let lint = |source: &str| codes_in_project(source, &config, Some(Side::Client), &[], Some(json));
+    assert_eq!(lint("print(locale('error.not_online'), locale('ok'))"), Vec::<&str>::new());
+    assert_eq!(lint("print(locale('error.not_onlin'))"), ["qbox/unknown-locale-key"]);
+    assert_eq!(lint("local k = 'ok'\nprint(locale(k), locale('error.' .. k))"), Vec::<&str>::new());
 }
 
 fn codes(source: &str) -> Vec<&'static str> {

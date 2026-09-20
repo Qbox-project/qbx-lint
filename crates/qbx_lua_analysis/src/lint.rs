@@ -8,11 +8,14 @@ use walkdir::WalkDir;
 use crate::checks::manifest::{check_manifest, ManifestInput};
 use crate::checks::{check_file, FileInput, ResourceInput};
 use crate::config::Config;
-use crate::diagnostic::Diagnostic;
+use crate::crossref::CrossRefs;
+use crate::diagnostic::{Diagnostic, Severity};
+use crate::locale::{locale_usage, LocaleFile};
 use crate::project::{
     find_manifest_dir, is_manifest_file, lua_files_under, read_source, relative_slash_path, ParsedFile, Resource,
     ResourceLocator,
 };
+use crate::rules;
 use qbx_lua_syntax::parse;
 
 pub struct FileReport {
@@ -46,11 +49,20 @@ pub fn lint_paths(paths: &[PathBuf], config: &Config) -> Vec<FileReport> {
     let locator = Mutex::new(ResourceLocator::default());
     let pool = rayon::ThreadPoolBuilder::new().stack_size(ANALYSIS_STACK_SIZE).build().expect("thread pool");
     let mut reports: Vec<FileReport> = pool.install(|| {
+        // Syntax trees are not kept between the two passes: parsing twice is cheaper than holding
+        // every resource of a server in memory at once.
+        let crossrefs = by_resource
+            .par_iter()
+            .map(|(root, files)| collect_crossrefs(root.as_deref(), files, config, &locator))
+            .reduce(CrossRefs::default, |mut all, part| {
+                all.merge(part);
+                all
+            });
         by_resource
             .into_par_iter()
             .flat_map(|(root, files)| match root {
-                Some(root) => lint_resource(&root, &files, config, &locator),
-                None => files.par_iter().filter_map(|path| lint_loose_file(path, config)).collect(),
+                Some(root) => lint_resource(&root, &files, config, &locator, &crossrefs),
+                None => files.par_iter().filter_map(|path| lint_loose_file(path, config, &crossrefs)).collect(),
             })
             .collect()
     });
@@ -58,7 +70,29 @@ pub fn lint_paths(paths: &[PathBuf], config: &Config) -> Vec<FileReport> {
     reports
 }
 
-fn lint_loose_file(path: &Path, config: &Config) -> Option<FileReport> {
+fn load_resource(root: &Path, config: &Config, locator: &Mutex<ResourceLocator>) -> Option<Resource> {
+    let mut locator = locator.lock().unwrap_or_else(|e| e.into_inner());
+    Resource::load(root, config, &mut locator)
+}
+
+fn collect_crossrefs(root: Option<&Path>, files: &[PathBuf], config: &Config, locator: &Mutex<ResourceLocator>) -> CrossRefs {
+    let mut refs = CrossRefs::default();
+    match root.and_then(|root| load_resource(root, config, locator)) {
+        Some(resource) => {
+            for file in &resource.files {
+                refs.collect(&file.chunk, file.side, Some(&resource.name));
+            }
+        }
+        None => {
+            for source in files.iter().filter_map(|path| read_source(path).ok()) {
+                refs.collect(&parse(&source), None, None);
+            }
+        }
+    }
+    refs
+}
+
+fn lint_loose_file(path: &Path, config: &Config, crossrefs: &CrossRefs) -> Option<FileReport> {
     let source = read_source(path).ok()?;
     let file = ParsedFile::new(path.to_path_buf(), String::new(), source, None);
     let file_config = config.for_file(path);
@@ -70,8 +104,40 @@ fn lint_loose_file(path: &Path, config: &Config) -> Option<FileReport> {
         config: &file_config,
         side: None,
         resource: None,
+        crossrefs: Some(crossrefs),
+        locale: None,
     });
     Some(FileReport { path: file.path, source: file.source, diagnostics })
+}
+
+/// Keys of the locale file that no `locale()` call of the resource can reach.
+pub fn unused_locale_keys<'a>(locale: &'a LocaleFile, chunks: impl Iterator<Item = &'a qbx_lua_syntax::ast::Chunk>) -> Vec<Diagnostic> {
+    let mut used = Vec::new();
+    let mut prefixes = Vec::new();
+    for chunk in chunks {
+        let usage = locale_usage(chunk);
+        if usage.dynamic {
+            return Vec::new();
+        }
+        used.extend(usage.keys.into_iter().map(|(key, _)| key));
+        prefixes.extend(usage.prefixes);
+    }
+    if used.is_empty() && prefixes.is_empty() {
+        return Vec::new();
+    }
+    locale
+        .keys
+        .iter()
+        .filter(|(key, ..)| !used.contains(key) && !prefixes.iter().any(|p| key.starts_with(p.as_str())))
+        .map(|(key, span, _)| Diagnostic {
+            code: rules::UNUSED_LOCALE_KEY,
+            severity: Severity::Info,
+            span: *span,
+            message: format!("locale key '{key}' is never used by this resource"),
+            tag: None,
+            fix: None,
+        })
+        .collect()
 }
 
 fn lint_resource(
@@ -79,14 +145,12 @@ fn lint_resource(
     targets: &[PathBuf],
     config: &Config,
     locator: &Mutex<ResourceLocator>,
+    crossrefs: &CrossRefs,
 ) -> Vec<FileReport> {
-    let resource = {
-        let mut locator = locator.lock().unwrap_or_else(|e| e.into_inner());
-        Resource::load(root, config, &mut locator)
+    let Some(resource) = load_resource(root, config, locator) else {
+        return targets.iter().filter_map(|path| lint_loose_file(path, config, crossrefs)).collect();
     };
-    let Some(resource) = resource else {
-        return targets.iter().filter_map(|path| lint_loose_file(path, config)).collect();
-    };
+    let locale = LocaleFile::load(root);
 
     let mut reports: Vec<FileReport> = resource
         .files
@@ -95,7 +159,7 @@ fn lint_resource(
         .map(|file| {
             let mut file_config = config.for_file(&file.path);
             if resource.manifest.is_map_file(&file.relative) {
-                file_config.set(crate::rules::UNDEFINED_GLOBAL, crate::config::Level::Off);
+                file_config.set(rules::UNDEFINED_GLOBAL, crate::config::Level::Off);
             }
             let diagnostics = check_file(&FileInput {
                 source: &file.source,
@@ -104,17 +168,16 @@ fn lint_resource(
                 summary: &file.summary,
                 config: &file_config,
                 side: file.side,
-                resource: Some(ResourceInput {
-                    name: &resource.name,
-                    env: &resource.env,
-                    manifest: &resource.manifest,
-                }),
+                resource: Some(ResourceInput { name: &resource.name, env: &resource.env, manifest: &resource.manifest }),
+                crossrefs: Some(crossrefs),
+                locale: locale.as_ref(),
             });
             FileReport { path: file.path.clone(), source: file.source.clone(), diagnostics }
         })
         .collect();
 
-    if targets.iter().any(|t| is_manifest_file(t) && t.parent() == Some(root)) {
+    let whole_resource = targets.iter().any(|t| is_manifest_file(t) && t.parent() == Some(root));
+    if whole_resource {
         if let Ok(source) = read_source(&resource.manifest_path) {
             let chunk = parse(&source);
             let resource_files = all_files(root);
@@ -128,6 +191,17 @@ fn lint_resource(
                 has_lua_scripts: !resource.files.is_empty(),
             });
             reports.push(FileReport { path: resource.manifest_path.clone(), source, diagnostics });
+        }
+        if let Some(locale) = locale {
+            let severity = config.for_file(&locale.path).severity(rules::UNUSED_LOCALE_KEY);
+            let mut diagnostics = unused_locale_keys(&locale, resource.files.iter().map(|f| &f.chunk));
+            match severity {
+                Some(severity) => diagnostics.iter_mut().for_each(|d| d.severity = severity),
+                None => diagnostics.clear(),
+            }
+            if !diagnostics.is_empty() {
+                reports.push(FileReport { path: locale.path, source: locale.source, diagnostics });
+            }
         }
     }
     reports

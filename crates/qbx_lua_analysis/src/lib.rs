@@ -16,3 +16,5 @@ pub use checks::{check_file, FileInput, ResourceInput};
 pub use config::{Config, FileConfig, Level};
 pub use diagnostic::{apply_fixes, Diagnostic, Fix, Severity, Tag, TextEdit};
 pub use qbx_fivem_data::Side;
+pub mod crossref;
+pub mod locale;

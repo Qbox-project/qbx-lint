@@ -8,6 +8,7 @@ pub enum Category {
     Performance,
     FiveM,
     Manifest,
+    Security,
 }
 
 impl Category {
@@ -19,6 +20,7 @@ impl Category {
             Category::Performance => "performance",
             Category::FiveM => "fivem",
             Category::Manifest => "manifest",
+            Category::Security => "security",
         }
     }
 }
@@ -87,6 +89,18 @@ pub const MANIFEST_MISSING_FILE: &str = "manifest/missing-file";
 pub const MANIFEST_UNKNOWN_DIRECTIVE: &str = "manifest/unknown-directive";
 pub const MANIFEST_UNLISTED_SCRIPT: &str = "manifest/unlisted-script";
 
+pub const MANIFEST_MISSING_DEPENDENCY: &str = "manifest/missing-dependency";
+pub const EVENT_ARGUMENT_COUNT: &str = "fivem/event-argument-count";
+pub const EVENT_MISSING_ARGUMENTS: &str = "fivem/event-missing-arguments";
+pub const EVENT_WRONG_SIDE: &str = "fivem/event-wrong-side";
+pub const EXPORT_ARGUMENT_COUNT: &str = "fivem/export-argument-count";
+pub const UNKNOWN_EXPORT: &str = "fivem/unknown-export";
+pub const CLIENT_SUPPLIED_SOURCE: &str = "security/client-supplied-source";
+pub const UNVALIDATED_EVENT_ARGUMENT: &str = "security/unvalidated-event-argument";
+pub const SQL_CONCATENATION: &str = "security/sql-concatenation";
+pub const UNKNOWN_LOCALE_KEY: &str = "qbox/unknown-locale-key";
+pub const UNUSED_LOCALE_KEY: &str = "qbox/unused-locale-key";
+
 pub static RULES: &[Rule] = &[
     rule(SYNTAX_ERROR, Correctness, ERROR, false, "The file cannot be parsed by the CfxLua 5.4 runtime."),
     rule(UNDEFINED_GLOBAL, Correctness, WARN, false, "A global is read that no script in the resource, its imports, the runtime or the natives define."),
@@ -125,6 +139,17 @@ pub static RULES: &[Rule] = &[
     rule(MANIFEST_MISSING_FILE, Manifest, WARN, false, "fxmanifest.lua references a file or glob that matches nothing."),
     rule(MANIFEST_UNKNOWN_DIRECTIVE, Manifest, WARN, false, "A manifest directive looks like a typo of a known one."),
     rule(MANIFEST_UNLISTED_SCRIPT, Manifest, OFF, false, "A Lua file in the resource is not referenced by fxmanifest.lua."),
+    rule(MANIFEST_MISSING_DEPENDENCY, Manifest, INFO, false, "Exports of another resource are used but the resource is not listed under dependencies, so load order is not guaranteed."),
+    rule(EVENT_ARGUMENT_COUNT, FiveM, WARN, false, "An event is triggered with more arguments than its handler takes; the extra values are lost."),
+    rule(EVENT_MISSING_ARGUMENTS, FiveM, INFO, false, "An event is triggered with fewer arguments than its handler declares; fine for optional parameters, a bug otherwise."),
+    rule(EVENT_WRONG_SIDE, FiveM, WARN, false, "An event is triggered towards a side where nothing handles it, while a handler exists on the other side."),
+    rule(EXPORT_ARGUMENT_COUNT, FiveM, WARN, false, "An export is called with more arguments than the exported function accepts."),
+    rule(UNKNOWN_EXPORT, FiveM, INFO, false, "A resource that is part of the workspace does not register the export that is called."),
+    rule(CLIENT_SUPPLIED_SOURCE, Security, WARN, false, "A server net event takes the player id as an argument; clients can send any id, use the global 'source'."),
+    rule(UNVALIDATED_EVENT_ARGUMENT, Security, WARN, false, "A value sent by a client reaches a sensitive call (money, items, commands, code loading) without ever being checked."),
+    rule(SQL_CONCATENATION, Security, WARN, false, "A SQL query is built by concatenating or formatting values into it instead of using ? placeholders."),
+    rule(UNKNOWN_LOCALE_KEY, Correctness, WARN, false, "locale() is called with a key that the resource's locale file does not define."),
+    rule(UNUSED_LOCALE_KEY, Style, INFO, false, "A key of the locale file is never used by the resource's Lua code."),
 ];
 
 pub fn find(code: &str) -> Option<&'static Rule> {

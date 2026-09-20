@@ -67,6 +67,16 @@ fn bad_resource_reports_every_rule() {
                 | "builtin-overwrite"
                 | "qbox/prefer-cache"
                 | "manifest/missing-field"
+                | "fivem/event-argument-count"
+                | "fivem/event-missing-arguments"
+                | "fivem/event-wrong-side"
+                | "fivem/export-argument-count"
+                | "fivem/unknown-export"
+                | "security/client-supplied-source"
+                | "security/unvalidated-event-argument"
+                | "security/sql-concatenation"
+                | "qbox/unknown-locale-key"
+                | "qbox/unused-locale-key"
         );
         assert!(exercised || covered_elsewhere, "rule {} is not exercised by the bad_resource fixture", rule.code);
     }
