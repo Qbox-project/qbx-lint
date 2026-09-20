@@ -21,7 +21,10 @@ fn keeps_comments_blank_lines_and_trailing_comments() {
 #[test]
 fn callbacks_hug_and_long_calls_break() {
     let source = "RegisterNetEvent('a:b',function(x,y)\nprint(x,y)\nend)\nCreateThread(function() end)\n";
-    assert_eq!(fmt(source), "RegisterNetEvent('a:b', function(x, y)\n    print(x, y)\nend)\nCreateThread(function() end)\n");
+    assert_eq!(
+        fmt(source),
+        "RegisterNetEvent('a:b', function(x, y)\n    print(x, y)\nend)\nCreateThread(function() end)\n"
+    );
 
     let long = "local result = someFunction(firstArgumentWithLongName, secondArgumentWithLongName, thirdArgumentWithLongName, fourthArgument)\n";
     let expected = "local result = someFunction(\n    firstArgumentWithLongName,\n    secondArgumentWithLongName,\n    thirdArgumentWithLongName,\n    fourthArgument\n)\n";
@@ -40,7 +43,10 @@ fn tables_stay_expanded_or_collapse_by_width() {
 fn long_conditions_break_at_logical_operators() {
     let source = "if playerIsCloseEnoughToTheMarker and playerHasTheRequiredItemInInventory and notCurrentlyBusyDoingSomethingElse or forceOverride then\nend\n";
     let out = fmt(source);
-    assert!(out.starts_with("if playerIsCloseEnoughToTheMarker\n    and playerHasTheRequiredItemInInventory\n"), "{out}");
+    assert!(
+        out.starts_with("if playerIsCloseEnoughToTheMarker\n    and playerHasTheRequiredItemInInventory\n"),
+        "{out}"
+    );
 }
 
 #[test]

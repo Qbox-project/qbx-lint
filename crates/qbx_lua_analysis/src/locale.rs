@@ -225,7 +225,8 @@ mod tests {
 
     #[test]
     fn finds_static_and_dynamic_usage() {
-        let chunk = qbx_lua_syntax::parse("locale('a.b') locale('error.' .. code) locale(('x.%s'):format(y)) print(locale)");
+        let chunk =
+            qbx_lua_syntax::parse("locale('a.b') locale('error.' .. code) locale(('x.%s'):format(y)) print(locale)");
         let usage = locale_usage(&chunk);
         assert_eq!(usage.keys[0].0, "a.b");
         assert_eq!(usage.prefixes, ["error.", "x."]);

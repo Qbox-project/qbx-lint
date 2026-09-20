@@ -26,9 +26,18 @@ const SENSITIVE_METHODS: &[&str] = &[
     "removeInventoryItem",
     "setJob",
 ];
-const SENSITIVE_FUNCTIONS: &[&str] =
-    &["ExecuteCommand", "load", "loadstring", "os.execute", "io.open", "os.remove", "SaveResourceFile", "GiveWeaponToPed"];
-const VALIDATORS: &[&str] = &["assert", "type", "tonumber", "tostring", "math.type", "math.floor", "math.abs", "lib.assert"];
+const SENSITIVE_FUNCTIONS: &[&str] = &[
+    "ExecuteCommand",
+    "load",
+    "loadstring",
+    "os.execute",
+    "io.open",
+    "os.remove",
+    "SaveResourceFile",
+    "GiveWeaponToPed",
+];
+const VALIDATORS: &[&str] =
+    &["assert", "type", "tonumber", "tostring", "math.type", "math.floor", "math.abs", "lib.assert"];
 const PLAYER_ID_NAMES: &[&str] = &["source", "src", "playerSource", "playerSrc"];
 const SQL_ROOTS: &[&str] = &["MySQL", "exports.oxmysql", "exports.ghmattimysql", "exports.mysql-async"];
 
@@ -79,7 +88,8 @@ impl Security<'_, '_> {
 
     fn net_handler(&mut self, func: &FuncBody) {
         // Modules without a known side may well be client code, where none of this applies.
-        let is_server = self.input.side == Some(Side::Server) || (self.input.side.is_none() && self.input.resource.is_none());
+        let is_server =
+            self.input.side == Some(Side::Server) || (self.input.side.is_none() && self.input.resource.is_none());
         if !is_server {
             return;
         }
@@ -110,7 +120,9 @@ impl Security<'_, '_> {
             if validated {
                 continue;
             }
-            for (sink_name, arg_span) in scan.sinks.iter().filter(|(_, span)| local.refs.iter().any(|r| r.span == *span)) {
+            for (sink_name, arg_span) in
+                scan.sinks.iter().filter(|(_, span)| local.refs.iter().any(|r| r.span == *span))
+            {
                 self.sink.report(
                     rules::UNVALIDATED_EVENT_ARGUMENT,
                     *arg_span,
@@ -144,7 +156,9 @@ impl<'ast> Visitor<'ast> for Security<'_, '_> {
                         self.net_events.insert(name.clone());
                     }
                     ("RegisterNetEvent" | "RegisterServerEvent", _, Some(func)) => self.net_handler(func),
-                    ("AddEventHandler", Some(name), Some(func)) if self.net_events.contains(name) => self.net_handler(func),
+                    ("AddEventHandler", Some(name), Some(func)) if self.net_events.contains(name) => {
+                        self.net_handler(func)
+                    }
                     _ => {}
                 }
             }

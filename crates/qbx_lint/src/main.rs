@@ -149,7 +149,11 @@ fn run_fmt(paths: &[PathBuf], check: bool, config: Option<&PathBuf>) -> Result<E
             }
         }
     }
-    println!("{} file(s) checked, {changed} {}, {failed} skipped", files.len(), if check { "need formatting" } else { "reformatted" });
+    println!(
+        "{} file(s) checked, {changed} {}, {failed} skipped",
+        files.len(),
+        if check { "need formatting" } else { "reformatted" }
+    );
     Ok(if (check && changed > 0) || failed > 0 { ExitCode::from(1) } else { ExitCode::SUCCESS })
 }
 

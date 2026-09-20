@@ -1,7 +1,7 @@
-use qbx_lua_analysis::scope::resolve;
-use qbx_lua_analysis::summary::summarize;
 use qbx_lua_analysis::crossref::CrossRefs;
 use qbx_lua_analysis::locale::LocaleFile;
+use qbx_lua_analysis::scope::resolve;
+use qbx_lua_analysis::summary::summarize;
 use qbx_lua_analysis::{check_file, FileConfig, FileInput, Level, Side};
 use qbx_lua_syntax::parse;
 
@@ -49,9 +49,18 @@ fn project(source: &str, side: Side, others: &[(Option<Side>, &str)]) -> Vec<&'s
 fn events_are_checked_against_their_handlers() {
     let server = (Some(Side::Server), "RegisterNetEvent('shop:buy', function(item, amount) print(item, amount) end)");
     assert_eq!(project("TriggerServerEvent('shop:buy', 'water', 2)", Side::Client, &[server]), Vec::<&str>::new());
-    assert_eq!(project("TriggerServerEvent('shop:buy', 'water', 2, 3)", Side::Client, &[server]), ["fivem/event-argument-count"]);
-    assert_eq!(project("TriggerServerEvent('shop:buy', 'water')", Side::Client, &[server]), ["fivem/event-missing-arguments"]);
-    assert_eq!(project("TriggerServerEvent('shop:buy', table.unpack({ 1 }))", Side::Client, &[server]), Vec::<&str>::new());
+    assert_eq!(
+        project("TriggerServerEvent('shop:buy', 'water', 2, 3)", Side::Client, &[server]),
+        ["fivem/event-argument-count"]
+    );
+    assert_eq!(
+        project("TriggerServerEvent('shop:buy', 'water')", Side::Client, &[server]),
+        ["fivem/event-missing-arguments"]
+    );
+    assert_eq!(
+        project("TriggerServerEvent('shop:buy', table.unpack({ 1 }))", Side::Client, &[server]),
+        Vec::<&str>::new()
+    );
     assert_eq!(project("TriggerServerEvent('unknown:event', 1)", Side::Client, &[server]), Vec::<&str>::new());
 
     let variadic = (Some(Side::Server), "RegisterNetEvent('log', function(...) print(...) end)");
@@ -60,14 +69,20 @@ fn events_are_checked_against_their_handlers() {
     let client = (Some(Side::Client), "RegisterNetEvent('hud:update', function(value) print(value) end)");
     assert_eq!(project("TriggerServerEvent('hud:update', 1)", Side::Client, &[client]), ["fivem/event-wrong-side"]);
     assert_eq!(project("TriggerClientEvent('hud:update', -1, 1)", Side::Server, &[client]), Vec::<&str>::new());
-    assert_eq!(project("TriggerClientEvent('hud:update', -1, 1, 2)", Side::Server, &[client]), ["fivem/event-argument-count"]);
+    assert_eq!(
+        project("TriggerClientEvent('hud:update', -1, 1, 2)", Side::Server, &[client]),
+        ["fivem/event-argument-count"]
+    );
 }
 
 #[test]
 fn exports_are_checked_against_their_definition() {
     let other = (Some(Side::Server), "local function getPlayer(id) return id end\nexports('GetPlayer', getPlayer)");
     assert_eq!(project("print(exports.other:GetPlayer(1))", Side::Server, &[other]), Vec::<&str>::new());
-    assert_eq!(project("print(exports.other:GetPlayer(1, 2))", Side::Server, &[other]), ["fivem/export-argument-count"]);
+    assert_eq!(
+        project("print(exports.other:GetPlayer(1, 2))", Side::Server, &[other]),
+        ["fivem/export-argument-count"]
+    );
     assert_eq!(project("print(exports['other']:Missing())", Side::Server, &[other]), ["fivem/unknown-export"]);
     assert_eq!(project("print(exports.notIndexed:Anything(1, 2, 3))", Side::Server, &[other]), Vec::<&str>::new());
 }
@@ -75,7 +90,10 @@ fn exports_are_checked_against_their_definition() {
 #[test]
 fn server_handlers_must_not_trust_the_client() {
     let trusting = "RegisterNetEvent('bank:deposit', function(src, amount)\n    local player = exports.qbx_core:GetPlayer(src)\n    player.Functions.AddMoney('bank', amount)\nend)";
-    assert_eq!(project(trusting, Side::Server, &[]), ["security/client-supplied-source", "security/unvalidated-event-argument"]);
+    assert_eq!(
+        project(trusting, Side::Server, &[]),
+        ["security/client-supplied-source", "security/unvalidated-event-argument"]
+    );
 
     let checked = "RegisterNetEvent('bank:deposit', function(amount)\n    local player = exports.qbx_core:GetPlayer(source)\n    if type(amount) ~= 'number' or amount <= 0 then return end\n    player.Functions.AddMoney('bank', amount)\nend)";
     assert_eq!(project(checked, Side::Server, &[]), Vec::<&str>::new());
@@ -83,7 +101,11 @@ fn server_handlers_must_not_trust_the_client() {
     let split = "RegisterNetEvent('run')\nAddEventHandler('run', function(code) load(code)() end)";
     assert_eq!(project(split, Side::Server, &[]), ["security/unvalidated-event-argument"]);
 
-    assert_eq!(project(trusting, Side::Client, &[]), Vec::<&str>::new(), "client handlers receive data from the server");
+    assert_eq!(
+        project(trusting, Side::Client, &[]),
+        Vec::<&str>::new(),
+        "client handlers receive data from the server"
+    );
 }
 
 #[test]
@@ -94,12 +116,24 @@ fn sql_must_use_placeholders() {
         config
     };
     let lint = |source: &str| codes_in_project(source, &config, Some(Side::Server), &[], None);
-    assert_eq!(lint("local id = 1\nMySQL.query('SELECT * FROM players WHERE id = ' .. id)"), ["security/sql-concatenation"]);
-    assert_eq!(lint("local id = 1\nMySQL.query.await(('SELECT * FROM players WHERE id = %s'):format(id))"), ["security/sql-concatenation"]);
+    assert_eq!(
+        lint("local id = 1\nMySQL.query('SELECT * FROM players WHERE id = ' .. id)"),
+        ["security/sql-concatenation"]
+    );
+    assert_eq!(
+        lint("local id = 1\nMySQL.query.await(('SELECT * FROM players WHERE id = %s'):format(id))"),
+        ["security/sql-concatenation"]
+    );
     assert_eq!(lint("local id = 1\nMySQL.query('SELECT * FROM players WHERE id = ?', { id })"), Vec::<&str>::new());
     assert_eq!(lint("MySQL.query('SELECT * FROM ' .. 'players')"), Vec::<&str>::new());
-    assert_eq!(lint("local where, values = 'id = ?', { 1 }\nMySQL.query('SELECT * FROM players WHERE ' .. where, values)"), Vec::<&str>::new());
-    assert_eq!(lint("local name = 'players'\nMySQL.query(('SHOW COLUMNS FROM `%s`'):format(name))"), Vec::<&str>::new());
+    assert_eq!(
+        lint("local where, values = 'id = ?', { 1 }\nMySQL.query('SELECT * FROM players WHERE ' .. where, values)"),
+        Vec::<&str>::new()
+    );
+    assert_eq!(
+        lint("local name = 'players'\nMySQL.query(('SHOW COLUMNS FROM `%s`'):format(name))"),
+        Vec::<&str>::new()
+    );
 }
 
 #[test]

@@ -75,7 +75,12 @@ fn load_resource(root: &Path, config: &Config, locator: &Mutex<ResourceLocator>)
     Resource::load(root, config, &mut locator)
 }
 
-fn collect_crossrefs(root: Option<&Path>, files: &[PathBuf], config: &Config, locator: &Mutex<ResourceLocator>) -> CrossRefs {
+fn collect_crossrefs(
+    root: Option<&Path>,
+    files: &[PathBuf],
+    config: &Config,
+    locator: &Mutex<ResourceLocator>,
+) -> CrossRefs {
     let mut refs = CrossRefs::default();
     match root.and_then(|root| load_resource(root, config, locator)) {
         Some(resource) => {
@@ -111,11 +116,20 @@ fn lint_loose_file(path: &Path, config: &Config, crossrefs: &CrossRefs) -> Optio
 }
 
 /// Keys of the locale file that no `locale()` call of the resource can reach.
-pub fn unused_locale_keys<'a>(locale: &'a LocaleFile, chunks: impl Iterator<Item = &'a qbx_lua_syntax::ast::Chunk>) -> Vec<Diagnostic> {
+pub fn unused_locale_keys<'a>(
+    locale: &'a LocaleFile,
+    chunks: impl Iterator<Item = &'a qbx_lua_syntax::ast::Chunk>,
+) -> Vec<Diagnostic> {
+    unused_locale_keys_from(locale, chunks.map(locale_usage))
+}
+
+pub fn unused_locale_keys_from(
+    locale: &LocaleFile,
+    usages: impl Iterator<Item = crate::locale::LocaleUsage>,
+) -> Vec<Diagnostic> {
     let mut used = Vec::new();
     let mut prefixes = Vec::new();
-    for chunk in chunks {
-        let usage = locale_usage(chunk);
+    for usage in usages {
         if usage.dynamic {
             return Vec::new();
         }
@@ -168,7 +182,11 @@ fn lint_resource(
                 summary: &file.summary,
                 config: &file_config,
                 side: file.side,
-                resource: Some(ResourceInput { name: &resource.name, env: &resource.env, manifest: &resource.manifest }),
+                resource: Some(ResourceInput {
+                    name: &resource.name,
+                    env: &resource.env,
+                    manifest: &resource.manifest,
+                }),
                 crossrefs: Some(crossrefs),
                 locale: locale.as_ref(),
             });

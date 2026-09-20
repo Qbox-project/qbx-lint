@@ -224,7 +224,12 @@ impl Printer<'_> {
                 out + &pad + "end"
             }
             StmtKind::NumericFor { var, start, limit, step, body } => {
-                let mut head = format!("{pad}for {} = {}, {}", var.text, self.expr(start, level, col), self.expr(limit, level, col));
+                let mut head = format!(
+                    "{pad}for {} = {}, {}",
+                    var.text,
+                    self.expr(start, level, col),
+                    self.expr(limit, level, col)
+                );
                 if let Some(step) = step {
                     head.push_str(&format!(", {}", self.expr(step, level, col)));
                 }
@@ -515,9 +520,8 @@ impl Printer<'_> {
             self.next = saved;
         }
 
-        let had_trailing_separator = fields.last().is_some_and(|last| {
-            self.src[field_end(last) as usize..].trim_start().starts_with([',', ';'])
-        });
+        let had_trailing_separator =
+            fields.last().is_some_and(|last| self.src[field_end(last) as usize..].trim_start().starts_with([',', ';']));
         let mut lines: Vec<String> = Vec::new();
         let mut prev_end: Option<u32> = None;
         for (i, field) in fields.iter().enumerate() {
@@ -531,7 +535,8 @@ impl Printer<'_> {
             let mut line = format!("{}{}{separator}", self.indent(level + 1), self.field(field, level + 1));
             let end = field_end(field);
             let after_comma = self.src[end as usize..].find([',', ';']).map_or(end, |i| end + i as u32 + 1);
-            let separator_is_near = self.src[end as usize..after_comma as usize].trim_matches([',', ';', ' ', '\t']).is_empty();
+            let separator_is_near =
+                self.src[end as usize..after_comma as usize].trim_matches([',', ';', ' ', '\t']).is_empty();
             let comment_from = if separator_is_near { after_comma } else { end };
             let trailing_end = self.trailing_comment(comment_from, &mut line);
             lines.push(line);
@@ -552,7 +557,9 @@ fn field_start(field: &TableField) -> u32 {
 
 fn field_end(field: &TableField) -> u32 {
     match field {
-        TableField::Positional(value) | TableField::Named { value, .. } | TableField::Keyed { value, .. } => value.span.end,
+        TableField::Positional(value) | TableField::Named { value, .. } | TableField::Keyed { value, .. } => {
+            value.span.end
+        }
         TableField::SetMember(name) => name.span.end,
     }
 }

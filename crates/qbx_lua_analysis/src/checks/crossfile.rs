@@ -79,7 +79,10 @@ impl CrossFile<'_, '_> {
             self.sink.report(
                 rules::EVENT_ARGUMENT_COUNT,
                 expr.span,
-                format!("'{name}' is triggered with {passed} argument{}, but its handler only takes {most}", plural(passed)),
+                format!(
+                    "'{name}' is triggered with {passed} argument{}, but its handler only takes {most}",
+                    plural(passed)
+                ),
             );
         } else if passed < least {
             self.sink.report(
@@ -152,9 +155,12 @@ impl CrossFile<'_, '_> {
         let imported = own.manifest.imports().any(|s| s.pattern.starts_with(&format!("@{resource}/")));
         // `if GetResourceState('x') == 'started'` marks an optional integration, not a hard dependency.
         let guarded = self.mentions_resource_state
-            && self.input.source.split("GetResourceState").skip(1).any(|rest| {
-                rest.get(..resource.len() + 6).unwrap_or(rest).contains(resource.as_str())
-            });
+            && self
+                .input
+                .source
+                .split("GetResourceState")
+                .skip(1)
+                .any(|rest| rest.get(..resource.len() + 6).unwrap_or(rest).contains(resource.as_str()));
         if listed || imported || guarded || !self.reported_dependencies.insert(resource.clone()) {
             return;
         }
