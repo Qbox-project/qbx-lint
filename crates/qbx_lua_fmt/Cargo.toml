@@ -1,0 +1,11 @@
+[package]
+name = "qbx_lua_fmt"
+description = "A comment-preserving formatter for Lua 5.4 and CfxLua that verifies its own output"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+qbx_lua_syntax.workspace = true
+serde = { version = "1", features = ["derive"] }

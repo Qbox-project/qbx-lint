@@ -40,6 +40,7 @@ struct RawConfig {
     ignore_unused_prefix: Option<String>,
     rules: BTreeMap<String, Level>,
     overrides: Vec<RawOverride>,
+    format: qbx_lua_fmt::FormatOptions,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -63,6 +64,7 @@ pub struct Config {
     exclude: GlobSet,
     pub globals: Vec<String>,
     pub ignore_unused_prefix: String,
+    pub format: qbx_lua_fmt::FormatOptions,
     rules: BTreeMap<String, Level>,
     overrides: Vec<Override>,
 }
@@ -125,6 +127,7 @@ impl Config {
             exclude,
             globals: raw.globals,
             ignore_unused_prefix: raw.ignore_unused_prefix.unwrap_or_else(|| "_".to_string()),
+            format: raw.format,
             rules: raw.rules,
             overrides,
         })

@@ -492,6 +492,7 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "qbx_lua_analysis",
+ "qbx_lua_fmt",
  "qbx_lua_syntax",
  "serde_json",
 ]
@@ -502,6 +503,7 @@ version = "0.1.0"
 dependencies = [
  "globset",
  "qbx_fivem_data",
+ "qbx_lua_fmt",
  "qbx_lua_syntax",
  "rayon",
  "rustc-hash",
@@ -509,6 +511,14 @@ dependencies = [
  "smol_str",
  "toml",
  "walkdir",
+]
+
+[[package]]
+name = "qbx_lua_fmt"
+version = "0.1.0"
+dependencies = [
+ "qbx_lua_syntax",
+ "serde",
 ]
 
 [[package]]

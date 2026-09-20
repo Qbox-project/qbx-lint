@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/qbx_lua_syntax",
+    "crates/qbx_lua_fmt",
     "crates/qbx_lua_analysis",
     "crates/qbx_fivem_data",
     "crates/qbx_lint",
@@ -9,6 +10,7 @@ members = [
 ]
 default-members = [
     "crates/qbx_lua_syntax",
+    "crates/qbx_lua_fmt",
     "crates/qbx_lua_analysis",
     "crates/qbx_fivem_data",
     "crates/qbx_lint",
@@ -23,6 +25,7 @@ rust-version = "1.85"
 
 [workspace.dependencies]
 qbx_lua_syntax = { path = "crates/qbx_lua_syntax" }
+qbx_lua_fmt = { path = "crates/qbx_lua_fmt" }
 qbx_lua_analysis = { path = "crates/qbx_lua_analysis" }
 qbx_fivem_data = { path = "crates/qbx_fivem_data" }
 smol_str = "0.3"

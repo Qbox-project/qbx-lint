@@ -40,8 +40,11 @@ impl From<MinSeverity> for Severity {
 
 /// A fast linter for FiveM Lua resources.
 #[derive(Parser, Debug)]
-#[command(name = "qbx-lint", version, about)]
+#[command(name = "qbx-lint", version, about, args_conflicts_with_subcommands = true)]
 struct Cli {
+    #[command(subcommand)]
+    command: Option<Command>,
+
     /// Files or directories to lint.
     #[arg(default_value = ".")]
     paths: Vec<PathBuf>,
@@ -87,8 +90,77 @@ struct Cli {
     list_rules: bool,
 }
 
+#[derive(clap::Subcommand, Debug)]
+enum Command {
+    /// Format Lua files in place. Options come from the [format] table of qbxlint.toml.
+    Fmt {
+        /// Files or directories to format.
+        #[arg(default_value = ".")]
+        paths: Vec<PathBuf>,
+
+        /// Do not write anything; exit with 1 when a file is not formatted.
+        #[arg(long)]
+        check: bool,
+
+        /// Path to a qbxlint.toml.
+        #[arg(short, long)]
+        config: Option<PathBuf>,
+    },
+}
+
+fn run_fmt(paths: &[PathBuf], check: bool, config: Option<&PathBuf>) -> Result<ExitCode, String> {
+    use qbx_lua_analysis::project::{lua_files_under, read_source};
+
+    let config = match config {
+        Some(path) => Config::load(path)?,
+        None => {
+            let start = paths.first().cloned().unwrap_or_else(|| PathBuf::from("."));
+            Config::discover(&std::path::absolute(&start).unwrap_or(start))?.unwrap_or_default()
+        }
+    };
+    let mut files = Vec::new();
+    for path in paths {
+        let path = std::path::absolute(path).unwrap_or_else(|_| path.clone());
+        if !path.exists() {
+            return Err(format!("path does not exist: {}", path.display()));
+        }
+        if path.is_dir() {
+            files.extend(lua_files_under(&path, &config));
+        } else {
+            files.push(path);
+        }
+    }
+
+    let (mut changed, mut failed) = (0usize, 0usize);
+    for file in &files {
+        let source = read_source(file).map_err(|e| format!("{}: {e}", file.display()))?;
+        match qbx_lua_fmt::format(&source, &config.format) {
+            Ok(formatted) if formatted == source => {}
+            Ok(formatted) => {
+                changed += 1;
+                println!("{} {}", if check { "would reformat" } else { "reformatted" }, file.display());
+                if !check {
+                    std::fs::write(file, formatted).map_err(|e| format!("{}: {e}", file.display()))?;
+                }
+            }
+            Err(error) => {
+                failed += 1;
+                eprintln!("{}: {error}", file.display());
+            }
+        }
+    }
+    println!("{} file(s) checked, {changed} {}, {failed} skipped", files.len(), if check { "need formatting" } else { "reformatted" });
+    Ok(if (check && changed > 0) || failed > 0 { ExitCode::from(1) } else { ExitCode::SUCCESS })
+}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
+    if let Some(Command::Fmt { paths, check, config }) = &cli.command {
+        return run_fmt(paths, *check, config.as_ref()).unwrap_or_else(|message| {
+            eprintln!("qbx-lint: {message}");
+            ExitCode::from(2)
+        });
+    }
     if cli.list_rules {
         print_rules();
         return ExitCode::SUCCESS;
