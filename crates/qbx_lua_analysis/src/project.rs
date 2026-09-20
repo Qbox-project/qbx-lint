@@ -12,8 +12,19 @@ use crate::manifest::{Manifest, ScriptEntry, MANIFEST_FILE_NAMES};
 use crate::scope::{resolve, Resolution};
 use crate::summary::{summarize, FileSummary};
 
+/// Whether a `.lua` file holds something other than Lua source: a FiveM escrow (asset protection)
+/// payload, precompiled bytecode, or any other binary blob.
+pub fn is_not_source(bytes: &[u8]) -> bool {
+    bytes.starts_with(b"FXAP") || bytes.starts_with(b"\x1bLua") || bytes.iter().take(1024).any(|b| *b == 0)
+}
+
+/// Reads Lua source. Encrypted or binary files are an error, so every caller skips them the same
+/// way it skips unreadable files.
 pub fn read_source(path: &Path) -> std::io::Result<String> {
     let bytes = std::fs::read(path)?;
+    if is_not_source(&bytes) {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "encrypted or binary file"));
+    }
     Ok(match String::from_utf8(bytes) {
         Ok(text) => text,
         Err(err) => String::from_utf8_lossy(err.as_bytes()).into_owned(),

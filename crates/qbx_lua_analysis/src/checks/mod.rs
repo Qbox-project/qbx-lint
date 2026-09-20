@@ -77,10 +77,19 @@ impl<'a> Sink<'a> {
     }
 }
 
+const MAX_SYNTAX_ERRORS: usize = 10;
+
 pub fn check_file(input: &FileInput) -> Vec<Diagnostic> {
     let mut sink = Sink::new(input.config);
-    for error in &input.chunk.errors {
+    let errors = &input.chunk.errors;
+    for error in errors.iter().take(MAX_SYNTAX_ERRORS) {
         sink.report(rules::SYNTAX_ERROR, error.span, error.message.clone());
+    }
+    if errors.len() > MAX_SYNTAX_ERRORS {
+        // Whatever this is, it is not Lua the other rules could say anything useful about.
+        let more = errors.len() - MAX_SYNTAX_ERRORS;
+        sink.report(rules::SYNTAX_ERROR, errors[MAX_SYNTAX_ERRORS].span, format!("{more} more syntax errors not shown"));
+        return sink.finish();
     }
     locals::check(input, &mut sink);
     flow::check(input, &mut sink);

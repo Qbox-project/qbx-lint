@@ -133,7 +133,7 @@ fn run_fmt(paths: &[PathBuf], check: bool, config: Option<&PathBuf>) -> Result<E
 
     let (mut changed, mut failed) = (0usize, 0usize);
     for file in &files {
-        let source = read_source(file).map_err(|e| format!("{}: {e}", file.display()))?;
+        let Ok(source) = read_source(file) else { continue };
         match qbx_lua_fmt::format(&source, &config.format) {
             Ok(formatted) if formatted == source => {}
             Ok(formatted) => {
