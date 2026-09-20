@@ -27,6 +27,8 @@ The current Qbox workflow runs luacheck through `iLLeniumStudios/fivem-lua-lint-
 | `source` read after `Wait` | no | `fivem/source-after-yield` |
 | Manifest validation | no | `manifest/*` |
 | Automatic fixes | no | `--fix` |
+| Event/export call checks, security and locale rules | no | yes, across files and resources |
+| Formatter | no | `qbx-lint fmt`, verified output |
 | PR annotations | via JUnit converter | native (`--format github`), plus SARIF/JUnit/JSON |
 | Runtime | Docker image + Lua interpreter | single static binary; qbx_core (55 files) lints in ~30 ms |
 
@@ -87,6 +89,15 @@ Run `qbx-lint --list-rules` for the authoritative list. Highlights:
 | `fivem/legacy-native-pattern` | info | `GetPlayerPed(-1)`, `GetDistanceBetweenCoords`, `Vdist` |
 | `qbox/prefer-cache` | hint | `PlayerPedId()` when ox_lib's `cache.ped` is available |
 | `qbox/legacy-core-object` | hint | `exports['qb-core']:GetCoreObject()` |
+| `fivem/event-argument-count` | warning | `TriggerServerEvent('x', a, b, c)` when the handler of `x` only takes two parameters |
+| `fivem/event-missing-arguments` | info | fewer arguments than the handler declares (fine for optional parameters, a bug otherwise) |
+| `fivem/event-wrong-side` | warning | `TriggerServerEvent` for an event that is only handled on the client, and the reverse |
+| `fivem/export-argument-count`, `fivem/unknown-export` | warning / info | calls to `exports.resource:Fn()` checked against the resource's `exports('Fn', ...)` |
+| `security/client-supplied-source` | warning | server net event that takes the player id as an argument instead of using `source` |
+| `security/unvalidated-event-argument` | warning | a client-sent value reaches `AddMoney`, `AddItem`, `SetJob`, `ExecuteCommand`, `load`, ... without appearing in any check |
+| `security/sql-concatenation` | warning | queries built with `..` or `:format()` and no parameter table |
+| `qbox/unknown-locale-key`, `qbox/unused-locale-key` | warning / info | `locale('key')` validated against `locales/en.json`, unused keys reported on the JSON file |
+| `manifest/missing-dependency` | info | `exports.foo` used without `dependency 'foo'` (skipped when guarded by `GetResourceState`) |
 | `manifest/lua54`, `manifest/missing-file`, `manifest/unknown-directive` | warning | broken or misspelled manifest entries |
 | `unused-local`, `unused-function`, `redefined-local`, `unreachable-code`, `duplicate-index`, `const-reassign`, `unbalanced-assignments`, `self-assignment`, `lowercase-global`, `implicit-global`, `builtin-overwrite`, `undefined-field`, `deprecated`, ... | varies | the usual Lua mistakes |
 
@@ -107,6 +118,36 @@ print(fromSomewhereElse)
 ```
 
 Existing `-- luacheck: ignore` comments are honoured, so migrating does not require touching code.
+
+The cross-file rules work in two passes: every handler and export under the linted paths is
+collected first, then each trigger and export call is checked against them. Events and resources
+that are not part of the run are simply not checked, so linting a single resource never produces
+guesses about code it cannot see.
+
+## Formatting
+
+```bash
+qbx-lint fmt                  # format every Lua file under the current directory
+qbx-lint fmt --check          # CI mode: exit 1 if anything would change
+```
+
+The formatter is deliberately conservative about taste: it fixes spacing, indentation and line
+length, but keeps one-line guards (`if not player then return end`), tables the author expanded,
+trailing commas as written, inline casts (`value --[[@as number]]`) and blank-line grouping.
+
+It is also paranoid about safety. After printing, the result is lexed again and must contain
+exactly the same tokens (string contents compared after unescaping) and the same comments as the
+input; otherwise the file is left untouched and reported. Statements with a comment in a position
+the printer has no slot for are copied verbatim instead of guessing. All 339 files of the
+validation corpus format this way, and formatting them twice changes nothing.
+
+```toml
+[format]
+indent_width = 4
+use_tabs = false
+line_width = 120
+quote_style = "preserve"   # or "single" / "double"; only applied where no escaping is needed
+```
 
 ## Configuration
 
@@ -132,6 +173,7 @@ See [examples/qbxlint.toml](examples/qbxlint.toml).
 | Crate | Purpose |
 | --- | --- |
 | `qbx_lua_syntax` | Error-tolerant lexer/parser for Lua 5.4 + CfxLua. No dependencies besides `smol_str`. |
+| `qbx_lua_fmt` | The formatter and its output verifier. |
 | `qbx_fivem_data` | Embedded natives (sorted TSV, binary-searched in place), runtime stubs, known imports. |
 | `qbx_lua_analysis` | Scope resolution, manifest/project model, rules, config, suppression directives. |
 | `qbx_lint` | The `qbx-lint` CLI and output formats. |

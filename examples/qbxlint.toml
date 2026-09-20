@@ -18,3 +18,9 @@ ignore_unused_prefix = "_"
 [[overrides]]
 files = ["**/tests/**", "**/*.spec.lua"]
 rules = { "undefined-global" = "off" }
+
+[format]
+indent_width = 4
+use_tabs = false
+line_width = 120
+quote_style = "preserve"
