@@ -195,6 +195,7 @@ fn clean_snippets_stay_clean() {
         "local function fib(n) if n < 2 then return n end return fib(n - 1) + fib(n - 2) end\nprint(fib(10))",
         "local t = {}\nfunction t:method() return self end\nprint(t)",
         "for _, v in ipairs({ 1, 2 }) do print(v) end",
+        "print(glm.normalize(vector3(1, 2, 3)), glm.pi, glm.quatLookAt(glm.forward(), glm.up()))",
         "local ok, err = pcall(error, 'x')\nprint(ok, err)",
         "local a <close> = setmetatable({}, { __close = function() end })",
         "while true do\n    local done = coroutine.yield()\n    if done then break end\nend",

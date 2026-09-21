@@ -169,6 +169,7 @@ pub struct Stub {
 pub static STUBS: &[Stub] = &[
     Stub { name: "lua54.lua", side: Side::Shared, source: include_str!("../stubs/lua54.lua") },
     Stub { name: "cfx.lua", side: Side::Shared, source: include_str!("../stubs/cfx.lua") },
+    Stub { name: "glm.lua", side: Side::Shared, source: include_str!("../stubs/glm.lua") },
     Stub { name: "cfx_client.lua", side: Side::Client, source: include_str!("../stubs/cfx_client.lua") },
     Stub { name: "cfx_server.lua", side: Side::Server, source: include_str!("../stubs/cfx_server.lua") },
 ];

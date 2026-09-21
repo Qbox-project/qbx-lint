@@ -61,7 +61,8 @@ For every file the linter looks for the nearest `fxmanifest.lua` and builds the 
 file really runs in:
 
 1. The Lua 5.4 standard library and the CfxLua runtime (`Citizen`, `exports`, `json`, `vector3`,
-   state bags, ...), defined by the annotated stubs in `crates/qbx_fivem_data/stubs`.
+   state bags, the built-in `glm` library with its geometry helpers such as `glm.polygon`, ...),
+   defined by the annotated stubs in `crates/qbx_fivem_data/stubs`.
 2. Every FiveM native, including `N_0x...` hash names. Each native knows whether it is client,
    server or shared.
 3. Globals defined by any script the manifest loads **on the same side** as the file.
@@ -242,6 +243,7 @@ See [examples/qbxlint.toml](examples/qbxlint.toml).
 ```bash
 cargo test --workspace
 cargo xtask natives                     # refresh natives.tsv / natives_docs.tsv
+node scripts/generate-glm-stub.mjs      # rebuild stubs/glm.lua from the CfxLua GLM binding sources
 QBX_BLESS=1 cargo test -p qbx_lua_analysis --test fixtures   # accept new fixture output
 ```
 
