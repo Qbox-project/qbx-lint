@@ -11,7 +11,13 @@ use crate::scope::Resolved;
 
 pub(super) fn check(input: &FileInput, sink: &mut Sink) {
     let mentions_resource_state = input.source.contains("GetResourceState");
-    let mut checker = CrossFile { input, sink, reported_dependencies: FxHashSet::default(), mentions_resource_state };
+    let mut checker = CrossFile {
+        input,
+        sink,
+        reported_dependencies: FxHashSet::default(),
+        mentions_resource_state,
+        selected_at_runtime: 0,
+    };
     checker.visit_block(&input.chunk.block);
 }
 
@@ -20,6 +26,8 @@ struct CrossFile<'a, 'b> {
     sink: &'a mut Sink<'b>,
     reported_dependencies: FxHashSet<SmolStr>,
     mentions_resource_state: bool,
+    /// Depth of enclosing code that only runs when a string-valued setting selects it.
+    selected_at_runtime: u32,
 }
 
 fn passed_count(args: &[Expr], skip: usize) -> Option<usize> {
@@ -161,8 +169,23 @@ impl CrossFile<'_, '_> {
                 .split("GetResourceState")
                 .skip(1)
                 .any(|rest| rest.get(..resource.len() + 6).unwrap_or(rest).contains(resource.as_str()));
-        let ordered_by_cfg = own.started_before.is_some_and(|before| before.contains(resource));
-        if listed || imported || guarded || ordered_by_cfg || !self.reported_dependencies.insert(resource.clone()) {
+        // Bridge code picks one of many integrations at runtime (`if Config.Inventory == 'ox' then`);
+        // none of them is a requirement, and most are not even installed.
+        if listed || imported || guarded || self.selected_at_runtime > 0 {
+            return;
+        }
+        if !self.reported_dependencies.insert(resource.clone()) {
+            return;
+        }
+        if own.installed.is_some_and(|installed| !installed.contains(resource)) {
+            self.sink.report(
+                rules::RESOURCE_NOT_FOUND,
+                at.span,
+                format!("'{resource}' is called unconditionally, but no resource with that name is installed on this server"),
+            );
+            return;
+        }
+        if own.started_before.is_some_and(|before| before.contains(resource)) {
             return;
         }
         let cfg_note = if own.started_before.is_some() { " and server.cfg does not start it earlier" } else { "" };
@@ -174,7 +197,65 @@ impl CrossFile<'_, '_> {
     }
 }
 
+/// `Config.Inventory == 'ox'`, `framework ~= "qbx"`: a condition that selects an integration by name.
+fn compares_with_string(cond: &Expr) -> bool {
+    match &cond.unparen().kind {
+        ExprKind::Binary { op: BinOp::Eq | BinOp::Ne, lhs, rhs, .. } => {
+            lhs.unparen().as_string().is_some() || rhs.unparen().as_string().is_some()
+        }
+        ExprKind::Binary { op: BinOp::And | BinOp::Or, lhs, rhs, .. } => {
+            compares_with_string(lhs) || compares_with_string(rhs)
+        }
+        ExprKind::Unary { op: UnOp::Not, expr } => compares_with_string(expr),
+        _ => false,
+    }
+}
+
+/// `if Config.Framework ~= 'qbx' then return end` at the top of a bridge file.
+fn is_selector_guard(stmt: &Stmt) -> bool {
+    match &stmt.kind {
+        StmtKind::If { branches, else_block: None } => match branches.as_slice() {
+            [only] => {
+                compares_with_string(&only.cond)
+                    && matches!(only.block.stmts.last(), Some(Stmt { kind: StmtKind::Return(_), .. }))
+            }
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
 impl<'ast> Visitor<'ast> for CrossFile<'_, '_> {
+    fn visit_block(&mut self, block: &'ast Block) {
+        let mut guards = 0;
+        for stmt in &block.stmts {
+            self.visit_stmt(stmt);
+            if is_selector_guard(stmt) {
+                guards += 1;
+                self.selected_at_runtime += 1;
+            }
+        }
+        self.selected_at_runtime -= guards;
+    }
+
+    fn visit_stmt(&mut self, stmt: &'ast Stmt) {
+        let StmtKind::If { branches, else_block } = &stmt.kind else {
+            return visit::walk_stmt(self, stmt);
+        };
+        let selects = branches.iter().any(|b| compares_with_string(&b.cond));
+        for branch in branches {
+            self.visit_expr(&branch.cond);
+        }
+        self.selected_at_runtime += u32::from(selects);
+        for branch in branches {
+            self.visit_block(&branch.block);
+        }
+        if let Some(block) = else_block {
+            self.visit_block(block);
+        }
+        self.selected_at_runtime -= u32::from(selects);
+    }
+
     fn visit_expr(&mut self, expr: &'ast Expr) {
         match &expr.kind {
             ExprKind::Call { callee, args, .. } => {

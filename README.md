@@ -81,13 +81,34 @@ marker, or contains such a file, is treated as *opaque*: the readable part (usua
 is still linted, but `undefined-global` and `qbox/unused-locale-key` stay silent, because the
 encrypted scripts may define any global and use any locale key.
 
-### Start order
+### Start order and installed resources
 
-When a `server.cfg` sits above the resource, its `ensure` / `start` lines (including `exec`'d
-cfg files and `ensure [category]`) are read. A resource that the cfg starts earlier counts as a
-satisfied dependency, so `manifest/missing-dependency` is only reported when neither the manifest
-nor the cfg settles the order. Resources started by the same `ensure [category]` line have no
-defined order relative to each other.
+When the resource lives in the `resources` folder next to a `server.cfg`, that cfg's `ensure` /
+`start` lines (including `exec`'d cfg files and `ensure [category]`) are read. A resource that the
+cfg starts earlier counts as a satisfied dependency, so `manifest/missing-dependency` is only
+reported when neither the manifest nor the cfg settles the order. Resources started by the same
+`ensure [category]` line have no defined order relative to each other.
+
+The same folder tells the linter what is installed (names a manifest `provide`s included). An
+export of a resource that does not exist is reported as `fivem/resource-not-found`, but only
+when the call is unconditional.
+
+### Bridge code
+
+Bridges pick one integration out of many at runtime:
+
+```lua
+if Config.Inventory == 'ox' then
+    exports.ox_inventory:AddItem(...)
+elseif Config.Inventory == 'qs' then
+    exports['qs-inventory']:AddItem(...)
+end
+```
+
+None of these is a requirement and most are not installed, so exports used inside a branch whose
+condition compares against a string, or after a guard such as
+`if Config.Framework ~= 'esx' then return end`, produce neither `manifest/missing-dependency` nor
+`fivem/resource-not-found`.
 
 ## Rules
 
@@ -113,7 +134,8 @@ Run `qbx-lint --list-rules` for the authoritative list. Highlights:
 | `security/unvalidated-event-argument` | warning | a client-sent value reaches `AddMoney`, `AddItem`, `SetJob`, `ExecuteCommand`, `load`, ... without appearing in any check |
 | `security/sql-concatenation` | warning | queries built with `..` or `:format()` and no parameter table |
 | `qbox/unknown-locale-key`, `qbox/unused-locale-key` | warning / info | `locale('key')` validated against `locales/en.json`, unused keys reported on the JSON file |
-| `manifest/missing-dependency` | info | `exports.foo` used without `dependency 'foo'` (skipped when guarded by `GetResourceState` or when `server.cfg` starts `foo` earlier) |
+| `manifest/missing-dependency` | info | `exports.foo` used without `dependency 'foo'` (skipped for bridge code, when guarded by `GetResourceState`, or when `server.cfg` starts `foo` earlier) |
+| `fivem/resource-not-found` | warning | an unconditional `exports.foo:...` call while no resource `foo` exists in the server's resources folder |
 | `manifest/lua54`, `manifest/missing-file`, `manifest/unknown-directive` | warning | broken or misspelled manifest entries |
 | `unused-local`, `unused-function`, `redefined-local`, `unreachable-code`, `duplicate-index`, `const-reassign`, `unbalanced-assignments`, `self-assignment`, `lowercase-global`, `implicit-global`, `builtin-overwrite`, `undefined-field`, `deprecated`, ... | varies | the usual Lua mistakes |
 

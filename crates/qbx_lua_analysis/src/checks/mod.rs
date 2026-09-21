@@ -42,6 +42,9 @@ pub struct ResourceInput<'a> {
     /// Resources that server.cfg starts before this one, which settles load order without a
     /// `dependency` entry.
     pub started_before: Option<&'a rustc_hash::FxHashSet<qbx_lua_syntax::SmolStr>>,
+    /// Every resource in the server's resources folder, including names they `provide`. Only
+    /// known when a server.cfg was found, i.e. when the whole server is on disk.
+    pub installed: Option<&'a rustc_hash::FxHashSet<qbx_lua_syntax::SmolStr>>,
 }
 
 pub(crate) struct Sink<'a> {

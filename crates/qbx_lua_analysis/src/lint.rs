@@ -165,7 +165,8 @@ fn lint_resource(
         return targets.iter().filter_map(|path| lint_loose_file(path, config, crossrefs)).collect();
     };
     let locale = LocaleFile::load(root);
-    let started_before = crate::startup::StartOrder::discover(root).map(|order| order.started_before(&resource.name));
+    let start_order = crate::startup::StartOrder::discover(root);
+    let started_before = start_order.as_ref().map(|order| order.started_before(&resource.name));
 
     let mut reports: Vec<FileReport> = resource
         .files
@@ -188,6 +189,7 @@ fn lint_resource(
                     env: &resource.env,
                     manifest: &resource.manifest,
                     started_before: started_before.as_ref(),
+                    installed: start_order.as_ref().map(|order| &order.installed),
                 }),
                 crossrefs: Some(crossrefs),
                 locale: locale.as_ref(),

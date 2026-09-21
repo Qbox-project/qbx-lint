@@ -77,9 +77,18 @@ fn bad_resource_reports_every_rule() {
                 | "security/sql-concatenation"
                 | "qbox/unknown-locale-key"
                 | "qbox/unused-locale-key"
+                | "fivem/resource-not-found"
         );
         assert!(exercised || covered_elsewhere, "rule {} is not exercised by the bad_resource fixture", rule.code);
     }
+}
+
+#[test]
+fn server_cfg_decides_order_and_what_is_installed() {
+    qbx_lua_analysis::startup::clear_cache();
+    let actual = render(&fixtures().join("server/resources"), &Config::default());
+    let expected = "[bridges]/bridge/server.lua:9:1 warning fivem/resource-not-found\n";
+    assert_eq!(actual, expected, "core starts earlier, the ghost framework is optional, ghost_inventory is missing");
 }
 
 #[test]

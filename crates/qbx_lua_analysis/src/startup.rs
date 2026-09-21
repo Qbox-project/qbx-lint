@@ -12,6 +12,27 @@ use crate::project::manifest_path;
 #[derive(Debug, Default)]
 pub struct StartOrder {
     groups: FxHashMap<SmolStr, usize>,
+    /// Every resource under the server's `resources` folder, plus the names they `provide`.
+    pub installed: FxHashSet<SmolStr>,
+}
+
+fn installed_resources(resources_dir: &Path) -> FxHashSet<SmolStr> {
+    let mut names = FxHashSet::default();
+    let walker = WalkDir::new(resources_dir).max_depth(7).into_iter().filter_entry(|entry| {
+        let name = entry.file_name().to_string_lossy();
+        entry.depth() == 0 || !(name == "node_modules" || name.starts_with('.'))
+    });
+    for entry in walker.flatten().filter(|e| e.file_type().is_dir()) {
+        let Some(manifest) = manifest_path(entry.path()) else { continue };
+        names.insert(SmolStr::new(entry.file_name().to_string_lossy()));
+        // `provide 'qb-core'` lets a resource answer to another name, exports included.
+        let Ok(text) = std::fs::read_to_string(&manifest) else { continue };
+        for line in text.lines().map(str::trim).filter(|l| l.starts_with("provide")) {
+            let quoted = line.split(['\'', '"']).nth(1);
+            names.extend(quoted.filter(|name| !name.is_empty()).map(SmolStr::new));
+        }
+    }
+    names
 }
 
 const MAX_EXEC_DEPTH: u32 = 5;
@@ -26,8 +47,15 @@ pub fn clear_cache() {
     cache().lock().unwrap_or_else(|e| e.into_inner()).clear();
 }
 
+/// A server.cfg only governs what lives in the `resources` folder next to it; a project that
+/// merely sits somewhere below a server's data folder is not one of its resources.
 fn find_server_cfg(resource_root: &Path) -> Option<PathBuf> {
-    resource_root.ancestors().skip(1).map(|dir| dir.join("server.cfg")).find(|cfg| cfg.is_file())
+    resource_root
+        .ancestors()
+        .skip(1)
+        .filter(|dir| resource_root.starts_with(dir.join("resources")))
+        .map(|dir| dir.join("server.cfg"))
+        .find(|cfg| cfg.is_file())
 }
 
 fn resources_in_category(resources_dir: &Path, category: &str) -> Vec<SmolStr> {
@@ -52,7 +80,8 @@ impl StartOrder {
         if let Some(order) = cache.get(&cfg) {
             return Some(order.clone());
         }
-        let mut order = StartOrder::default();
+        let resources_dir = cfg.parent().unwrap_or(Path::new(".")).join("resources");
+        let mut order = StartOrder { installed: installed_resources(&resources_dir), ..StartOrder::default() };
         let mut next_group = 0;
         order.read_cfg(&cfg, &mut next_group, 0);
         let order = Arc::new(order);
@@ -111,6 +140,8 @@ mod tests {
         std::fs::write(root.join("server.cfg"), "# comment\nensure [ox]\nexec extra.cfg\nensure mything # last\n")
             .unwrap();
         std::fs::write(root.join("extra.cfg"), "start qbx_core\n").unwrap();
+        let core_manifest = root.join("resources/[qbx]/qbx_core/fxmanifest.lua");
+        std::fs::write(core_manifest, "fx_version 'cerulean'\nprovide 'qb-core'\n").unwrap();
 
         clear_cache();
         let order = StartOrder::discover(&root.join("resources/[standalone]/mything")).unwrap();
@@ -122,6 +153,9 @@ mod tests {
         assert!(!order.started_before("ox_lib").contains("ox_inventory"), "one category line gives no order");
         assert!(order.started_before("qbx_core").contains("ox_lib"));
         assert!(order.started_before("unlisted").is_empty());
+        assert!(order.installed.contains("unlisted") && order.installed.contains("ox_lib"));
+        assert!(!order.installed.contains("not_here") && !order.installed.contains("[ox]"));
+        assert!(order.installed.contains("qb-core"), "provided names count as installed");
         std::fs::remove_dir_all(&root).ok();
     }
 }
