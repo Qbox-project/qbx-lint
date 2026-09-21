@@ -81,6 +81,11 @@ marker, or contains such a file, is treated as *opaque*: the readable part (usua
 is still linted, but `undefined-global` and `qbox/unused-locale-key` stay silent, because the
 encrypted scripts may define any global and use any locale key.
 
+What an opaque resource exports or handles is unknowable too, so calls into it never produce
+`fivem/unknown-export`, and events named `resource:...` after it never produce
+`fivem/event-wrong-side`. The same applies to resources whose manifest runs JavaScript or C#
+scripts (oxmysql, pma-voice) and to resources that register exports under computed names (ox_lib).
+
 ### Start order and installed resources
 
 When the resource lives in the `resources` folder next to a `server.cfg`, that cfg's `ensure` /
@@ -91,7 +96,7 @@ reported when neither the manifest nor the cfg settles the order. Resources star
 
 The same folder tells the linter what is installed (names a manifest `provide`s included). An
 export of a resource that does not exist is reported as `fivem/resource-not-found`, but only
-when the call is unconditional.
+when the call sits outside every `if`. It is an `info`: the enclosing function may never run.
 
 ### Bridge code
 
@@ -108,7 +113,12 @@ end
 None of these is a requirement and most are not installed, so exports used inside a branch whose
 condition compares against a string, or after a guard such as
 `if Config.Framework ~= 'esx' then return end`, produce neither `manifest/missing-dependency` nor
-`fivem/resource-not-found`.
+`fivem/resource-not-found`. The same holds for:
+
+- the body of a `pcall` / `xpcall`, which is how resources probe for an optional export;
+- files under a `bridge`, `bridges`, `framework`, `frameworks`, `compat` or `integrations`
+  folder;
+- files the manifest lists only under `files`, which a loader `require`s on demand.
 
 ## Rules
 
@@ -135,7 +145,7 @@ Run `qbx-lint --list-rules` for the authoritative list. Highlights:
 | `security/sql-concatenation` | warning | queries built with `..` or `:format()` and no parameter table |
 | `qbox/unknown-locale-key`, `qbox/unused-locale-key` | warning / info | `locale('key')` validated against `locales/en.json`, unused keys reported on the JSON file |
 | `manifest/missing-dependency` | info | `exports.foo` used without `dependency 'foo'` (skipped for bridge code, when guarded by `GetResourceState`, or when `server.cfg` starts `foo` earlier) |
-| `fivem/resource-not-found` | warning | an unconditional `exports.foo:...` call while no resource `foo` exists in the server's resources folder |
+| `fivem/resource-not-found` | info | an unconditional `exports.foo:...` call while no resource `foo` exists in the server's resources folder |
 | `manifest/lua54`, `manifest/missing-file`, `manifest/unknown-directive` | warning | broken or misspelled manifest entries |
 | `unused-local`, `unused-function`, `redefined-local`, `unreachable-code`, `duplicate-index`, `const-reassign`, `unbalanced-assignments`, `self-assignment`, `lowercase-global`, `implicit-global`, `builtin-overwrite`, `undefined-field`, `deprecated`, ... | varies | the usual Lua mistakes |
 

@@ -16,9 +16,25 @@ pub(super) fn check(input: &FileInput, sink: &mut Sink) {
         sink,
         reported_dependencies: FxHashSet::default(),
         mentions_resource_state,
-        selected_at_runtime: 0,
+        selected_at_runtime: u32::from(is_bridge_file(input)),
+        conditional: 0,
     };
     checker.visit_block(&input.chunk.block);
+}
+
+const BRIDGE_FOLDERS: &[&str] = &["bridge", "bridges", "framework", "frameworks", "compat", "integrations"];
+
+/// Per-framework files such as `bridge/esx/server.lua` are picked by a loader at runtime: either
+/// the manifest does not run them as scripts at all, or they sit in a folder named for the purpose.
+fn is_bridge_file(input: &FileInput) -> bool {
+    let loaded_on_demand = input.resource.is_some() && input.side.is_none();
+    let in_bridge_folder = input
+        .relative_path
+        .split('/')
+        .rev()
+        .skip(1)
+        .any(|folder| BRIDGE_FOLDERS.contains(&folder.to_ascii_lowercase().as_str()));
+    loaded_on_demand || in_bridge_folder
 }
 
 struct CrossFile<'a, 'b> {
@@ -28,6 +44,8 @@ struct CrossFile<'a, 'b> {
     mentions_resource_state: bool,
     /// Depth of enclosing code that only runs when a string-valued setting selects it.
     selected_at_runtime: u32,
+    /// Depth of enclosing `if` branches of any kind.
+    conditional: u32,
 }
 
 fn passed_count(args: &[Expr], skip: usize) -> Option<usize> {
@@ -63,6 +81,12 @@ impl CrossFile<'_, '_> {
         };
         let reachable: Vec<_> = registrations.iter().filter(|r| reaches(r.side)).collect();
         if reachable.is_empty() {
+            // Events are named `resource:event` by convention; an escrowed resource may well handle
+            // this one on the other side too, inside a file that cannot be read.
+            let owner = name.split(':').next().unwrap_or(name);
+            if refs.opaque_resources.contains(owner) {
+                return;
+            }
             let (Some(target), Some(other)) = (target, registrations.iter().find_map(|r| r.side)) else { return };
             self.sink.report(
                 rules::EVENT_WRONG_SIDE,
@@ -146,7 +170,8 @@ impl CrossFile<'_, '_> {
             Some(_) => {}
             None => {
                 let has_any = refs.exports.keys().any(|(r, _)| *r == resource);
-                if has_any && !method.is_missing() {
+                let could_be_hidden = refs.opaque_resources.contains(&resource);
+                if has_any && !could_be_hidden && !method.is_missing() {
                     self.sink.report(
                         rules::UNKNOWN_EXPORT,
                         method.span,
@@ -174,15 +199,19 @@ impl CrossFile<'_, '_> {
         if listed || imported || guarded || self.selected_at_runtime > 0 {
             return;
         }
-        if !self.reported_dependencies.insert(resource.clone()) {
+        if own.installed.is_some_and(|installed| !installed.contains(resource)) {
+            // Inside any `if` the author may well be checking a flag first, so only a call that
+            // always runs is worth a warning. A missing resource needs no dependency hint either.
+            if self.conditional == 0 && self.reported_dependencies.insert(resource.clone()) {
+                self.sink.report(
+                    rules::RESOURCE_NOT_FOUND,
+                    at.span,
+                    format!("'{resource}' is called unconditionally, but no resource with that name is installed on this server"),
+                );
+            }
             return;
         }
-        if own.installed.is_some_and(|installed| !installed.contains(resource)) {
-            self.sink.report(
-                rules::RESOURCE_NOT_FOUND,
-                at.span,
-                format!("'{resource}' is called unconditionally, but no resource with that name is installed on this server"),
-            );
+        if !self.reported_dependencies.insert(resource.clone()) {
             return;
         }
         if own.started_before.is_some_and(|before| before.contains(resource)) {
@@ -247,12 +276,14 @@ impl<'ast> Visitor<'ast> for CrossFile<'_, '_> {
             self.visit_expr(&branch.cond);
         }
         self.selected_at_runtime += u32::from(selects);
+        self.conditional += 1;
         for branch in branches {
             self.visit_block(&branch.block);
         }
         if let Some(block) = else_block {
             self.visit_block(block);
         }
+        self.conditional -= 1;
         self.selected_at_runtime -= u32::from(selects);
     }
 
@@ -263,6 +294,13 @@ impl<'ast> Visitor<'ast> for CrossFile<'_, '_> {
                     if self.is_global(name) {
                         self.trigger(refs, &name.text, expr, args);
                     }
+                }
+                // `pcall(function() return exports.x:Get() end)` probes for an optional resource.
+                if matches!(callee.dotted_path().as_deref(), Some("pcall" | "xpcall")) {
+                    self.selected_at_runtime += 1;
+                    visit::walk_expr(self, expr);
+                    self.selected_at_runtime -= 1;
+                    return;
                 }
             }
             ExprKind::MethodCall { base, method, args, .. } => self.export_call(expr, base, method, args),

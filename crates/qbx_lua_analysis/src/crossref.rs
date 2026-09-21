@@ -31,6 +31,9 @@ pub struct CrossRefs {
     pub exports: FxHashMap<(SmolStr, SmolStr), Arity>,
     /// Resources whose Lua files were seen, so a missing export really is missing.
     pub resources: FxHashSet<SmolStr>,
+    /// Resources with encrypted or unreadable scripts: what they export and handle beyond the
+    /// readable part is unknown, so nothing may be called "missing" there.
+    pub opaque_resources: FxHashSet<SmolStr>,
 }
 
 pub const EVENT_REGISTRATION_CALLS: &[&str] = &["RegisterNetEvent", "RegisterServerEvent", "AddEventHandler"];
@@ -94,6 +97,13 @@ impl<'ast> Visitor<'ast> for Collector<'_> {
                         self.refs.exports.insert((SmolStr::new(resource), name.clone()), unknown);
                     }
                 }
+                // `exports(name, fn)` in a loop (ox_lib does this): the export names only exist at
+                // runtime, so the literal ones are not the whole list.
+                (Some("exports"), None) if !args.is_empty() => {
+                    if let Some(resource) = self.resource {
+                        self.refs.opaque_resources.insert(SmolStr::new(resource));
+                    }
+                }
                 _ => {}
             }
         }
@@ -130,5 +140,6 @@ impl CrossRefs {
         }
         self.exports.extend(other.exports);
         self.resources.extend(other.resources);
+        self.opaque_resources.extend(other.opaque_resources);
     }
 }

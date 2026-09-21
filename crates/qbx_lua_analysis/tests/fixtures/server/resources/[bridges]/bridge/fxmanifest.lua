@@ -1,4 +1,4 @@
 fx_version 'cerulean'
 game 'gta5'
 lua54 'yes'
-server_script 'server.lua'
+server_scripts { 'server.lua', 'bridge/esx/server.lua' }

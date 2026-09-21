@@ -87,8 +87,13 @@ fn bad_resource_reports_every_rule() {
 fn server_cfg_decides_order_and_what_is_installed() {
     qbx_lua_analysis::startup::clear_cache();
     let actual = render(&fixtures().join("server/resources"), &Config::default());
-    let expected = "[bridges]/bridge/server.lua:9:1 warning fivem/resource-not-found\n";
-    assert_eq!(actual, expected, "core starts earlier, the ghost framework is optional, ghost_inventory is missing");
+    let expected = "[bridges]/bridge/server.lua:9:1 info fivem/resource-not-found\n\
+                    [bridges]/bridge/server.lua:12:20 info fivem/unknown-export\n";
+    assert_eq!(
+        actual, expected,
+        "core starts earlier, the ghost framework is optional, ghost_inventory is missing, core has no 'Missing' \
+         export, and the escrowed vault may export anything"
+    );
 }
 
 #[test]

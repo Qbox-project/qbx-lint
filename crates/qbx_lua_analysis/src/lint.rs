@@ -87,6 +87,9 @@ fn collect_crossrefs(
             for file in &resource.files {
                 refs.collect(&file.chunk, file.side, Some(&resource.name));
             }
+            if resource.env.opaque || resource.manifest.has_non_lua_scripts() {
+                refs.opaque_resources.insert(resource.name.as_str().into());
+            }
         }
         None => {
             for source in files.iter().filter_map(|path| read_source(path).ok()) {
@@ -111,6 +114,7 @@ fn lint_loose_file(path: &Path, config: &Config, crossrefs: &CrossRefs) -> Optio
         resource: None,
         crossrefs: Some(crossrefs),
         locale: None,
+        relative_path: "",
     });
     Some(FileReport { path: file.path, source: file.source, diagnostics })
 }
@@ -193,6 +197,7 @@ fn lint_resource(
                 }),
                 crossrefs: Some(crossrefs),
                 locale: locale.as_ref(),
+                relative_path: &file.relative,
             });
             FileReport { path: file.path.clone(), source: file.source.clone(), diagnostics }
         })

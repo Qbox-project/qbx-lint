@@ -109,6 +109,14 @@ impl Manifest {
         manifest
     }
 
+    /// JavaScript and C# scripts register exports and event handlers this tooling cannot read.
+    pub fn has_non_lua_scripts(&self) -> bool {
+        self.scripts.iter().filter(|s| !s.is_import()).any(|s| {
+            let pattern = s.pattern.to_ascii_lowercase();
+            [".js", ".ts", ".mjs", ".cjs", ".dll"].iter().any(|ext| pattern.ends_with(ext))
+        })
+    }
+
     pub fn is_map_file(&self, relative_path: &str) -> bool {
         self.maps.iter().any(|map| crate::glob::manifest_glob_match(&map.value, relative_path))
     }

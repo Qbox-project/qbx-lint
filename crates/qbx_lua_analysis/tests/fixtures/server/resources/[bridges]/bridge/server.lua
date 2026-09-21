@@ -7,3 +7,13 @@ if framework == 'ghost' then
 end
 
 exports.ghost_inventory:AddItem(1, 'water')
+
+print(exports.vault:Open(1), exports.vault:HiddenInEncryptedCode())
+print(exports.core:Missing())
+
+local ok, object = pcall(function() return exports.maybe_installed:GetObject() end)
+print(ok, object)
+
+if object then
+    exports.behind_a_flag:Notify('x')
+end

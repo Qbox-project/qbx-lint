@@ -37,6 +37,7 @@ fn codes_in_project(
         resource: None,
         crossrefs: Some(&crossrefs),
         locale: locale.as_ref(),
+        relative_path: "",
     };
     check_file(&input).into_iter().map(|d| d.code).collect()
 }

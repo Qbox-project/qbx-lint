@@ -32,6 +32,8 @@ pub struct FileInput<'a> {
     /// Event handlers and exports of the other files; without it the cross-file rules stay silent.
     pub crossrefs: Option<&'a crate::crossref::CrossRefs>,
     pub locale: Option<&'a crate::locale::LocaleFile>,
+    /// Slash-separated path inside the resource, empty when unknown.
+    pub relative_path: &'a str,
 }
 
 #[derive(Clone, Copy)]

@@ -146,7 +146,7 @@ pub static RULES: &[Rule] = &[
     rule(EVENT_WRONG_SIDE, FiveM, WARN, false, "An event is triggered towards a side where nothing handles it, while a handler exists on the other side."),
     rule(EXPORT_ARGUMENT_COUNT, FiveM, WARN, false, "An export is called with more arguments than the exported function accepts."),
     rule(UNKNOWN_EXPORT, FiveM, INFO, false, "A resource that is part of the workspace does not register the export that is called."),
-    rule(RESOURCE_NOT_FOUND, FiveM, WARN, false, "An export of a resource is called unconditionally, but the server's resources folder contains no such resource."),
+    rule(RESOURCE_NOT_FOUND, FiveM, INFO, false, "An export of a resource is called outside any condition, but the server's resources folder contains no such resource. The enclosing function may still never run."),
     rule(CLIENT_SUPPLIED_SOURCE, Security, WARN, false, "A server net event takes the player id as an argument; clients can send any id, use the global 'source'."),
     rule(UNVALIDATED_EVENT_ARGUMENT, Security, WARN, false, "A value sent by a client reaches a sensitive call (money, items, commands, code loading) without ever being checked."),
     rule(SQL_CONCATENATION, Security, WARN, false, "A SQL query is built by concatenating or formatting values into it instead of using ? placeholders."),
