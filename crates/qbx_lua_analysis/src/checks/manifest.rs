@@ -73,13 +73,30 @@ pub fn check_manifest(input: &ManifestInput) -> Vec<Diagnostic> {
         }
     }
 
-    let local_scripts = manifest.scripts.iter().filter(|s| !s.is_import()).map(|s| (&s.pattern, s.span));
-    let files = manifest.files.iter().map(|f| (&f.value, f.span));
-    for (pattern, span) in local_scripts.chain(files) {
+    let local_scripts = manifest.scripts.iter().filter(|s| !s.is_import()).map(|s| (&s.pattern, s.span, true));
+    let files = manifest.files.iter().map(|f| (&f.value, f.span, false));
+    for (pattern, span, is_script) in local_scripts.chain(files) {
         if pattern.starts_with('@') || pattern.contains("://") || is_build_output(pattern) {
             continue;
         }
-        if !input.resource_files.iter().any(|file| manifest_glob_match(pattern, file)) {
+        // Asset packs ship one template manifest listing every data file a pack could contain, as
+        // globs; an unmatched glob there is normal, while an unmatched script glob is a mistake.
+        if !is_script && crate::glob::is_glob(pattern) {
+            continue;
+        }
+        // Game data entries name a base path: `audio/x.dat` is `audio/x.dat151.rel` on disk, an
+        // audio wave pack entry is a folder, and streamed assets are found by name anywhere
+        // below `stream/`.
+        let base = pattern.trim_start_matches("./").to_ascii_lowercase();
+        let streamed = base.strip_prefix("stream/").and_then(|rest| rest.rsplit('/').next());
+        let matches = |file: &String| {
+            let file_lower = file.to_ascii_lowercase();
+            manifest_glob_match(pattern, file)
+                || file_lower.starts_with(&base)
+                || streamed
+                    .is_some_and(|name| file_lower.starts_with("stream/") && file_lower.ends_with(&format!("/{name}")))
+        };
+        if !input.resource_files.iter().any(matches) {
             sink.report(
                 rules::MANIFEST_MISSING_FILE,
                 span,
