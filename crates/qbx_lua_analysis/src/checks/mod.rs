@@ -39,6 +39,9 @@ pub struct ResourceInput<'a> {
     pub name: &'a str,
     pub env: &'a ResourceEnv,
     pub manifest: &'a Manifest,
+    /// Resources that server.cfg starts before this one, which settles load order without a
+    /// `dependency` entry.
+    pub started_before: Option<&'a rustc_hash::FxHashSet<qbx_lua_syntax::SmolStr>>,
 }
 
 pub(crate) struct Sink<'a> {
@@ -88,7 +91,11 @@ pub fn check_file(input: &FileInput) -> Vec<Diagnostic> {
     if errors.len() > MAX_SYNTAX_ERRORS {
         // Whatever this is, it is not Lua the other rules could say anything useful about.
         let more = errors.len() - MAX_SYNTAX_ERRORS;
-        sink.report(rules::SYNTAX_ERROR, errors[MAX_SYNTAX_ERRORS].span, format!("{more} more syntax errors not shown"));
+        sink.report(
+            rules::SYNTAX_ERROR,
+            errors[MAX_SYNTAX_ERRORS].span,
+            format!("{more} more syntax errors not shown"),
+        );
         return sink.finish();
     }
     locals::check(input, &mut sink);

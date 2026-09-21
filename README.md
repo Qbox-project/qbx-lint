@@ -73,6 +73,22 @@ file really runs in:
 Files that the manifest does not list as scripts (modules loaded with `require` / `lib.load`)
 are checked against the union of both sides.
 
+### Escrowed resources
+
+Files protected by the FiveM asset escrow keep the `.lua` extension but contain ciphertext (they
+start with `FXAP`). They are never parsed, formatted or indexed. A resource that ships a `.fxap`
+marker, or contains such a file, is treated as *opaque*: the readable part (usually `config.lua`)
+is still linted, but `undefined-global` and `qbox/unused-locale-key` stay silent, because the
+encrypted scripts may define any global and use any locale key.
+
+### Start order
+
+When a `server.cfg` sits above the resource, its `ensure` / `start` lines (including `exec`'d
+cfg files and `ensure [category]`) are read. A resource that the cfg starts earlier counts as a
+satisfied dependency, so `manifest/missing-dependency` is only reported when neither the manifest
+nor the cfg settles the order. Resources started by the same `ensure [category]` line have no
+defined order relative to each other.
+
 ## Rules
 
 Run `qbx-lint --list-rules` for the authoritative list. Highlights:
@@ -97,7 +113,7 @@ Run `qbx-lint --list-rules` for the authoritative list. Highlights:
 | `security/unvalidated-event-argument` | warning | a client-sent value reaches `AddMoney`, `AddItem`, `SetJob`, `ExecuteCommand`, `load`, ... without appearing in any check |
 | `security/sql-concatenation` | warning | queries built with `..` or `:format()` and no parameter table |
 | `qbox/unknown-locale-key`, `qbox/unused-locale-key` | warning / info | `locale('key')` validated against `locales/en.json`, unused keys reported on the JSON file |
-| `manifest/missing-dependency` | info | `exports.foo` used without `dependency 'foo'` (skipped when guarded by `GetResourceState`) |
+| `manifest/missing-dependency` | info | `exports.foo` used without `dependency 'foo'` (skipped when guarded by `GetResourceState` or when `server.cfg` starts `foo` earlier) |
 | `manifest/lua54`, `manifest/missing-file`, `manifest/unknown-directive` | warning | broken or misspelled manifest entries |
 | `unused-local`, `unused-function`, `redefined-local`, `unreachable-code`, `duplicate-index`, `const-reassign`, `unbalanced-assignments`, `self-assignment`, `lowercase-global`, `implicit-global`, `builtin-overwrite`, `undefined-field`, `deprecated`, ... | varies | the usual Lua mistakes |
 

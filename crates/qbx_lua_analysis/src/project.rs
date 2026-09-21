@@ -119,6 +119,14 @@ pub struct ResourceEnv {
     field_defs: FxHashSet<(SmolStr, SmolStr)>,
     file_scope: FxHashSet<SmolStr>,
     pub unresolved_imports: Vec<UnresolvedImport>,
+    /// Part of the resource is encrypted or unreadable, so neither what it defines nor what it
+    /// uses is known; rules that need the whole picture stay quiet.
+    pub opaque: bool,
+}
+
+/// The FiveM asset escrow leaves a `.fxap` file in the root of every resource it protects.
+pub fn is_escrowed_resource(resource_root: &Path) -> bool {
+    resource_root.join(".fxap").is_file()
 }
 
 impl ResourceEnv {
@@ -249,13 +257,16 @@ impl Resource {
         let manifest_source = read_source(&manifest_path).ok()?;
         let manifest = Manifest::from_chunk(&parse(&manifest_source));
 
-        let mut env = ResourceEnv::default();
+        let mut env = ResourceEnv { opaque: is_escrowed_resource(root), ..ResourceEnv::default() };
         let mut files = Vec::new();
         for path in lua_files_under(root, config) {
             if is_manifest_file(&path) || find_manifest_dir(&path).as_deref() != Some(root) {
                 continue;
             }
-            let Ok(source) = read_source(&path) else { continue };
+            let Ok(source) = read_source(&path) else {
+                env.opaque = true;
+                continue;
+            };
             let relative = relative_slash_path(root, &path);
             let side = side_of(&manifest, &relative);
             let file = ParsedFile::new(path, relative, source, side);

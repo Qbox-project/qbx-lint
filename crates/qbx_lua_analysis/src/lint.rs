@@ -165,6 +165,7 @@ fn lint_resource(
         return targets.iter().filter_map(|path| lint_loose_file(path, config, crossrefs)).collect();
     };
     let locale = LocaleFile::load(root);
+    let started_before = crate::startup::StartOrder::discover(root).map(|order| order.started_before(&resource.name));
 
     let mut reports: Vec<FileReport> = resource
         .files
@@ -186,6 +187,7 @@ fn lint_resource(
                     name: &resource.name,
                     env: &resource.env,
                     manifest: &resource.manifest,
+                    started_before: started_before.as_ref(),
                 }),
                 crossrefs: Some(crossrefs),
                 locale: locale.as_ref(),
@@ -210,7 +212,8 @@ fn lint_resource(
             });
             reports.push(FileReport { path: resource.manifest_path.clone(), source, diagnostics });
         }
-        if let Some(locale) = locale {
+        // Encrypted scripts may use any key, so "unused" cannot be decided for such a resource.
+        if let Some(locale) = locale.filter(|_| !resource.env.opaque) {
             let severity = config.for_file(&locale.path).severity(rules::UNUSED_LOCALE_KEY);
             let mut diagnostics = unused_locale_keys(&locale, resource.files.iter().map(|f| &f.chunk));
             match severity {

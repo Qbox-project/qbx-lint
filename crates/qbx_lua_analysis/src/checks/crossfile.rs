@@ -161,13 +161,15 @@ impl CrossFile<'_, '_> {
                 .split("GetResourceState")
                 .skip(1)
                 .any(|rest| rest.get(..resource.len() + 6).unwrap_or(rest).contains(resource.as_str()));
-        if listed || imported || guarded || !self.reported_dependencies.insert(resource.clone()) {
+        let ordered_by_cfg = own.started_before.is_some_and(|before| before.contains(resource));
+        if listed || imported || guarded || ordered_by_cfg || !self.reported_dependencies.insert(resource.clone()) {
             return;
         }
+        let cfg_note = if own.started_before.is_some() { " and server.cfg does not start it earlier" } else { "" };
         self.sink.report(
             rules::MANIFEST_MISSING_DEPENDENCY,
             at.span,
-            format!("'{resource}' is used but not listed under dependencies in fxmanifest.lua, so it may start after this resource"),
+            format!("'{resource}' is used but not listed under dependencies in fxmanifest.lua{cfg_note}, so it may start after this resource"),
         );
     }
 }

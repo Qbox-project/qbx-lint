@@ -83,6 +83,9 @@ fn check_read(input: &FileInput, global: &GlobalRef, sink: &mut Sink) {
     }
 
     if let Some(resource) = &input.resource {
+        if resource.env.opaque {
+            return;
+        }
         let provider = KNOWN_IMPORTS
             .iter()
             .filter(|_| !AMBIGUOUS_IMPORT_GLOBALS.contains(&name))
