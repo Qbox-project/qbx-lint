@@ -8,6 +8,7 @@ use super::{FileInput, Sink};
 use crate::crossref::{trigger_target, Arity, CrossRefs};
 use crate::rules;
 use crate::scope::Resolved;
+use crate::side_guard::SideRegions;
 
 pub(super) fn check(input: &FileInput, sink: &mut Sink) {
     let mentions_resource_state = input.source.contains("GetResourceState");
@@ -18,6 +19,7 @@ pub(super) fn check(input: &FileInput, sink: &mut Sink) {
         mentions_resource_state,
         selected_at_runtime: u32::from(is_bridge_file(input)),
         conditional: 0,
+        regions: SideRegions::of(input.source, input.chunk),
     };
     checker.visit_block(&input.chunk.block);
 }
@@ -46,6 +48,7 @@ struct CrossFile<'a, 'b> {
     selected_at_runtime: u32,
     /// Depth of enclosing `if` branches of any kind.
     conditional: u32,
+    regions: SideRegions,
 }
 
 fn passed_count(args: &[Expr], skip: usize) -> Option<usize> {
@@ -70,7 +73,8 @@ impl CrossFile<'_, '_> {
     }
 
     fn trigger(&mut self, refs: &CrossRefs, call: &str, expr: &Expr, args: &[Expr]) {
-        let Some((target, skip)) = trigger_target(call, self.input.side) else { return };
+        let own_side = self.regions.effective(expr.span.start, self.input.side);
+        let Some((target, skip)) = trigger_target(call, own_side) else { return };
         let Some(name_arg) = args.first() else { return };
         let Some(name) = name_arg.as_string() else { return };
         let Some(registrations) = refs.events.get(name) else { return };

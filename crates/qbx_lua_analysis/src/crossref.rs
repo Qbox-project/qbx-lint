@@ -47,7 +47,8 @@ impl CrossRefs {
         if let Some(resource) = resource {
             self.resources.insert(SmolStr::new(resource));
         }
-        let mut collector = Collector { refs: self, side, resource, functions: FxHashMap::default() };
+        let regions = crate::side_guard::SideRegions::of_chunk(chunk);
+        let mut collector = Collector { refs: self, side, regions, resource, functions: FxHashMap::default() };
         collector.visit_block(&chunk.block);
     }
 }
@@ -55,6 +56,7 @@ impl CrossRefs {
 struct Collector<'a> {
     refs: &'a mut CrossRefs,
     side: Option<Side>,
+    regions: crate::side_guard::SideRegions,
     resource: Option<&'a str>,
     functions: FxHashMap<SmolStr, Arity>,
 }
@@ -87,7 +89,8 @@ impl<'ast> Visitor<'ast> for Collector<'_> {
             match (path.as_deref(), name) {
                 (Some(call), Some(name)) if EVENT_REGISTRATION_CALLS.contains(&call) => {
                     let handler = args.iter().skip(1).find_map(|arg| self.arity_of(arg));
-                    self.refs.add_event(name.clone(), self.side, handler);
+                    let side = self.regions.effective(expr.span.start, self.side);
+                    self.refs.add_event(name.clone(), side, handler);
                 }
                 (Some("exports"), Some(name)) => {
                     if let (Some(resource), Some(arity)) = (self.resource, args.get(1).and_then(|a| self.arity_of(a))) {

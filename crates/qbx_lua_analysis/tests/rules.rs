@@ -77,6 +77,40 @@ fn events_are_checked_against_their_handlers() {
 }
 
 #[test]
+fn side_checks_follow_is_duplicity_version() {
+    let client = |source: &str| project(source, Side::Client, &[]);
+    let wrong = ["fivem/native-wrong-side"];
+    let none = Vec::<&str>::new();
+
+    assert_eq!(client("TriggerClientEvent('a', -1)"), wrong);
+    assert_eq!(client("if IsDuplicityVersion() then\n    TriggerClientEvent('a', -1)\nend"), none);
+    assert_eq!(
+        client("if IsDuplicityVersion() then\n    print(1)\nelse\n    TriggerClientEvent('a', -1)\nend"),
+        wrong,
+        "the else branch is the client"
+    );
+    assert_eq!(client("if IsDuplicityVersion() then\n    print(PlayerPedId())\nend"), wrong, "server-only branch");
+    assert_eq!(client("if not IsDuplicityVersion() then return end\nTriggerClientEvent('a', -1)"), none);
+    assert_eq!(client("local isServer = IsDuplicityVersion()\nif isServer then TriggerClientEvent('a', -1) end"), none);
+    assert_eq!(
+        client("local isServer = IsDuplicityVersion()\nif not isServer then TriggerClientEvent('a', -1) end"),
+        wrong
+    );
+
+    let with_lib = {
+        let mut config = FileConfig::default();
+        config.globals.push("lib".into());
+        config
+    };
+    let source =
+        "if lib.context == 'server' then\n    TriggerClientEvent('a', -1)\nelse\n    print(PlayerPedId())\nend";
+    assert_eq!(codes_in_project(source, &with_lib, None, &[], None), none);
+
+    let handler = (None, "if IsDuplicityVersion() then\n    RegisterNetEvent('sync:push', function() end)\nend");
+    assert_eq!(project("TriggerClientEvent('sync:push', -1)", Side::Server, &[handler]), ["fivem/event-wrong-side"]);
+}
+
+#[test]
 fn exports_are_checked_against_their_definition() {
     let other = (Some(Side::Server), "local function getPlayer(id) return id end\nexports('GetPlayer', getPlayer)");
     assert_eq!(project("print(exports.other:GetPlayer(1))", Side::Server, &[other]), Vec::<&str>::new());

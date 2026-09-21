@@ -7,6 +7,7 @@ use crate::diagnostic::Tag;
 use crate::env::builtins;
 use crate::rules;
 use crate::scope::{GlobalRef, GlobalRefKind, Resolved, MAIN_CHUNK};
+use crate::side_guard::SideRegions;
 
 /// Fields ox_lib adds to standard library tables when it is imported.
 const OX_LIB_STD_EXTENSIONS: &[(&str, &str)] = &[
@@ -24,9 +25,10 @@ const OX_LIB_STD_EXTENSIONS: &[(&str, &str)] = &[
 const AMBIGUOUS_IMPORT_GLOBALS: &[&str] = &["player", "_", "require"];
 
 pub(super) fn check(input: &FileInput, sink: &mut Sink) {
+    let regions = SideRegions::of(input.source, input.chunk);
     for global in &input.resolution.globals {
         match global.kind {
-            GlobalRefKind::Read => check_read(input, global, sink),
+            GlobalRefKind::Read => check_read(input, global, &regions, sink),
             GlobalRefKind::Write | GlobalRefKind::FunctionDecl => check_definition(input, global, sink),
         }
     }
@@ -44,18 +46,25 @@ fn defined_in_project(input: &FileInput, name: &str) -> bool {
     }
 }
 
-fn check_read(input: &FileInput, global: &GlobalRef, sink: &mut Sink) {
+fn check_read(input: &FileInput, global: &GlobalRef, regions: &SideRegions, sink: &mut Sink) {
     let name = global.name.as_str();
     if defined_in_project(input, name) || is_configured(input, name) {
         return;
     }
-    let side = input.side.unwrap_or(Side::Shared);
+    let guarded = regions.side_at(global.span.start);
+    let side = guarded.or(input.side).unwrap_or(Side::Shared);
+    let place = if guarded.is_some() { "code that only runs on the" } else { "a" };
+    let unit = if guarded.is_some() { "" } else { " script" };
     if let Some(builtin) = builtins().get(name) {
         if !builtin.side.is_available_on(side) {
             sink.report(
                 rules::NATIVE_WRONG_SIDE,
                 global.span,
-                format!("'{name}' only exists on the {}, but this is a {} script", builtin.side.label(), side.label()),
+                format!(
+                    "'{name}' only exists on the {}, but this is {place} {}{unit}",
+                    builtin.side.label(),
+                    side.label()
+                ),
             );
         } else if builtin.deprecated {
             sink.report_with(
@@ -73,7 +82,7 @@ fn check_read(input: &FileInput, global: &GlobalRef, sink: &mut Sink) {
             sink.report(
                 rules::NATIVE_WRONG_SIDE,
                 global.span,
-                format!("native '{name}' is {}-only, but this is a {} script", native.side.label(), side.label()),
+                format!("native '{name}' is {}-only, but this is {place} {}{unit}", native.side.label(), side.label()),
             );
         }
         return;

@@ -11,6 +11,7 @@ pub mod manifest;
 pub mod project;
 pub mod rules;
 pub mod scope;
+pub mod side_guard;
 pub mod startup;
 pub mod summary;
 

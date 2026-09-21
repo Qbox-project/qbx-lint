@@ -73,6 +73,12 @@ file really runs in:
 Files that the manifest does not list as scripts (modules loaded with `require` / `lib.load`)
 are checked against the union of both sides.
 
+Inside a file, a runtime check narrows the side further. The branches of
+`if IsDuplicityVersion() then ... else ... end`, of `lib.context == 'server'`, of a flag such as
+`local isServer = IsDuplicityVersion()`, and the code after
+`if not IsDuplicityVersion() then return end` are judged as the side they can actually run on,
+whatever the manifest says about the file. Events registered there count for that side only.
+
 ### Escrowed resources
 
 Files protected by the FiveM asset escrow keep the `.lua` extension but contain ciphertext (they
