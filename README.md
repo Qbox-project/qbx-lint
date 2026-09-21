@@ -245,6 +245,10 @@ cargo xtask natives                     # refresh natives.tsv / natives_docs.tsv
 QBX_BLESS=1 cargo test -p qbx_lua_analysis --test fixtures   # accept new fixture output
 ```
 
+The `Update natives` workflow runs that task every Monday and opens a pull request listing the
+added and removed natives when the upstream data changed. The task refuses to write a list that is
+more than 10% shorter than the current one, so a broken download cannot wipe the data.
+
 The linter is validated against real code: qbx_core, qbx_police, qbx_vehicleshop, ox_lib and
 ox_inventory (229 files) parse with zero syntax errors and lint without false positives.
 

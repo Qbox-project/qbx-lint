@@ -63,6 +63,12 @@ fn generate_natives() {
 
     let data_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../crates/qbx_fivem_data/data");
     std::fs::create_dir_all(&data_dir).unwrap();
+    // Natives are only ever added, so a much shorter list means a broken or partial download.
+    let previous = std::fs::read_to_string(data_dir.join("natives.tsv")).map_or(0, |text| text.lines().count());
+    if natives.len() * 10 < previous * 9 {
+        eprintln!("refusing to replace {previous} natives with only {}; the sources look incomplete", natives.len());
+        std::process::exit(1);
+    }
     std::fs::write(data_dir.join("natives.tsv"), &signatures).unwrap();
     std::fs::write(data_dir.join("natives_docs.tsv"), &docs).unwrap();
     eprintln!(
