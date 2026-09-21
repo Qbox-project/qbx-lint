@@ -158,6 +158,12 @@ fn reports_unclosed_blocks() {
 }
 
 #[test]
+fn accepts_code_seen_in_real_resources() {
+    parse_ok("if a then b = 1 else if c then b = 2 end end");
+    parse_ok("PlayerData?.metadata?.status?.stress = value\nt?[1] = 2");
+}
+
+#[test]
 fn deep_nesting_does_not_overflow() {
     let source = format!("return {}1{}", "(".repeat(5000), ")".repeat(5000));
     let chunk = parse(&source);

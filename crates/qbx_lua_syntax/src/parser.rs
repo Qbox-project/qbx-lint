@@ -381,9 +381,6 @@ impl<'a> Parser<'a> {
                 TokenKind::Elseif => keyword_span = self.bump().span,
                 TokenKind::Else => {
                     self.bump();
-                    if self.at(TokenKind::If) && self.same_line_as_prev() {
-                        self.error_here("'else if' opens a nested block; did you mean 'elseif'?");
-                    }
                     else_block = Some(self.parse_block());
                     break;
                 }
@@ -392,12 +389,6 @@ impl<'a> Parser<'a> {
         }
         self.expect_closing(TokenKind::End, "if", if_tok.span);
         StmtKind::If { branches, else_block }
-    }
-
-    fn same_line_as_prev(&self) -> bool {
-        let prev_end = self.prev_end() as usize;
-        let start = self.tok().span.start as usize;
-        !self.source[prev_end..start].contains('\n')
     }
 
     fn parse_for(&mut self) -> StmtKind {
@@ -547,8 +538,8 @@ impl<'a> Parser<'a> {
 
     fn check_assignable(&mut self, target: &Expr) {
         let ok = match &target.kind {
-            ExprKind::Name(_) | ExprKind::Error => true,
-            ExprKind::Index { safe, .. } | ExprKind::Field { safe, .. } => !safe,
+            // CfxLua also accepts `a?.b = v`, which skips the write when `a` is nil.
+            ExprKind::Name(_) | ExprKind::Error | ExprKind::Index { .. } | ExprKind::Field { .. } => true,
             _ => false,
         };
         if !ok {
