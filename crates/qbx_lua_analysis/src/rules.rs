@@ -136,7 +136,7 @@ pub static RULES: &[Rule] = &[
     rule(LEGACY_CORE_OBJECT, Style, HINT, false, "The QBCore core object is a compatibility bridge; Qbox resources should use exports.qbx_core and modules."),
     rule(IMPORT_NOT_DECLARED, FiveM, WARN, false, "A library global is used but its import is missing from the fxmanifest for this side."),
     rule(MANIFEST_MISSING_FIELD, Manifest, WARN, false, "fxmanifest.lua lacks fx_version or game."),
-    rule(MANIFEST_LUA54, Manifest, WARN, true, "fxmanifest.lua does not enable lua54, which Qbox resources require."),
+    rule(MANIFEST_LUA54, Manifest, OFF, true, "fxmanifest.lua does not set lua54 'yes'. Only matters on old server artifacts; current ones always run Lua 5.4."),
     rule(MANIFEST_MISSING_FILE, Manifest, WARN, false, "fxmanifest.lua references a file or glob that matches nothing."),
     rule(MANIFEST_UNKNOWN_DIRECTIVE, Manifest, WARN, false, "A manifest directive looks like a typo of a known one."),
     rule(MANIFEST_UNLISTED_SCRIPT, Manifest, OFF, false, "A Lua file in the resource is not referenced by fxmanifest.lua."),

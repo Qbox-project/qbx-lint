@@ -113,7 +113,9 @@ fn escrowed_resources_are_not_second_guessed() {
 #[test]
 fn fixes_are_applied_and_converge() {
     let root = fixtures().join("bad_resource");
-    let reports = lint_paths(&[root.join("client/main.lua"), root.join("fxmanifest.lua")], &Config::default());
+    let mut config = Config::default();
+    config.set_rule(qbx_lua_analysis::rules::MANIFEST_LUA54, Level::Warning);
+    let reports = lint_paths(&[root.join("client/main.lua"), root.join("fxmanifest.lua")], &config);
 
     let client = reports.iter().find(|r| r.path.ends_with("client/main.lua")).unwrap();
     let (fixed, applied) = apply_fixes(&client.source, &client.diagnostics);

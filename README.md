@@ -152,7 +152,8 @@ Run `qbx-lint --list-rules` for the authoritative list. Highlights:
 | `qbox/unknown-locale-key`, `qbox/unused-locale-key` | warning / info | `locale('key')` validated against `locales/en.json`, unused keys reported on the JSON file |
 | `manifest/missing-dependency` | info | `exports.foo` used without `dependency 'foo'` (skipped for bridge code, when guarded by `GetResourceState`, or when `server.cfg` starts `foo` earlier) |
 | `fivem/resource-not-found` | info | an unconditional `exports.foo:...` call while no resource `foo` exists in the server's resources folder |
-| `manifest/lua54`, `manifest/missing-file`, `manifest/unknown-directive` | warning | broken or misspelled manifest entries |
+| `manifest/missing-file`, `manifest/unknown-directive` | warning | broken or misspelled manifest entries |
+| `manifest/lua54` | off | missing `lua54 'yes'`; current server artifacts always run Lua 5.4, so this is only useful when pinned to an old one |
 | `unused-local`, `unused-function`, `redefined-local`, `unreachable-code`, `duplicate-index`, `const-reassign`, `unbalanced-assignments`, `self-assignment`, `lowercase-global`, `implicit-global`, `builtin-overwrite`, `undefined-field`, `deprecated`, ... | varies | the usual Lua mistakes |
 
 ### Suppressing findings
