@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.1
+
+- Fix `fail-on-error: false` in the GitHub Action when the runner enables Bash error handling.
+
 ## 1.0.0
 
 ### Added

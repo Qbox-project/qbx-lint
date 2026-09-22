@@ -13,7 +13,7 @@ inputs:
     default: ""
   version:
     description: Release tag to download, or "latest"
-    default: v1.0.0
+    default: v1.0.1
   fail-on-error:
     description: Fail the job when errors are found
     default: "true"
@@ -64,12 +64,15 @@ runs:
       run: |
         set -uo pipefail
         sarif="${RUNNER_TEMP}/qbx-lint.sarif"
+        # shellcheck disable=SC2086
+        qbx-lint ${LINT_PATHS} ${LINT_ARGS} --format sarif --output "${sarif}" --no-fail || exit $?
         echo "sarif=${sarif}" >> "${GITHUB_OUTPUT}"
+        status=0
         # shellcheck disable=SC2086
-        qbx-lint ${LINT_PATHS} ${LINT_ARGS} --format sarif --output "${sarif}" --no-fail
-        # shellcheck disable=SC2086
-        qbx-lint ${LINT_PATHS} ${LINT_ARGS} --format github
-        status=$?
+        qbx-lint ${LINT_PATHS} ${LINT_ARGS} --format github || status=$?
+        if [ "${status}" -gt 1 ]; then
+          exit ${status}
+        fi
         if [ "${FAIL_ON_ERROR}" != "true" ]; then
           exit 0
         fi
