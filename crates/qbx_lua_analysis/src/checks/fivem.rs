@@ -26,6 +26,7 @@ pub(super) fn check(input: &FileInput, sink: &mut Sink) {
         functions: vec![FunctionState::default()],
         deferred: FxHashSet::default(),
         reported_inner: FxHashSet::default(),
+        hash_literal_forbidden: FxHashSet::default(),
         uses_ox_lib_cache,
     };
     checker.visit_block(&input.chunk.block);
@@ -43,6 +44,8 @@ struct FiveM<'a, 'b> {
     functions: Vec<FunctionState>,
     deferred: FxHashSet<u32>,
     reported_inner: FxHashSet<u32>,
+    /// Calls used as statements or unparenthesized prefix expressions cannot become literals.
+    hash_literal_forbidden: FxHashSet<Span>,
     uses_ox_lib_cache: bool,
 }
 
@@ -117,7 +120,7 @@ impl FiveM<'_, '_> {
             return;
         }
         match (path.as_str(), args) {
-            ("GetHashKey", [arg]) => {
+            ("GetHashKey", [arg]) if !self.hash_literal_forbidden.contains(&expr.span) => {
                 if let Some(value) = arg.as_string().filter(|v| !v.is_empty() && !v.contains(['`', '\n', '\r', '\\'])) {
                     let fix = Fix {
                         title: "Convert to a compile-time hash literal".into(),
@@ -283,6 +286,9 @@ impl<'ast> Visitor<'ast> for FiveM<'_, '_> {
 
     fn visit_stmt(&mut self, stmt: &'ast Stmt) {
         match &stmt.kind {
+            StmtKind::Expr(expr) => {
+                self.hash_literal_forbidden.insert(expr.span);
+            }
             StmtKind::While { cond, body } if is_always_true(cond) => self.check_infinite_loop(stmt, body),
             StmtKind::Repeat { body, cond } if matches!(cond.unparen().kind, ExprKind::False | ExprKind::Nil) => {
                 self.check_infinite_loop(stmt, body)
@@ -293,6 +299,17 @@ impl<'ast> Visitor<'ast> for FiveM<'_, '_> {
     }
 
     fn visit_expr(&mut self, expr: &'ast Expr) {
+        match &expr.kind {
+            ExprKind::Call { callee: base, .. }
+            | ExprKind::MethodCall { base, .. }
+            | ExprKind::Field { base, .. }
+            | ExprKind::Index { base, .. } => {
+                if matches!(base.kind, ExprKind::Call { .. }) {
+                    self.hash_literal_forbidden.insert(base.span);
+                }
+            }
+            _ => {}
+        }
         match &expr.kind {
             ExprKind::Name(name) => self.check_source_read(name),
             ExprKind::Field { .. } => self.check_citizen_prefix(expr),

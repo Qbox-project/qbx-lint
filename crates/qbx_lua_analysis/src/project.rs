@@ -19,7 +19,8 @@ pub fn is_not_source(bytes: &[u8]) -> bool {
 }
 
 /// Reads Lua source. Encrypted or binary files are an error, so every caller skips them the same
-/// way it skips unreadable files.
+/// way it skips unreadable files. Invalid UTF-8 is decoded lossily for read-only analysis; use
+/// `read_source_for_edit` before persisting edits.
 pub fn read_source(path: &Path) -> std::io::Result<String> {
     let bytes = std::fs::read(path)?;
     if is_not_source(&bytes) {
@@ -28,6 +29,18 @@ pub fn read_source(path: &Path) -> std::io::Result<String> {
     Ok(match String::from_utf8(bytes) {
         Ok(text) => text,
         Err(err) => String::from_utf8_lossy(err.as_bytes()).into_owned(),
+    })
+}
+
+/// Reads editable Lua source without replacing invalid UTF-8 bytes. `None` means an encrypted
+/// or binary file, which should be skipped rather than treated as a source encoding error.
+pub fn read_source_for_edit(path: &Path) -> std::io::Result<Option<String>> {
+    let bytes = std::fs::read(path)?;
+    if is_not_source(&bytes) {
+        return Ok(None);
+    }
+    String::from_utf8(bytes).map(Some).map_err(|err| {
+        std::io::Error::new(std::io::ErrorKind::InvalidData, format!("source is not valid UTF-8: {err}"))
     })
 }
 

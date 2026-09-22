@@ -173,6 +173,34 @@ fn deep_nesting_does_not_overflow() {
 }
 
 #[test]
+fn iterative_expression_chains_cannot_build_unbounded_trees() {
+    let cases = [
+        format!("return 1{}", " + 1".repeat(64_000)),
+        format!("return object{}", ".field".repeat(64_000)),
+        format!("return object{}", "[1]".repeat(64_000)),
+        format!("return factory{}", "()".repeat(64_000)),
+        format!("return object{}", ":method()".repeat(64_000)),
+        format!("return (1{}){}", " + 1".repeat(100), ":method()".repeat(100)),
+    ];
+    for source in cases {
+        let chunk = parse(&source);
+        assert!(chunk.errors.iter().any(|error| error.message.contains("nesting")));
+        // This must also be safe to walk and destroy on the normal test thread's stack.
+        struct Walk;
+        impl<'ast> qbx_lua_syntax::visit::Visitor<'ast> for Walk {}
+        qbx_lua_syntax::visit::Visitor::visit_block(&mut Walk, &chunk.block);
+        drop(chunk);
+    }
+}
+
+#[test]
+fn nesting_limits_do_not_restrict_flat_tables_or_independent_expressions() {
+    parse_ok(&format!("local items = {{{}}}", "1,".repeat(10_000)));
+    parse_ok(&"print(value + 1)\n".repeat(1_000));
+    parse_ok(&format!("return 1{}", " + 1".repeat(100)));
+}
+
+#[test]
 fn never_panics_on_arbitrary_prefixes() {
     let source = "local t = { [1] = `a`, b = function(...) return x?.y:z('s') end, .c }\nfor i = 1, #t do t[i] += 1 end --[[ c ]]";
     for end in 0..=source.len() {

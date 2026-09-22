@@ -109,7 +109,7 @@ enum Command {
 }
 
 fn run_fmt(paths: &[PathBuf], check: bool, config: Option<&PathBuf>) -> Result<ExitCode, String> {
-    use qbx_lua_analysis::project::{lua_files_under, read_source};
+    use qbx_lua_analysis::project::{lua_files_under, read_source_for_edit};
 
     let config = match config {
         Some(path) => Config::load(path)?,
@@ -126,14 +126,24 @@ fn run_fmt(paths: &[PathBuf], check: bool, config: Option<&PathBuf>) -> Result<E
         }
         if path.is_dir() {
             files.extend(lua_files_under(&path, &config));
-        } else {
+        } else if !config.is_excluded(&path) {
             files.push(path);
         }
     }
+    files.sort();
+    files.dedup();
 
     let (mut changed, mut failed) = (0usize, 0usize);
     for file in &files {
-        let Ok(source) = read_source(file) else { continue };
+        let source = match read_source_for_edit(file) {
+            Ok(Some(source)) => source,
+            Ok(None) => continue,
+            Err(error) => {
+                failed += 1;
+                eprintln!("{}: {error}; file was not changed", file.display());
+                continue;
+            }
+        };
         match qbx_lua_fmt::format(&source, &config.format) {
             Ok(formatted) if formatted == source => {}
             Ok(formatted) => {
@@ -225,8 +235,22 @@ fn run(cli: &Cli) -> Result<ExitCode, String> {
     let mut fixed = 0usize;
     if cli.fix {
         for report in &reports {
+            let Some(source) = qbx_lua_analysis::project::read_source_for_edit(&report.path)
+                .map_err(|e| format!("{}: {e}; file was not changed", report.path.display()))?
+            else {
+                continue;
+            };
+            if source != report.source {
+                return Err(format!("{}: source changed during analysis; file was not changed", report.path.display()));
+            }
             let (new_source, applied) = apply_fixes(&report.source, &report.diagnostics);
             if applied > 0 {
+                if !qbx_lua_syntax::parse(&new_source).errors.is_empty() {
+                    return Err(format!(
+                        "{}: automatic fixes would produce invalid Lua; file was not changed",
+                        report.path.display()
+                    ));
+                }
                 std::fs::write(&report.path, new_source).map_err(|e| format!("{}: {e}", report.path.display()))?;
                 fixed += applied;
             }

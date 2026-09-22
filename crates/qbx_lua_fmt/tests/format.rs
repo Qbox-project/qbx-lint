@@ -94,6 +94,15 @@ fn refuses_files_with_syntax_errors() {
 }
 
 #[test]
+fn refuses_unbounded_expression_chains_without_overflowing() {
+    let source = format!("local n = 1{}\nprint(n)\n", " + 1".repeat(64_000));
+    assert!(matches!(
+        format(&source, &FormatOptions::default()),
+        Err(FormatError::SyntaxError { message, .. }) if message.contains("nesting")
+    ));
+}
+
+#[test]
 fn formatting_is_idempotent() {
     let source = "local function f(a,b)\n  if a then return {x=a,y={b,1,2}} end\n  return function(...) return select('#',...) end\nend\n";
     let once = fmt(source);

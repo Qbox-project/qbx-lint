@@ -244,6 +244,59 @@ fn shadowed_runtime_names_do_not_trigger_fivem_rules() {
     assert_eq!(codes(source), Vec::<&str>::new());
 }
 
+fn hash_fixes(source: &str) -> (String, usize) {
+    let chunk = parse(source);
+    assert!(chunk.errors.is_empty(), "invalid test input: {source}");
+    let resolution = resolve(&chunk);
+    let summary = summarize(&chunk, &resolution);
+    let config = FileConfig::default();
+    let diagnostics = check_file(&FileInput {
+        source,
+        chunk: &chunk,
+        resolution: &resolution,
+        summary: &summary,
+        config: &config,
+        side: None,
+        resource: None,
+        crossrefs: None,
+        locale: None,
+        relative_path: "",
+    });
+    let hashes: Vec<_> = diagnostics.into_iter().filter(|d| d.code == "fivem/hash-literal").collect();
+    qbx_lua_analysis::apply_fixes(source, &hashes)
+}
+
+#[test]
+fn hash_literals_are_not_suggested_for_statements_or_prefix_expressions() {
+    for source in [
+        "GetHashKey('adder')",
+        "GetHashKey('adder')()",
+        "GetHashKey('adder'):method()",
+        "print(GetHashKey('adder').field)",
+        "print(GetHashKey('adder')[1])",
+        "GetHashKey('adder').field = 1",
+    ] {
+        assert_eq!(hash_fixes(source), (source.to_string(), 0), "{source}");
+    }
+}
+
+#[test]
+fn hash_literals_are_fixed_in_values_and_parenthesized_prefix_expressions() {
+    for (source, expected) in [
+        ("print(GetHashKey('adder'))", "print(`adder`)"),
+        ("local hash = GetHashKey('adder')", "local hash = `adder`"),
+        ("return GetHashKey('adder')", "return `adder`"),
+        ("print({ [GetHashKey('adder')] = true })", "print({ [`adder`] = true })"),
+        ("(GetHashKey('adder'))()", "(`adder`)()"),
+        ("GetHashKey('adder')(GetHashKey('other'))", "GetHashKey('adder')(`other`)"),
+    ] {
+        let (fixed, applied) = hash_fixes(source);
+        assert_eq!(applied, 1, "{source}");
+        assert_eq!(fixed, expected);
+        assert!(parse(&fixed).errors.is_empty(), "fix must remain valid Lua: {fixed}");
+    }
+}
+
 #[test]
 fn infinite_loop_detection_handles_nested_loops_and_gotos() {
     assert_eq!(codes("while true do\n    for _ = 1, 2 do break end\nend"), ["fivem/loop-never-yields"]);

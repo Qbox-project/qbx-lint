@@ -4,7 +4,7 @@ on:
     tags: ["v*"]
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
@@ -15,27 +15,46 @@ jobs:
           - { os: ubuntu-latest, target: x86_64-unknown-linux-musl, archive: tar.gz }
           - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-musl, archive: tar.gz }
           - { os: macos-latest, target: aarch64-apple-darwin, archive: tar.gz }
-          - { os: macos-13, target: x86_64-apple-darwin, archive: tar.gz }
+          - { os: macos-15-intel, target: x86_64-apple-darwin, archive: tar.gz }
           - { os: windows-latest, target: x86_64-pc-windows-msvc, archive: zip }
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal --target ${{ matrix.target }}
+      - run: rustup default stable
       - if: contains(matrix.target, 'musl')
         run: sudo apt-get update && sudo apt-get install -y musl-tools
       - run: cargo build --release --locked -p qbx_lint --target ${{ matrix.target }}
-      - name: Package
+      - name: Check version and package
         shell: bash
         run: |
+          set -euo pipefail
           cd target/${{ matrix.target }}/release
+          binary="qbx-lint"
+          if [ "${{ runner.os }}" = "Windows" ]; then binary="${binary}.exe"; fi
+          actual="$(./"${binary}" --version)"
+          expected="qbx-lint ${GITHUB_REF_NAME#v}"
+          if [ "${actual}" != "${expected}" ]; then
+            echo "Tag ${GITHUB_REF_NAME} does not match built version: ${actual}" >&2
+            exit 1
+          fi
+          cp ../../../LICENSE LICENSE
           name="qbx-lint-${{ matrix.target }}"
           if [ "${{ matrix.archive }}" = "zip" ]; then
-            7z a "../../../${name}.zip" qbx-lint.exe
+            7z a "../../../${name}.zip" "${binary}" LICENSE
           else
-            tar -czf "../../../${name}.tar.gz" qbx-lint
+            tar -czf "../../../${name}.tar.gz" "${binary}" LICENSE
           fi
-      - uses: softprops/action-gh-release@v2
+      - uses: actions/upload-artifact@v4
         with:
-          files: qbx-lint-${{ matrix.target }}.*
+          name: binary-${{ matrix.target }}
+          path: qbx-lint-${{ matrix.target }}.${{ matrix.archive }}
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    uses: Qbox-project/.github/.github/workflows/release-artifacts.yml@main
+    with:
+      artifact-pattern: binary-*
+    secrets: inherit

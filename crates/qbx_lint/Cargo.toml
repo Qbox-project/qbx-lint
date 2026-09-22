@@ -1,6 +1,6 @@
 [package]
 name = "qbx_lint"
-description = "A fast linter for FiveM Lua that understands fxmanifest.lua, natives and the CfxLua runtime"
+description = "Linter and formatter for FiveM Lua"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

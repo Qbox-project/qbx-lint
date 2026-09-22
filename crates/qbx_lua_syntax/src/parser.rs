@@ -3,6 +3,7 @@ use smol_str::SmolStr;
 use crate::ast::*;
 use crate::lexer::{self, decode_string, parse_number, NumberValue, Token, TokenKind};
 use crate::span::Span;
+use crate::visit::{self, Visitor};
 use crate::SyntaxError;
 
 const MAX_DEPTH: u32 = 180;
@@ -269,6 +270,55 @@ impl<'a> Parser<'a> {
             self.bump();
         }
         Stmt { kind: StmtKind::Error, span }
+    }
+
+    /// Iterative parsing can build a deep tree without deep parser recursion (for example a
+    /// left-associated binary expression or a chain of calls). Bound that tree too, before
+    /// recursive visitors or drop glue can exhaust their stack. Children have already been
+    /// checked, so even a rejected tree is safe to visit and drop.
+    fn limit_expr(&mut self, expr: Expr) -> Expr {
+        struct Depth {
+            current: u32,
+            exceeded: bool,
+        }
+        impl<'ast> Visitor<'ast> for Depth {
+            fn visit_expr(&mut self, expr: &'ast Expr) {
+                if self.exceeded {
+                    return;
+                }
+                if self.current >= MAX_DEPTH {
+                    self.exceeded = true;
+                    return;
+                }
+                self.current += 1;
+                visit::walk_expr(self, expr);
+                self.current -= 1;
+            }
+
+            fn visit_stmt(&mut self, stmt: &'ast Stmt) {
+                if self.exceeded {
+                    return;
+                }
+                if self.current >= MAX_DEPTH {
+                    self.exceeded = true;
+                    return;
+                }
+                self.current += 1;
+                visit::walk_stmt(self, stmt);
+                self.current -= 1;
+            }
+        }
+
+        let mut depth = Depth { current: self.depth, exceeded: false };
+        depth.visit_expr(&expr);
+        if !depth.exceeded {
+            return expr;
+        }
+        self.error_at(expr.span, "expression has too many nesting levels");
+        while !self.at(TokenKind::Eof) {
+            self.bump();
+        }
+        Expr { kind: ExprKind::Error, span: expr.span }
     }
 
     fn parse_stmt_kind(&mut self) -> StmtKind {
@@ -593,10 +643,10 @@ impl<'a> Parser<'a> {
             }
             let op_span = self.bump().span;
             let rhs = self.parse_sub_expr(right);
-            lhs = Expr {
+            lhs = self.limit_expr(Expr {
                 span: Span::new(start, rhs.span.end.max(op_span.end)),
                 kind: ExprKind::Binary { op, op_span, lhs: Box::new(lhs), rhs: Box::new(rhs) },
-            };
+            });
         }
         self.depth -= 1;
         lhs
@@ -747,7 +797,7 @@ impl<'a> Parser<'a> {
                 }
                 _ => break,
             };
-            expr = Expr { kind, span: Span::new(start, self.prev_end().max(start)) };
+            expr = self.limit_expr(Expr { kind, span: Span::new(start, self.prev_end().max(start)) });
         }
         expr
     }

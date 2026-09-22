@@ -1,3 +1,9 @@
 /target
 /corpus
 *.junit.xml
+
+# Local files
+.DS_Store
+Thumbs.db
+/qbx-lint-*.zip
+/qbx-lint-*.tar.gz

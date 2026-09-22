@@ -84,7 +84,8 @@ impl Config {
     }
 
     pub fn load(path: &Path) -> Result<Self, String> {
-        let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let path = std::path::absolute(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let text = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
         let root = path.parent().map(Path::to_path_buf).unwrap_or_default();
         Self::parse(&text, root).map_err(|e| format!("{}: {e}", path.display()))
     }
