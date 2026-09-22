@@ -23,9 +23,9 @@ Cargo installs the executable into its `bin` directory, which must be on your `P
 For a local build without installation, run `cargo build --release --locked -p qbx_lint`.
 The executable is then in `target/release` (`qbx-lint.exe` on Windows).
 
-When release archives are published, they will be available on the
-[releases page](https://github.com/Qbox-project/qbx-lint/releases). Extract the archive for your
-platform and put the executable on your `PATH`.
+Download the archive for your platform from the
+[releases page](https://github.com/Qbox-project/qbx-lint/releases), extract it, and put the
+executable on your `PATH`.
 
 ## Use
 
@@ -90,7 +90,7 @@ See the [configuration and analysis reference](docs/reference.md), the
 
 ## GitHub Actions
 
-After the `v1.0.0` tag and release archives are published, a workflow can use:
+Add the action to your workflow:
 
 ```yaml
 - uses: actions/checkout@v4
