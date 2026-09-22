@@ -8,11 +8,18 @@ permissions:
   contents: write
   pull-requests: write
 
+concurrency:
+  group: update-natives
+  cancel-in-progress: false
+
 jobs:
   update:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
       - name: Install Rust
         run: rustup toolchain install stable --profile minimal
       - run: rustup default stable
@@ -53,12 +60,57 @@ jobs:
       - if: steps.diff.outputs.changed == 'true'
         run: cargo test --workspace
 
-      - if: steps.diff.outputs.changed == 'true'
-        uses: peter-evans/create-pull-request@v6
-        with:
-          branch: chore/update-natives
-          commit-message: 'chore(data): update natives from runtime.fivem.net'
-          title: 'chore(data): update natives from runtime.fivem.net'
-          body: ${{ steps.diff.outputs.body }}
-          add-paths: crates/qbx_fivem_data/data
-          delete-branch: true
+      - name: Create or update pull request
+        if: steps.diff.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE_BRANCH: ${{ github.event.repository.default_branch }}
+          PR_BODY: ${{ steps.diff.outputs.body }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          branch=chore/update-natives
+          title='chore(data): update natives from runtime.fivem.net'
+          bot_name='github-actions[bot]'
+          bot_email='41898282+github-actions[bot]@users.noreply.github.com'
+          git config user.name "$bot_name"
+          git config user.email "$bot_email"
+          git config commit.gpgsign false
+          base=$(git rev-parse HEAD)
+          parents=(-p "$base")
+          if [ -n "$(git ls-remote --heads origin "refs/heads/$branch")" ]; then
+            git fetch origin "refs/heads/$branch:refs/remotes/origin/$branch"
+            previous=$(git rev-parse "refs/remotes/origin/$branch")
+            # Never replace a branch that contains unrelated or human-authored work.
+            if git diff --name-only "$base...$previous" | grep -Ev '^crates/qbx_fivem_data/data/(natives|natives_docs)\.tsv$'; then
+              echo '::error::The update branch contains changes outside the native data files.'
+              exit 1
+            fi
+            for commit in $(git rev-list "$base..$previous"); do
+              identity=$(git show -s --format='%an|%ae|%cn|%ce|%s' "$commit")
+              if [ "$identity" != "$bot_name|$bot_email|$bot_name|$bot_email|$title" ]; then
+                echo '::error::The update branch contains commits not owned by this workflow.'
+                exit 1
+              fi
+            done
+            parents=(-p "$previous")
+            if ! git merge-base --is-ancestor "$base" "$previous"; then
+              parents+=(-p "$base")
+            fi
+          fi
+          git add -- crates/qbx_fivem_data/data/natives.tsv crates/qbx_fivem_data/data/natives_docs.tsv
+          tree=$(git write-tree)
+          if [ -n "${previous:-}" ] && [ "$tree" = "$(git rev-parse "$previous^{tree}")" ]; then
+            commit=$previous
+          else
+            # Keep the existing branch as a parent while using the tested tree from the base branch.
+            commit=$(git commit-tree "$tree" "${parents[@]}" -m "$title")
+          fi
+          git push origin "$commit:refs/heads/$branch"
+          printf '%s\n' "$PR_BODY" > "$RUNNER_TEMP/natives-pr-body.md"
+          pr=$(gh pr list --state open --head "$branch" --base "$BASE_BRANCH" --json number --jq '.[0].number // empty')
+          if [ -n "$pr" ]; then
+            gh pr edit "$pr" --title "$title" --body-file "$RUNNER_TEMP/natives-pr-body.md"
+          else
+            gh pr create --base "$BASE_BRANCH" --head "$branch" --title "$title" --body-file "$RUNNER_TEMP/natives-pr-body.md"
+          fi
