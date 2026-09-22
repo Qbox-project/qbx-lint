@@ -86,18 +86,3 @@ problem depends on imports, side selection, or resource layout.
 
 For a pull request, explain the resulting behavior and the checks you ran. Keep generated-data
 updates identifiable in the diff.
-
-## Releases
-
-Before tagging a release, make sure the workspace package version, lockfile, changelog, action's
-default download version, and documented examples agree. A tag such as `v1.0.0` must match the
-package version `1.0.0`.
-
-Publish the matching tag in this repository first, then in
-[qbx-lua-ls](https://github.com/Qbox-project/qbx-lua-ls), then in
-[qbx-editor](https://github.com/Qbox-project/qbx-editor). The downstream release builds use the
-matching tags for their dependencies.
-
-The release workflow waits for every platform build before publishing the archives and
-`SHA256SUMS` to GitHub Releases. Check that the full workflow succeeds and that all expected
-archives and checksums are present before starting the downstream release.

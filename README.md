@@ -94,9 +94,9 @@ Add the action to your workflow:
 
 ```yaml
 - uses: actions/checkout@v4
-- uses: Qbox-project/qbx-lint@v1.0.1
+- uses: Qbox-project/qbx-lint@v1.0.2
   with:
-    version: v1.0.1
+    version: v1.0.2
     paths: .
     args: --max-warnings 0
 ```

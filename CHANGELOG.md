@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.2
+
+- Release matching shared crates for Qbox Lua tooling 1.0.2; lint behavior is unchanged.
+
 ## 1.0.1
 
 - Fix `fail-on-error: false` in the GitHub Action when the runner enables Bash error handling.
