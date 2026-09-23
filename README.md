@@ -114,7 +114,7 @@ that a resource is secure. Review automatic edits and test resource behavior in 
 ## Contribute
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the crate layout, checks, and data generation commands.
-Version history is listed in [CHANGELOG.md](CHANGELOG.md).
+Release notes are on the [releases page](https://github.com/Qbox-project/qbx-lint/releases).
 
 ## License
 

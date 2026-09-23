@@ -85,4 +85,4 @@ and a minimal Lua example. Include the manifest and relevant `qbxlint.toml` sett
 problem depends on imports, side selection, or resource layout.
 
 For a pull request, explain the resulting behavior and the checks you ran. Keep generated-data
-updates identifiable in the diff.
+updates identifiable in the diff. Release notes are generated from commit messages, so write them as [Conventional Commits](https://www.conventionalcommits.org).
