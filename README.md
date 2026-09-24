@@ -57,8 +57,8 @@ qbx-lint fmt --config qbxlint.toml client/main.lua
 
 `fmt --check` leaves files untouched and exits with `1` if formatting is needed. Formatting also
 fails if a source file cannot be formatted. The formatter verifies tokens and comments before
-writing. Both formatting and automatic fixes reject non-UTF-8 source; escrow and binary files
-are skipped.
+writing. Both formatting and automatic fixes reject non-UTF-8 source; escrow, binary and
+obfuscated files are skipped.
 
 ## Configure
 

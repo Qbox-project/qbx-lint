@@ -67,15 +67,31 @@ fn edit_commands_reject_non_utf8_without_changing_bytes() {
 }
 
 #[test]
-fn edit_commands_continue_to_skip_binary_and_escrow_files() {
+fn edit_commands_continue_to_skip_binary_escrow_and_obfuscated_files() {
     let fixture = Fixture::new();
-    for source in [b"FXAP\xffCitizen.Wait(0)".as_slice(), b"\x1bLua\xff", b"binary\0\xff"] {
+    let obfuscated = format!("Citizen.Wait(0)\n{}\n", "local a=function(z,z)return z end;".repeat(200));
+    for source in [b"FXAP\xffCitizen.Wait(0)".as_slice(), b"\x1bLua\xff", b"binary\0\xff", obfuscated.as_bytes()] {
         fixture.write("encrypted.lua", source);
         for args in [vec!["fmt", "encrypted.lua"], vec!["--fix", "encrypted.lua"]] {
             assert_success(&fixture.run(&args));
             assert_eq!(fixture.read("encrypted.lua"), source);
         }
     }
+}
+
+#[test]
+fn obfuscated_files_are_skipped_and_make_their_resource_opaque() {
+    let fixture = Fixture::new();
+    fixture.write("fxmanifest.lua", "fx_version 'cerulean'\ngame 'gta5'\nlua54 'yes'\nclient_script 'client/*.lua'\n");
+    fixture.write(
+        "client/protected.lua",
+        format!("Citizen.Wait(0)\n{}\n", "Hidden=function(z,z)return z end;".repeat(200)),
+    );
+    fixture.write("client/open.lua", "Hidden(1)\n");
+    fixture.write("client/data.lua", format!("local t={{{}}}\nCitizen.Wait(t[1])\n", "1, ".repeat(2000)));
+    let stdout = String::from_utf8(fixture.run(&["--format", "json", "."]).stdout).unwrap();
+    assert!(!stdout.contains("protected.lua") && !stdout.contains("undefined-global"), "{stdout}");
+    assert!(stdout.contains("data.lua") && stdout.contains("fivem/citizen-prefix"), "{stdout}");
 }
 
 #[test]

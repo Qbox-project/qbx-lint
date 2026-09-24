@@ -121,11 +121,15 @@ JSON file in `locales/` when that file is absent. Unused keys are reported on th
 the run includes the resource manifest. Dynamic locale usage limits which keys can be considered
 unused.
 
-## Escrowed and mixed-language resources
+## Escrowed, obfuscated and mixed-language resources
 
 Encrypted FiveM files beginning with `FXAP`, Lua bytecode, and detected binary blobs are skipped.
-A `.fxap` marker or unreadable script makes the resource opaque to checks that need complete
-knowledge of its globals or locale usage. Readable scripts are still analyzed.
+Obfuscated or minified files are skipped too: a file counts as obfuscated when one of its lines is
+at least 4096 bytes long and contains the `function` keyword. Long data lines, such as tables or
+encoded strings, do not count. To skip other generated files, use `exclude`.
+
+A `.fxap` marker or a skipped or unreadable script makes the resource opaque to checks that need
+complete knowledge of its globals or locale usage. Readable scripts are still analyzed.
 
 Unknown-export checks are suppressed for opaque resources and resources with non-Lua scripts.
 An opaque resource may also handle events named with its `resource:` prefix, so a wrong-side

@@ -12,19 +12,36 @@ use crate::manifest::{Manifest, ScriptEntry, MANIFEST_FILE_NAMES};
 use crate::scope::{resolve, Resolution};
 use crate::summary::{summarize, FileSummary};
 
-/// Whether a `.lua` file holds something other than Lua source: a FiveM escrow (asset protection)
-/// payload, precompiled bytecode, or any other binary blob.
+const GENERATED_LINE_BYTES: usize = 4096;
+
+/// Whether a `.lua` file holds something other than hand-written Lua source: a FiveM escrow (asset
+/// protection) payload, precompiled bytecode, obfuscated or minified code, or any other binary blob.
 pub fn is_not_source(bytes: &[u8]) -> bool {
-    bytes.starts_with(b"FXAP") || bytes.starts_with(b"\x1bLua") || bytes.iter().take(1024).any(|b| *b == 0)
+    bytes.starts_with(b"FXAP")
+        || bytes.starts_with(b"\x1bLua")
+        || bytes.iter().take(1024).any(|b| *b == 0)
+        || is_generated_code(bytes)
 }
 
-/// Reads Lua source. Encrypted or binary files are an error, so every caller skips them the same
-/// way it skips unreadable files. Invalid UTF-8 is decoded lossily for read-only analysis; use
-/// `read_source_for_edit` before persisting edits.
+/// Obfuscators emit whole programs on one line; long data lines without functions stay linted.
+fn is_generated_code(bytes: &[u8]) -> bool {
+    bytes.split(|b| *b == b'\n').any(|line| line.len() >= GENERATED_LINE_BYTES && has_function_keyword(line))
+}
+
+fn has_function_keyword(line: &[u8]) -> bool {
+    let is_word = |b: Option<&u8>| b.is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'_');
+    line.windows(8).enumerate().any(|(i, window)| {
+        window == b"function" && !is_word(i.checked_sub(1).and_then(|p| line.get(p))) && !is_word(line.get(i + 8))
+    })
+}
+
+/// Reads Lua source. Encrypted, binary or obfuscated files are an error, so every caller skips
+/// them the same way it skips unreadable files. Invalid UTF-8 is decoded lossily for read-only
+/// analysis; use `read_source_for_edit` before persisting edits.
 pub fn read_source(path: &Path) -> std::io::Result<String> {
     let bytes = std::fs::read(path)?;
     if is_not_source(&bytes) {
-        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "encrypted or binary file"));
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "encrypted, binary or obfuscated file"));
     }
     Ok(match String::from_utf8(bytes) {
         Ok(text) => text,
@@ -32,8 +49,8 @@ pub fn read_source(path: &Path) -> std::io::Result<String> {
     })
 }
 
-/// Reads editable Lua source without replacing invalid UTF-8 bytes. `None` means an encrypted
-/// or binary file, which should be skipped rather than treated as a source encoding error.
+/// Reads editable Lua source without replacing invalid UTF-8 bytes. `None` means an encrypted,
+/// binary or obfuscated file, which should be skipped rather than treated as a source encoding error.
 pub fn read_source_for_edit(path: &Path) -> std::io::Result<Option<String>> {
     let bytes = std::fs::read(path)?;
     if is_not_source(&bytes) {
@@ -291,5 +308,25 @@ impl Resource {
         }
         let name = root.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         Some(Self { name, root: root.to_path_buf(), manifest_path, manifest, files, env })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn obfuscated_code_is_not_source() {
+        let program = "local a=function(z,z)return z end;".repeat(200);
+        assert!(is_not_source(format!("-- protected\n\n{program}\n").as_bytes()));
+        assert!(is_not_source(format!("return(function(...){}end)(...)", "x=1;".repeat(1100)).as_bytes()));
+    }
+
+    #[test]
+    fn long_data_lines_and_short_functions_are_source() {
+        let table = format!("local t={{{}}}\nlocal f=function(z,z)end\n", "1, ".repeat(2000));
+        assert!(!is_not_source(table.as_bytes()));
+        assert!(!is_not_source(format!("local avatar='{}'\n", "A".repeat(8000)).as_bytes()));
+        assert!(!is_not_source(format!("local t={{{}}}\n", "functions=1,_function=2,".repeat(200)).as_bytes()));
     }
 }
