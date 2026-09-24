@@ -69,13 +69,35 @@ fn edit_commands_reject_non_utf8_without_changing_bytes() {
 #[test]
 fn edit_commands_continue_to_skip_binary_and_escrow_files() {
     let fixture = Fixture::new();
-    for source in [b"FXAP\xffCitizen.Wait(0)".as_slice(), b"\x1bLua\xff", b"binary\0\xff"] {
+    let obfuscated = obfuscated_source();
+    for source in [b"FXAP\xffCitizen.Wait(0)".as_slice(), b"\x1bLua\xff", b"binary\0\xff", obfuscated.as_bytes()] {
         fixture.write("encrypted.lua", source);
         for args in [vec!["fmt", "encrypted.lua"], vec!["--fix", "encrypted.lua"]] {
             assert_success(&fixture.run(&args));
             assert_eq!(fixture.read("encrypted.lua"), source);
         }
     }
+}
+
+/// The shape obfuscated files: the whole program on one huge line.
+fn obfuscated_source() -> String {
+    let body = "d[31]=function()local e,f,g,h;h,g=a:R(g,h);goto E;::n::;h=a:N(h);goto v;::E::;g=a:ap(g);goto n;::v::;Citizen.Wait(0);end;";
+    format!(
+        "-- just to fill some space and the obfuscated code not be on the first line\n\nreturn({{a=function(a,b,c,d){}end}})\n",
+        body.repeat(60)
+    )
+}
+
+#[test]
+fn lint_skips_obfuscated_files() {
+    let fixture = Fixture::new();
+    fixture.write("obfuscated.lua", obfuscated_source());
+    fixture.write("main.lua", "Citizen.Wait(0)\n");
+    let output = fixture.run(&["--format", "json", "."]);
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let paths: Vec<&str> = json["files"].as_array().unwrap().iter().filter_map(|f| f["path"].as_str()).collect();
+    assert!(paths.iter().any(|p| p.ends_with("main.lua")), "{json}");
+    assert!(!paths.iter().any(|p| p.contains("obfuscated")), "{json}");
 }
 
 #[test]
@@ -112,7 +134,7 @@ fn automatic_fixes_never_write_unparseable_output() {
 #[test]
 fn long_expression_chains_fail_cleanly_without_modifying_source() {
     let fixture = Fixture::new();
-    let source = format!("local n = {}1\nprint(n)\n", "1 + ".repeat(63_999));
+    let source = format!("local n = {}1\nprint(n)\n", "1 +\n".repeat(63_999));
     fixture.write("main.lua", &source);
     for args in [vec!["--format", "compact", "main.lua"], vec!["fmt", "--check", "main.lua"]] {
         let output = fixture.run(&args);

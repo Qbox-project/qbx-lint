@@ -1,5 +1,6 @@
 use qbx_lua_analysis::crossref::CrossRefs;
 use qbx_lua_analysis::locale::LocaleFile;
+use qbx_lua_analysis::project::is_not_source;
 use qbx_lua_analysis::scope::resolve;
 use qbx_lua_analysis::summary::summarize;
 use qbx_lua_analysis::{check_file, FileConfig, FileInput, Level, Side};
@@ -320,4 +321,13 @@ fn source_tracking_respects_handlers_and_locals() {
         }),
         ["fivem/source-after-yield"]
     );
+}
+
+#[test]
+fn ordinary_source_with_long_lines_is_not_mistaken_for_obfuscated_code() {
+    assert!(!is_not_source(b"local x = 1\nprint(x)\n"));
+    assert!(!is_not_source(format!("return '{}'", "a".repeat(4000)).as_bytes()), "small files are kept");
+    let data = format!("local icon = '{}'\n", "A".repeat(8000));
+    let code = "print(icon)\n".repeat(200);
+    assert!(!is_not_source(format!("{data}{code}").as_bytes()), "one long data line among code");
 }

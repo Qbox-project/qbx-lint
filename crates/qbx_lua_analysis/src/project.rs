@@ -12,19 +12,35 @@ use crate::manifest::{Manifest, ScriptEntry, MANIFEST_FILE_NAMES};
 use crate::scope::{resolve, Resolution};
 use crate::summary::{summarize, FileSummary};
 
-/// Whether a `.lua` file holds something other than Lua source: a FiveM escrow (asset protection)
-/// payload, precompiled bytecode, or any other binary blob.
+/// Whether a `.lua` file holds something other than readable Lua source: a FiveM escrow (asset
+/// protection) payload, precompiled bytecode, any other binary blob, or obfuscated code.
 pub fn is_not_source(bytes: &[u8]) -> bool {
-    bytes.starts_with(b"FXAP") || bytes.starts_with(b"\x1bLua") || bytes.iter().take(1024).any(|b| *b == 0)
+    bytes.starts_with(b"FXAP")
+        || bytes.starts_with(b"\x1bLua")
+        || bytes.iter().take(1024).any(|b| *b == 0)
+        || is_obfuscated(bytes)
 }
 
-/// Reads Lua source. Encrypted or binary files are an error, so every caller skips them the same
-/// way it skips unreadable files. Invalid UTF-8 is decoded lossily for read-only analysis; use
-/// `read_source_for_edit` before persisting edits.
+/// Obfuscated scripts usually end up as one or two giant lines, and there's nothing useful to
+/// report on them. Normal code rarely averages more than 100 bytes per line, so a big file with
+/// much longer lines than that is almost certainly obfuscated (or minified).
+fn is_obfuscated(bytes: &[u8]) -> bool {
+    const MIN_LEN: usize = 4096;
+    const MIN_AVERAGE_LINE_LEN: usize = 500;
+    if bytes.len() < MIN_LEN {
+        return false;
+    }
+    let lines = bytes.iter().filter(|b| **b == b'\n').count() + 1;
+    bytes.len() / lines >= MIN_AVERAGE_LINE_LEN
+}
+
+/// Reads Lua source. Encrypted, binary, or obfuscated files are an error, so every caller skips
+/// them the same way it skips unreadable files. Invalid UTF-8 is decoded lossily for read-only
+/// analysis; use `read_source_for_edit` before persisting edits.
 pub fn read_source(path: &Path) -> std::io::Result<String> {
     let bytes = std::fs::read(path)?;
     if is_not_source(&bytes) {
-        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "encrypted or binary file"));
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "encrypted, binary, or obfuscated file"));
     }
     Ok(match String::from_utf8(bytes) {
         Ok(text) => text,
@@ -32,8 +48,9 @@ pub fn read_source(path: &Path) -> std::io::Result<String> {
     })
 }
 
-/// Reads editable Lua source without replacing invalid UTF-8 bytes. `None` means an encrypted
-/// or binary file, which should be skipped rather than treated as a source encoding error.
+/// Reads editable Lua source without replacing invalid UTF-8 bytes. `None` means an encrypted,
+/// binary, or obfuscated file, which should be skipped rather than treated as a source encoding
+/// error.
 pub fn read_source_for_edit(path: &Path) -> std::io::Result<Option<String>> {
     let bytes = std::fs::read(path)?;
     if is_not_source(&bytes) {

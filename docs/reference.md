@@ -123,7 +123,7 @@ unused.
 
 ## Escrowed and mixed-language resources
 
-Encrypted FiveM files beginning with `FXAP`, Lua bytecode, and detected binary blobs are skipped.
+Encrypted FiveM files beginning with `FXAP`, Lua bytecode, minified and obfuscated code, and detected binary blobs are skipped.
 A `.fxap` marker or unreadable script makes the resource opaque to checks that need complete
 knowledge of its globals or locale usage. Readable scripts are still analyzed.
 
