@@ -167,3 +167,24 @@ fn relative_and_absolute_config_paths_apply_identical_exclusions_and_overrides()
     assert_success(&fixture.run(&["fmt", "--config", "qbxlint.toml", "skip/broken.lua"]));
     assert_eq!(fixture.read("skip/broken.lua"), b"local n=1\nprint(n)\n");
 }
+
+#[test]
+fn lua_ls_settings_apply_when_no_qbxlint_toml_exists() {
+    let fixture = Fixture::new();
+    fixture.write(
+        ".luarc.json",
+        "{\n\t\"runtime.version\": \"Lua 5.4\",\n\t\"diagnostics.globals\": [\"lib\"],\n\t\"workspace.ignoreDir\": [\"\\\\[standalone\\\\]\"],\n\t\"diagnostics.disable\": [\"lowercase-global\", \"duplicate-doc-class\"]\n}\n",
+    );
+    fixture.write("main.lua", "helper = function() return lib end\nprint(helper, Missing)\n");
+    fixture.write("[standalone]/broken.lua", "local =\n");
+    for args in [vec!["--format", "json", "."], vec!["--config", ".luarc.json", "--format", "json", "."]] {
+        let output = fixture.run(&args);
+        assert_success(&output);
+        let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        let files = json["files"].as_array().unwrap();
+        assert_eq!(files.len(), 1, "{args:?}: {json}");
+        let codes: Vec<&str> =
+            files[0]["diagnostics"].as_array().unwrap().iter().map(|d| d["code"].as_str().unwrap()).collect();
+        assert_eq!(codes, ["undefined-global"], "{args:?}: {json}");
+    }
+}
