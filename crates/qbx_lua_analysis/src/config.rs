@@ -5,7 +5,7 @@ use globset::{Glob, GlobSet, GlobSetBuilder};
 use serde::Deserialize;
 
 use crate::diagnostic::Severity;
-use crate::rules;
+use crate::{lua_ls_config, rules};
 
 pub const CONFIG_FILE_NAMES: &[&str] = &["qbxlint.toml", ".qbxlint.toml"];
 
@@ -65,6 +65,8 @@ pub struct Config {
     pub globals: Vec<String>,
     pub ignore_unused_prefix: String,
     pub format: qbx_lua_fmt::FormatOptions,
+    /// Whether `format` comes from a `qbxlint.toml`. Editors keep their own indentation otherwise.
+    pub format_configured: bool,
     rules: BTreeMap<String, Level>,
     overrides: Vec<Override>,
 }
@@ -80,29 +82,75 @@ impl Default for Config {
 impl Config {
     pub fn parse(text: &str, root: PathBuf) -> Result<Self, String> {
         let raw: RawConfig = toml::from_str(text).map_err(|e| e.to_string())?;
-        Self::from_raw(raw, root)
+        let mut config = Self::from_raw(raw, root)?;
+        config.format_configured = true;
+        Ok(config)
     }
 
+    /// Loads a `qbxlint.toml`, or a LuaLS or EmmyLua JSON configuration by its extension.
     pub fn load(path: &Path) -> Result<Self, String> {
         let path = std::path::absolute(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        if path.extension().is_some_and(|e| e == "json" || e == "jsonc") {
+            return Self::load_lua_ls(&[path], false).map(|config| config.unwrap_or_default());
+        }
         let text = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
         let root = path.parent().map(Path::to_path_buf).unwrap_or_default();
         Self::parse(&text, root).map_err(|e| format!("{}: {e}", path.display()))
     }
 
-    /// Walks up from `start` looking for a config file.
+    /// Walks up from `start` looking for a `qbxlint.toml`. Without one, the nearest LuaLS or
+    /// EmmyLua configuration supplies globals, rule levels and exclusions.
     pub fn discover(start: &Path) -> Result<Option<Self>, String> {
-        let mut dir = if start.is_dir() { Some(start) } else { start.parent() };
-        while let Some(current) = dir {
+        let start = if start.is_dir() { Some(start) } else { start.parent() };
+        let ancestors = || std::iter::successors(start, |dir| dir.parent());
+        for dir in ancestors() {
             for name in CONFIG_FILE_NAMES {
-                let candidate = current.join(name);
+                let candidate = dir.join(name);
                 if candidate.is_file() {
                     return Self::load(&candidate).map(Some);
                 }
             }
-            dir = current.parent();
+        }
+        for dir in ancestors() {
+            let found: Vec<PathBuf> =
+                lua_ls_config::FILE_NAMES.iter().map(|name| dir.join(name)).filter(|p| p.is_file()).collect();
+            if let Some(config) = Self::load_lua_ls(&found, true)? {
+                return Ok(Some(config));
+            }
         }
         Ok(None)
+    }
+
+    /// Merges LuaLS or EmmyLua settings files from one directory. Settings and rule codes without
+    /// a qbx-lint equivalent are ignored. When `lenient`, as during discovery, a file or pattern
+    /// that cannot be read is skipped, so another tool's configuration never stops a lint run.
+    fn load_lua_ls(paths: &[PathBuf], lenient: bool) -> Result<Option<Self>, String> {
+        let mut settings = lua_ls_config::Settings::default();
+        let mut loaded = None;
+        for path in paths {
+            let emmylua = path.file_name().is_some_and(|n| n.to_string_lossy().starts_with(".emmyrc"));
+            let result = std::fs::read_to_string(path)
+                .map_err(|e| e.to_string())
+                .and_then(|text| lua_ls_config::parse(&text, emmylua, &mut settings));
+            match result {
+                Ok(()) => loaded = loaded.or(Some(path)),
+                Err(_) if lenient => {}
+                Err(e) => return Err(format!("{}: {e}", path.display())),
+            }
+        }
+        let Some(path) = loaded else { return Ok(None) };
+        let mut exclude = settings.exclude;
+        if lenient {
+            exclude.retain(|pattern| Glob::new(pattern).is_ok());
+        }
+        let raw = RawConfig {
+            exclude,
+            globals: settings.globals,
+            rules: settings.rules.into_iter().filter(|(code, _)| rules::find(code).is_some()).collect(),
+            ..RawConfig::default()
+        };
+        let root = path.parent().map(Path::to_path_buf).unwrap_or_default();
+        Self::from_raw(raw, root).map(Some).map_err(|e| format!("{}: {e}", path.display()))
     }
 
     fn from_raw(raw: RawConfig, root: PathBuf) -> Result<Self, String> {
@@ -129,6 +177,7 @@ impl Config {
             globals: raw.globals,
             ignore_unused_prefix: raw.ignore_unused_prefix.unwrap_or_else(|| "_".to_string()),
             format: raw.format,
+            format_configured: false,
             rules: raw.rules,
             overrides,
         })
@@ -224,5 +273,78 @@ mod tests {
     #[test]
     fn rejects_unknown_rules() {
         assert!(Config::parse("[rules]\n\"nope\" = \"off\"", PathBuf::new()).unwrap_err().contains("unknown rule"));
+    }
+
+    fn temp_tree(name: &str, files: &[(&str, &str)]) -> PathBuf {
+        let root = std::env::temp_dir().join(format!("qbx-config-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        for (path, text) in files {
+            let path = root.join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        }
+        root
+    }
+
+    #[test]
+    fn falls_back_to_lua_ls_settings_without_qbxlint_toml() {
+        let root = temp_tree(
+            "luarc",
+            &[
+                (
+                    "res/.luarc.json",
+                    r#"{ "diagnostics.globals": ["lib"], "diagnostics.disable": ["lowercase-global", "no-such-code"], "workspace.ignoreDir": ["\\[standalone\\]"] }"#,
+                ),
+                ("res/.emmyrc.json", r#"{ "workspace": { "ignoreGlobs": ["build/**"] } }"#),
+                ("res/client/main.lua", ""),
+            ],
+        );
+        let config = Config::discover(&root.join("res/client/main.lua")).unwrap().unwrap();
+        assert_eq!(config.root, root.join("res"));
+        assert!(!config.format_configured);
+        assert_eq!(config.globals, ["lib"]);
+        let file = config.for_file(&root.join("res/client/main.lua"));
+        assert_eq!(file.severity("lowercase-global"), None);
+        assert_eq!(file.severity("undefined-global"), Some(Severity::Warning));
+        assert!(config.is_excluded(&root.join("res/[standalone]/tool/main.lua")));
+        assert!(config.is_excluded(&root.join("res/build/out.lua")));
+        assert!(!config.is_excluded(&root.join("res/client/main.lua")));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn qbxlint_toml_anywhere_above_wins_over_a_nearer_lua_ls_config() {
+        let root = temp_tree(
+            "precedence",
+            &[
+                ("qbxlint.toml", "globals = ['FromToml']\n"),
+                ("res/.luarc.json", r#"{ "diagnostics.globals": ["FromLuarc"] }"#),
+                ("res/main.lua", ""),
+            ],
+        );
+        let config = Config::discover(&root.join("res/main.lua")).unwrap().unwrap();
+        assert_eq!(config.globals, ["FromToml"]);
+        assert!(config.format_configured);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn unreadable_lua_ls_settings_are_skipped_during_discovery_only() {
+        let root = temp_tree(
+            "unreadable",
+            &[
+                ("res/.luarc.json", r#"{ "diagnostics.globals": ["#),
+                (
+                    "res/.emmyrc.json",
+                    r#"{ "diagnostics": { "globals": ["Fine"] }, "workspace": { "ignoreGlobs": ["[z-a]"] } }"#,
+                ),
+                ("other/.luarc.json", "not json"),
+            ],
+        );
+        let config = Config::discover(&root.join("res")).unwrap().unwrap();
+        assert_eq!(config.globals, ["Fine"], "the readable file in the same directory still applies");
+        assert!(Config::discover(&root.join("other")).unwrap().is_none());
+        assert!(Config::load(&root.join("other/.luarc.json")).unwrap_err().contains(".luarc.json"));
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

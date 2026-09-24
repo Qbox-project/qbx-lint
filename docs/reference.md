@@ -53,6 +53,26 @@ Directory traversal also skips hidden directories and does not follow directory 
 applied afterward. `--min-severity hint` includes hints, which the default `info` threshold hides.
 `--max-warnings 0` makes reported warnings fail a lint run.
 
+### LuaLS and EmmyLua configuration
+
+When no `qbxlint.toml` or `.qbxlint.toml` exists in any parent directory, the nearest directory
+with `.luarc.json`, `.luarc.jsonc` or `.emmyrc.json` supplies the settings that have an equivalent
+here. Files found together in that directory are merged. `--config` also accepts these files.
+
+| LuaLS / EmmyLua setting | Used as |
+| --- | --- |
+| `diagnostics.globals` | `globals` |
+| `diagnostics.disable` | `off` for each code that names a rule here; EmmyLua's `unused` covers the `unused-*` rules |
+| `diagnostics.severity` | Rule levels (`Error`, `Warning`, `Information`, `Hint`, with or without a trailing `!`) |
+| `workspace.ignoreDir` | Exclusions. LuaLS entries are gitignore-style patterns; `.emmyrc.json` entries are directories from the root |
+| `workspace.ignoreGlobs` | Exclusions, as glob patterns |
+
+Keys may be dotted (`"diagnostics.globals"`), nested, or prefixed with `Lua.`. Comments and
+trailing commas are accepted. Other settings and unknown rule codes are ignored, and formatting
+keeps its defaults; in the language server, the editor's indentation settings still apply.
+Discovery skips a file or exclusion pattern it cannot read. Pass the file with `--config` to see
+the error.
+
 ## Suppressing findings
 
 Use a rule code to keep the suppression specific:

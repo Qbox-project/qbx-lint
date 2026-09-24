@@ -7,6 +7,7 @@ pub mod env;
 pub mod glob;
 pub mod lint;
 pub mod locale;
+pub mod lua_ls_config;
 pub mod manifest;
 pub mod project;
 pub mod rules;
