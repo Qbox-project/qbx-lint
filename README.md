@@ -68,6 +68,7 @@ are relative to that file's directory.
 
 ```toml
 exclude = ["web/**", "**/vendor/**"]
+ignore_diagnostics = ['\[standalone\]/']
 globals = ["SomeRuntimeGlobal"]
 
 [rules]

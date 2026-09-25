@@ -101,6 +101,9 @@ fn collect_crossrefs(
 }
 
 fn lint_loose_file(path: &Path, config: &Config, crossrefs: &CrossRefs) -> Option<FileReport> {
+    if config.ignores_diagnostics(path) {
+        return None;
+    }
     let source = read_source(path).ok()?;
     let file = ParsedFile::new(path.to_path_buf(), String::new(), source, None);
     let file_config = config.for_file(path);
@@ -175,7 +178,7 @@ fn lint_resource(
     let mut reports: Vec<FileReport> = resource
         .files
         .par_iter()
-        .filter(|file| targets.contains(&file.path))
+        .filter(|file| targets.contains(&file.path) && !config.ignores_diagnostics(&file.path))
         .map(|file| {
             let mut file_config = config.for_file(&file.path);
             if resource.manifest.is_map_file(&file.relative) {
@@ -205,22 +208,24 @@ fn lint_resource(
 
     let whole_resource = targets.iter().any(|t| is_manifest_file(t) && t.parent() == Some(root));
     if whole_resource {
-        if let Ok(source) = read_source(&resource.manifest_path) {
-            let chunk = parse(&source);
-            let resource_files = all_files(root);
-            let file_config = config.for_file(&resource.manifest_path);
-            let diagnostics = check_manifest(&ManifestInput {
-                source: &source,
-                chunk: &chunk,
-                manifest: &resource.manifest,
-                config: &file_config,
-                resource_files: &resource_files,
-                has_lua_scripts: !resource.files.is_empty(),
-            });
-            reports.push(FileReport { path: resource.manifest_path.clone(), source, diagnostics });
+        if !config.ignores_diagnostics(&resource.manifest_path) {
+            if let Ok(source) = read_source(&resource.manifest_path) {
+                let chunk = parse(&source);
+                let resource_files = all_files(root);
+                let file_config = config.for_file(&resource.manifest_path);
+                let diagnostics = check_manifest(&ManifestInput {
+                    source: &source,
+                    chunk: &chunk,
+                    manifest: &resource.manifest,
+                    config: &file_config,
+                    resource_files: &resource_files,
+                    has_lua_scripts: !resource.files.is_empty(),
+                });
+                reports.push(FileReport { path: resource.manifest_path.clone(), source, diagnostics });
+            }
         }
         // Encrypted scripts may use any key, so "unused" cannot be decided for such a resource.
-        if let Some(locale) = locale.filter(|_| !resource.env.opaque) {
+        if let Some(locale) = locale.filter(|l| !resource.env.opaque && !config.ignores_diagnostics(&l.path)) {
             let severity = config.for_file(&locale.path).severity(rules::UNUSED_LOCALE_KEY);
             let mut diagnostics = unused_locale_keys(&locale, resource.files.iter().map(|f| &f.chunk));
             match severity {

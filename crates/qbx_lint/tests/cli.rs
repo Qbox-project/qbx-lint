@@ -140,6 +140,31 @@ fn long_expression_chains_fail_cleanly_without_modifying_source() {
 }
 
 #[test]
+fn ignored_diagnostics_keep_the_files_in_the_analysis() {
+    let fixture = Fixture::new();
+    fixture
+        .write("fxmanifest.lua", "fx_version 'cerulean'\ngame 'gta5'\nclient_scripts { 'vendor/*.lua', 'main.lua' }\n");
+    fixture.write("vendor/lib.lua", "VendorApi = {}\nCitizen.Wait(0)\n");
+    fixture.write("main.lua", "print(VendorApi)\n");
+    for (config, vendor_reported, vendor_known) in
+        [("", true, true), ("ignore_diagnostics = ['vendor/']", false, true), ("exclude = ['vendor/**']", false, false)]
+    {
+        fixture.write("qbxlint.toml", config);
+        let stdout = String::from_utf8(fixture.run(&["--format", "json", "."]).stdout).unwrap();
+        assert_eq!(stdout.contains("lib.lua"), vendor_reported, "{config}: {stdout}");
+        assert_eq!(stdout.contains("citizen-prefix"), vendor_reported, "{config}: {stdout}");
+        assert_eq!(!stdout.contains("undefined-global"), vendor_known, "{config}: {stdout}");
+    }
+    fixture.write("main.lua", "print(VendorApi, locale('used'))\n");
+    fixture.write("locales/en.json", r#"{ "used": "a", "unused": "b" }"#);
+    for (config, reported) in [("", true), ("ignore_diagnostics = ['locales/']", false)] {
+        fixture.write("qbxlint.toml", config);
+        let stdout = String::from_utf8(fixture.run(&["--format", "json", "."]).stdout).unwrap();
+        assert_eq!(stdout.contains("unused-locale-key"), reported, "{config}: {stdout}");
+    }
+}
+
+#[test]
 fn relative_and_absolute_config_paths_apply_identical_exclusions_and_overrides() {
     let fixture = Fixture::new();
     fixture.write(

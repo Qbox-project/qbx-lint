@@ -3,6 +3,9 @@
 # Extra glob patterns to skip, relative to this file.
 exclude = ["web/**", "**/vendor/**"]
 
+# Gitignore-style patterns for code that is analyzed but never reported, relative to this file.
+ignore_diagnostics = ['\[standalone\]/']
+
 # Globals that exist at runtime but cannot be discovered from fxmanifest.lua.
 globals = []
 

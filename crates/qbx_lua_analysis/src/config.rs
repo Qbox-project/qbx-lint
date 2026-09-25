@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use globset::{Glob, GlobSet, GlobSetBuilder};
+use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use serde::Deserialize;
 
 use crate::diagnostic::Severity;
@@ -36,6 +37,7 @@ impl Level {
 #[serde(deny_unknown_fields, default)]
 struct RawConfig {
     exclude: Vec<String>,
+    ignore_diagnostics: Vec<String>,
     globals: Vec<String>,
     ignore_unused_prefix: Option<String>,
     rules: BTreeMap<String, Level>,
@@ -62,6 +64,7 @@ struct Override {
 pub struct Config {
     pub root: PathBuf,
     exclude: GlobSet,
+    ignore_diagnostics: Gitignore,
     pub globals: Vec<String>,
     pub ignore_unused_prefix: String,
     pub format: qbx_lua_fmt::FormatOptions,
@@ -176,6 +179,7 @@ impl Config {
             }
         }
         let exclude = build_globset(DEFAULT_EXCLUDES.iter().copied().chain(raw.exclude.iter().map(String::as_str)))?;
+        let ignore_diagnostics = build_gitignore(&root, &raw.ignore_diagnostics)?;
         let overrides = raw
             .overrides
             .into_iter()
@@ -190,6 +194,7 @@ impl Config {
         Ok(Self {
             root,
             exclude,
+            ignore_diagnostics,
             globals: raw.globals,
             ignore_unused_prefix: raw.ignore_unused_prefix.unwrap_or_else(|| "_".to_string()),
             format: raw.format,
@@ -217,6 +222,13 @@ impl Config {
         self.exclude.is_match(self.relative(path))
     }
 
+    /// Paths that are still analyzed, so their globals and exports count, but whose own findings are not reported.
+    pub fn ignores_diagnostics(&self, path: &Path) -> bool {
+        let relative = self.relative(path);
+        // The matcher panics on paths outside its root.
+        !relative.has_root() && self.ignore_diagnostics.matched_path_or_any_parents(relative, false).is_ignore()
+    }
+
     pub fn for_file(&self, path: &Path) -> FileConfig {
         let relative = self.relative(path);
         let mut rules = self.rules.clone();
@@ -233,6 +245,14 @@ fn build_globset<'a>(patterns: impl Iterator<Item = &'a str>) -> Result<GlobSet,
     let mut builder = GlobSetBuilder::new();
     for pattern in patterns {
         builder.add(Glob::new(pattern).map_err(|e| e.to_string())?);
+    }
+    builder.build().map_err(|e| e.to_string())
+}
+
+fn build_gitignore(root: &Path, patterns: &[String]) -> Result<Gitignore, String> {
+    let mut builder = GitignoreBuilder::new(root);
+    for pattern in patterns {
+        builder.add_line(None, pattern).map_err(|e| e.to_string())?;
     }
     builder.build().map_err(|e| e.to_string())
 }
@@ -297,6 +317,26 @@ mod tests {
         let config = Config::parse("exclude = ['web']", PathBuf::from("/repo")).unwrap();
         assert!(config.is_excluded(Path::new("/repo/web/app.lua")));
         assert!(!config.is_excluded(Path::new("/repo/client/web.lua")));
+    }
+
+    #[test]
+    fn ignore_diagnostics_uses_gitignore_patterns() {
+        let config = Config::parse(
+            r"ignore_diagnostics = ['\[standalone\]/', 'vendor', '!vendor/ours.lua', '/generated.lua']",
+            PathBuf::from("/repo"),
+        )
+        .unwrap();
+        let ignored = |path: &str| config.ignores_diagnostics(Path::new(&format!("/repo/{path}")));
+        assert!(ignored("res/[standalone]/tool/main.lua"));
+        assert!(!ignored("res/s/main.lua"), "escaped brackets are not a character class");
+        assert!(ignored("vendor/lib.lua"));
+        assert!(ignored("res/vendor/deep/lib.lua"));
+        assert!(!ignored("vendor/ours.lua"));
+        assert!(ignored("generated.lua"));
+        assert!(!ignored("res/generated.lua"));
+        assert!(!ignored("client/main.lua"));
+        assert!(!config.ignores_diagnostics(Path::new("/elsewhere/vendor/lib.lua")));
+        assert!(!config.is_excluded(Path::new("/repo/vendor/lib.lua")));
     }
 
     #[test]

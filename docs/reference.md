@@ -17,6 +17,7 @@ All settings are optional. Unknown keys and rule names are errors.
 
 ```toml
 exclude = ["web/**", "**/vendor/**"]
+ignore_diagnostics = ['\[standalone\]/', 'third_party/']
 globals = ["SomeRuntimeGlobal"]
 ignore_unused_prefix = "_"
 
@@ -39,7 +40,8 @@ quote_style = "preserve"
 
 | Setting | Meaning |
 | --- | --- |
-| `exclude` | Additional glob patterns for paths to skip. |
+| `exclude` | Additional glob patterns for paths to skip. Skipped files are not analyzed at all, so other files do not see their globals, exports or events. |
+| `ignore_diagnostics` | Gitignore-style patterns for paths that are analyzed but never reported. |
 | `globals` | Names supplied at runtime that the linter cannot discover. |
 | `ignore_unused_prefix` | Locals and arguments with this prefix are exempt from unused checks; defaults to `_`. |
 | `rules` | Per-rule levels: `off`, `hint`, `info`, `warning` (or `warn`), and `error`. |
@@ -48,6 +50,28 @@ quote_style = "preserve"
 
 The default exclusions include `node_modules`, `.git`, and `[builders]` directory contents.
 Directory traversal also skips hidden directories and does not follow directory symlinks.
+
+### Ignoring diagnostics
+
+`ignore_diagnostics` is for code you do not maintain, such as third-party resources in a server
+folder. Matching files are still parsed and indexed, so their globals, exports and events keep
+resolving in your own files, and the language server still offers definitions and completion for
+them. Nothing is reported for a matching file, not even syntax errors, and that includes matching
+`fxmanifest.lua` and locale files. Formatting is not affected.
+
+Patterns follow `.gitignore` rules, relative to the configuration directory:
+
+| Pattern | Matches |
+| --- | --- |
+| `vendor/` | Every directory named `vendor`, at any depth |
+| `/vendor/` | Only the `vendor` directory next to the configuration file |
+| `resources/vendor` | A path relative to the configuration directory, because it contains a `/` |
+| `*.min.lua` | Matching files at any depth |
+| `!vendor/patched.lua` | Reports this file again although an earlier pattern ignores it |
+
+FiveM category folders need escaped brackets: `[standalone]` is a character class that matches
+one letter, while `\[standalone\]` matches the folder. Write such patterns as TOML literal strings
+in single quotes, because `\[` is not a valid escape in a double-quoted TOML string.
 
 `--rule CODE=LEVEL` changes a rule's base level for the invocation. Matching file overrides are
 applied afterward. `--min-severity hint` includes hints, which the default `info` threshold hides.
