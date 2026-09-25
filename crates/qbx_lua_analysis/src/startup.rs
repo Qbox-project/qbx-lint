@@ -5,7 +5,7 @@ use qbx_lua_syntax::SmolStr;
 use rustc_hash::{FxHashMap, FxHashSet};
 use walkdir::WalkDir;
 
-use crate::project::manifest_path;
+use crate::project::manifest_in;
 
 /// The order in which a server's cfg files start resources. Resources started by one
 /// `ensure [category]` line share a group, because their relative order is not defined.
@@ -18,12 +18,17 @@ pub struct StartOrder {
 
 fn installed_resources(resources_dir: &Path) -> FxHashSet<SmolStr> {
     let mut names = FxHashSet::default();
-    let walker = WalkDir::new(resources_dir).max_depth(7).into_iter().filter_entry(|entry| {
+    let mut walker = WalkDir::new(resources_dir).max_depth(7).into_iter().filter_entry(|entry| {
         let name = entry.file_name().to_string_lossy();
         entry.depth() == 0 || !(name == "node_modules" || name.starts_with('.'))
     });
-    for entry in walker.flatten().filter(|e| e.file_type().is_dir()) {
-        let Some(manifest) = manifest_path(entry.path()) else { continue };
+    while let Some(entry) = walker.next() {
+        let Ok(entry) = entry else { continue };
+        if !entry.file_type().is_dir() {
+            continue;
+        }
+        let Some(manifest) = manifest_in(entry.path()) else { continue };
+        walker.skip_current_dir();
         names.insert(SmolStr::new(entry.file_name().to_string_lossy()));
         // `provide 'qb-core'` lets a resource answer to another name, exports included.
         let Ok(text) = std::fs::read_to_string(&manifest) else { continue };
@@ -62,8 +67,11 @@ fn resources_in_category(resources_dir: &Path, category: &str) -> Vec<SmolStr> {
     let mut names = Vec::new();
     let folders = WalkDir::new(resources_dir).max_depth(4).into_iter().flatten();
     for folder in folders.filter(|e| e.file_type().is_dir() && e.file_name().to_string_lossy() == category) {
-        for entry in WalkDir::new(folder.path()).max_depth(5).into_iter().flatten() {
-            if entry.file_type().is_dir() && manifest_path(entry.path()).is_some() {
+        let mut entries = WalkDir::new(folder.path()).max_depth(5).into_iter();
+        while let Some(entry) = entries.next() {
+            let Ok(entry) = entry else { continue };
+            if entry.file_type().is_dir() && manifest_in(entry.path()).is_some() {
+                entries.skip_current_dir();
                 names.push(SmolStr::new(entry.file_name().to_string_lossy()));
             }
         }
