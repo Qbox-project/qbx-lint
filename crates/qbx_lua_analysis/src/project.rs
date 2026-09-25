@@ -63,16 +63,25 @@ pub fn read_source_for_edit(path: &Path) -> std::io::Result<Option<String>> {
 
 pub fn find_manifest_dir(start: &Path) -> Option<PathBuf> {
     let mut dir = if start.is_dir() { Some(start) } else { start.parent() };
+    let mut root = None;
+
     while let Some(current) = dir {
         if MANIFEST_FILE_NAMES.iter().any(|name| current.join(name).is_file()) {
-            return Some(current.to_path_buf());
+            // FiveM does not discover resources nested inside another resource.
+            root = Some(current.to_path_buf());
         }
+
         dir = current.parent();
     }
-    None
+
+    root
 }
 
 pub fn manifest_path(resource_root: &Path) -> Option<PathBuf> {
+    if find_manifest_dir(resource_root).as_deref() != Some(resource_root) {
+        return None;
+    }
+
     MANIFEST_FILE_NAMES.iter().map(|name| resource_root.join(name)).find(|p| p.is_file())
 }
 
@@ -229,7 +238,7 @@ impl ResourceLocator {
             });
             for entry in walker.flatten() {
                 if entry.file_type().is_file() && is_manifest_file(entry.path()) {
-                    if let Some(root) = entry.path().parent() {
+                    if let Some(root) = entry.path().parent().filter(|root| manifest_path(root).is_some()) {
                         if let Some(name) = root.file_name() {
                             index.entry(name.to_string_lossy().to_lowercase()).or_insert_with(|| root.to_path_buf());
                         }

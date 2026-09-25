@@ -2,6 +2,7 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use qbx_lua_analysis::lint::lint_paths;
+use qbx_lua_analysis::project::{find_manifest_dir, manifest_path, ResourceLocator};
 use qbx_lua_analysis::{apply_fixes, Config, Level};
 use qbx_lua_syntax::LineIndex;
 
@@ -100,6 +101,23 @@ fn server_cfg_decides_order_and_what_is_installed() {
 fn good_resource_is_clean_even_with_optional_rules() {
     let actual = render(&fixtures().join("good_resource"), &config_with_everything_enabled());
     assert_eq!(actual, "", "the idiomatic fixture must not produce findings");
+}
+
+#[test]
+fn nested_manifests_keep_globals_in_the_parent_resource() {
+    let root = fixtures().join("nested");
+    let library = root.join("lib");
+    let mut locator = ResourceLocator::default();
+
+    assert_eq!(find_manifest_dir(&library.join("client/client.lua")), Some(root.clone()));
+    assert!(manifest_path(&library).is_none());
+    assert!(locator.locate(&root, "lib").is_none());
+    assert_eq!(locator.locate(&root, "nested"), Some(root.clone()));
+
+    let reports = lint_paths(&[root.join("client/client.lua")], &Config::default());
+
+    assert_eq!(reports.len(), 1);
+    assert!(reports[0].diagnostics.is_empty(), "{:?}", reports[0].diagnostics);
 }
 
 #[test]
