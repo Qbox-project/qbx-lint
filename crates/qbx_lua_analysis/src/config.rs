@@ -209,6 +209,11 @@ impl Config {
     }
 
     pub fn is_excluded(&self, path: &Path) -> bool {
+        self.relative(path).ancestors().any(|p| !p.as_os_str().is_empty() && self.exclude.is_match(p))
+    }
+
+    /// A directory walk has already checked the entry's parent directories, so only the entry is matched.
+    pub(crate) fn excludes_entry(&self, path: &Path) -> bool {
         self.exclude.is_match(self.relative(path))
     }
 
@@ -285,6 +290,13 @@ mod tests {
         assert_eq!(file.severity("fivem/citizen-prefix"), Some(Severity::Error));
         assert_eq!(file.severity("undefined-global"), Some(Severity::Warning));
         assert_eq!(config.for_file(Path::new("/repo/tests/a.lua")).severity("undefined-global"), None);
+    }
+
+    #[test]
+    fn a_file_is_excluded_when_one_of_its_directories_is() {
+        let config = Config::parse("exclude = ['web']", PathBuf::from("/repo")).unwrap();
+        assert!(config.is_excluded(Path::new("/repo/web/app.lua")));
+        assert!(!config.is_excluded(Path::new("/repo/client/web.lua")));
     }
 
     #[test]

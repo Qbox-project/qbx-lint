@@ -102,7 +102,7 @@ pub fn lua_files_under(root: &Path, config: &Config) -> Vec<PathBuf> {
     let walker = WalkDir::new(root).follow_links(false).into_iter().filter_entry(|entry| {
         let name = entry.file_name().to_string_lossy();
         let hidden_dir = entry.file_type().is_dir() && name.starts_with('.') && entry.depth() > 0;
-        !(hidden_dir || name == "node_modules" || config.is_excluded(entry.path()))
+        !(hidden_dir || name == "node_modules" || config.excludes_entry(entry.path()))
     });
     for entry in walker.flatten() {
         if entry.file_type().is_file() && entry.path().extension().is_some_and(|e| e == "lua") {
