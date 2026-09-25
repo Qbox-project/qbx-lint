@@ -53,25 +53,29 @@ Directory traversal also skips hidden directories and does not follow directory 
 applied afterward. `--min-severity hint` includes hints, which the default `info` threshold hides.
 `--max-warnings 0` makes reported warnings fail a lint run.
 
-### LuaLS and EmmyLua configuration
+### Fallback: LuaLS and EmmyLua settings
 
-When no `qbxlint.toml` or `.qbxlint.toml` exists in any parent directory, the nearest directory
-with `.luarc.json`, `.luarc.jsonc` or `.emmyrc.json` supplies the settings that have an equivalent
-here. Files found together in that directory are merged. `--config` also accepts these files.
+Configure qbx-lint with `qbxlint.toml`. Projects that are already set up for LuaLS or EmmyLua get
+a fallback: when no `qbxlint.toml` or `.qbxlint.toml` exists in any parent directory, the nearest
+directory with `.luarc.json`, `.luarc.jsonc` or `.emmyrc.json` supplies the few settings that
+have an equivalent here, and the CLI names the files it used on stderr. Files found together in
+that directory are merged. A `qbxlint.toml` replaces the fallback entirely, so add one as soon as
+qbx-lint needs anything beyond it. `--config` also accepts these files.
 
 | LuaLS / EmmyLua setting | Used as |
 | --- | --- |
-| `diagnostics.globals` | `globals` |
-| `diagnostics.disable` | `off` for each code that names a rule here; EmmyLua's `unused` covers the `unused-*` rules |
-| `diagnostics.severity` | Rule levels (`Error`, `Warning`, `Information`, `Hint`, with or without a trailing `!`) |
+| `diagnostics.globals` | `globals`, without the names qbx-lint already knows: runtime globals, natives, and globals of imports such as `@ox_lib/init.lua`, so the manifest and client/server checks still apply to them |
+| `diagnostics.disable` | `off` for `undefined-global`, `lowercase-global`, `unused-local`, `unused-function`, `unused-label`, `redefined-local`, `unreachable-code`, `empty-block`, `unbalanced-assignments` and `duplicate-index`; EmmyLua's `unused` covers the `unused-*` rules |
+| `diagnostics.severity` | Levels for the same codes (`Error`, `Warning`, `Information`, `Hint`, with or without a trailing `!`) |
 | `workspace.ignoreDir` | Exclusions. LuaLS entries are gitignore-style patterns; `.emmyrc.json` entries are directories from the root |
 | `workspace.ignoreGlobs` | Exclusions, as glob patterns |
 
-Keys may be dotted (`"diagnostics.globals"`), nested, or prefixed with `Lua.`. Comments and
-trailing commas are accepted. Other settings and unknown rule codes are ignored, and formatting
-keeps its defaults; in the language server, the editor's indentation settings still apply.
-Discovery skips a file or exclusion pattern it cannot read. Pass the file with `--config` to see
-the error.
+Codes that only share a name with a rule here, such as `undefined-field` and `deprecated`, are
+ignored, as are all other settings. Keys may be dotted (`"diagnostics.globals"`), nested, or
+prefixed with `Lua.`. Comments and trailing commas are accepted. Formatting keeps its defaults; in
+the language server, the editor's indentation settings still apply. Discovery skips a file or
+exclusion pattern it cannot read and says so on stderr; pass the file with `--config` to make that
+an error.
 
 ## Suppressing findings
 

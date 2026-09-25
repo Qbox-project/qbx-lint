@@ -1,9 +1,12 @@
 //! Reads the part of a LuaLS (`.luarc.json`) or EmmyLua (`.emmyrc.json`) configuration that has a
-//! qbx-lint equivalent, so a project already set up for either server works without `qbxlint.toml`.
+//! qbx-lint equivalent, as a fallback for projects that are set up for either server but have no
+//! `qbxlint.toml`.
 
+use qbx_fivem_data::{is_hash_native_name, native, KNOWN_IMPORTS};
 use serde_json::Value;
 
 use crate::config::Level;
+use crate::env::builtins;
 
 /// Files read when no `qbxlint.toml` is found. All of them present in one directory are merged.
 pub const FILE_NAMES: &[&str] = &[".luarc.json", ".luarc.jsonc", ".emmyrc.json"];
@@ -12,12 +15,36 @@ pub const FILE_NAMES: &[&str] = &[".luarc.json", ".luarc.jsonc", ".emmyrc.json"]
 const ALIASES: &[(&str, &[&str])] =
     &[("unused", &["unused-local", "unused-function", "unused-argument", "unused-loop-variable"])];
 
+/// Codes that check the same thing in both tools. `undefined-field` and `deprecated` only share the
+/// name: projects often turn off the broad LuaLS checks, which must not turn off the narrow ones here.
+const EQUIVALENT_CODES: &[&str] = &[
+    "undefined-global",
+    "lowercase-global",
+    "unused-local",
+    "unused-function",
+    "unused-label",
+    "redefined-local",
+    "unreachable-code",
+    "empty-block",
+    "unbalanced-assignments",
+    "duplicate-index",
+];
+
 #[derive(Debug, Default)]
 pub(crate) struct Settings {
     pub globals: Vec<String>,
-    /// Rule levels in application order, not yet checked against the known rules.
+    /// Rule levels in application order.
     pub rules: Vec<(String, Level)>,
     pub exclude: Vec<String>,
+}
+
+/// LuaLS projects list runtime, native and import globals such as `lib` because LuaLS does not read
+/// the manifest. Configuring them here would hide the import and client/server checks for them.
+fn is_known_global(name: &str) -> bool {
+    builtins().get(name).is_some()
+        || native(name).is_some()
+        || is_hash_native_name(name)
+        || KNOWN_IMPORTS.iter().any(|import| import.globals.contains(&name))
 }
 
 /// Parses one settings file. EmmyLua resolves `workspace.ignoreDir` from the project root, while
@@ -33,7 +60,9 @@ pub(crate) fn parse(text: &str, emmylua: bool, settings: &mut Settings) -> Resul
         // LuaLS also accepts the settings under the client's `Lua.` prefix.
         let key = key.strip_prefix("Lua.").unwrap_or(&key);
         match key {
-            "diagnostics.globals" => settings.globals.extend(strings(value)),
+            "diagnostics.globals" => {
+                settings.globals.extend(strings(value).into_iter().filter(|name| !is_known_global(name)))
+            }
             "diagnostics.disable" => disabled.extend(strings(value)),
             "workspace.ignoreGlobs" => settings.exclude.extend(strings(value)),
             "workspace.ignoreDir" => settings.exclude.extend(strings(value).iter().flat_map(|dir| {
@@ -57,7 +86,8 @@ pub(crate) fn parse(text: &str, emmylua: bool, settings: &mut Settings) -> Resul
     for (code, level) in severities.into_iter().chain(disabled) {
         match ALIASES.iter().find(|(alias, _)| *alias == code) {
             Some((_, codes)) => settings.rules.extend(codes.iter().map(|c| (c.to_string(), level))),
-            None => settings.rules.push((code, level)),
+            None if EQUIVALENT_CODES.contains(&code.as_str()) => settings.rules.push((code, level)),
+            None => {}
         }
     }
     Ok(())
@@ -202,13 +232,35 @@ mod tests {
 
     #[test]
     fn reads_dotted_nested_and_prefixed_keys() {
-        let dotted = parse_luals(r#"{ "diagnostics.globals": ["lib"], "diagnostics.disable": ["lowercase-global"] }"#);
-        let nested = parse_luals(r#"{ "diagnostics": { "globals": ["lib"], "disable": ["lowercase-global"] } }"#);
-        let prefixed =
-            parse_luals(r#"{ "Lua.diagnostics.globals": ["lib"], "Lua.diagnostics.disable": ["lowercase-global"] }"#);
+        let dotted =
+            parse_luals(r#"{ "diagnostics.globals": ["Config"], "diagnostics.disable": ["lowercase-global"] }"#);
+        let nested = parse_luals(r#"{ "diagnostics": { "globals": ["Config"], "disable": ["lowercase-global"] } }"#);
+        let prefixed = parse_luals(
+            r#"{ "Lua.diagnostics.globals": ["Config"], "Lua.diagnostics.disable": ["lowercase-global"] }"#,
+        );
         for settings in [dotted, nested, prefixed] {
-            assert_eq!(settings.globals, ["lib"]);
+            assert_eq!(settings.globals, ["Config"]);
             assert_eq!(settings.rules, [("lowercase-global".to_string(), Level::Off)]);
+        }
+    }
+
+    #[test]
+    fn drops_globals_that_are_already_known() {
+        let settings = parse_luals(
+            r#"{ "diagnostics.globals": ["lib", "cache", "MySQL", "Citizen", "CreateThread", "GetPlayerPed", "Config"] }"#,
+        );
+        assert_eq!(settings.globals, ["Config"]);
+    }
+
+    #[test]
+    fn maps_only_codes_that_mean_the_same() {
+        let settings = parse_luals(
+            r#"{ "diagnostics.disable": ["undefined-field", "deprecated", "syntax-error", "undefined-global"] }"#,
+        );
+        assert_eq!(settings.rules, [("undefined-global".to_string(), Level::Off)]);
+        let targets = EQUIVALENT_CODES.iter().chain(ALIASES.iter().flat_map(|(_, codes)| codes.iter()));
+        for code in targets {
+            assert!(crate::rules::find(code).is_some(), "{code} is not a rule");
         }
     }
 

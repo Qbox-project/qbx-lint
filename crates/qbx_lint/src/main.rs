@@ -113,10 +113,7 @@ fn run_fmt(paths: &[PathBuf], check: bool, config: Option<&PathBuf>) -> Result<E
 
     let config = match config {
         Some(path) => Config::load(path)?,
-        None => {
-            let start = paths.first().cloned().unwrap_or_else(|| PathBuf::from("."));
-            Config::discover(&std::path::absolute(&start).unwrap_or(start))?.unwrap_or_default()
-        }
+        None => discover_config(paths.first().cloned().unwrap_or_else(|| PathBuf::from(".")))?,
     };
     let mut files = Vec::new();
     for path in paths {
@@ -211,9 +208,16 @@ fn load_config(cli: &Cli) -> Result<Config, String> {
     if let Some(path) = &cli.config {
         return Config::load(path);
     }
-    let start = cli.paths.first().cloned().unwrap_or_else(|| PathBuf::from("."));
+    discover_config(cli.paths.first().cloned().unwrap_or_else(|| PathBuf::from(".")))
+}
+
+fn discover_config(start: PathBuf) -> Result<Config, String> {
     let start = std::path::absolute(&start).unwrap_or(start);
-    Ok(Config::discover(&start)?.unwrap_or_default())
+    let config = Config::discover(&start)?.unwrap_or_default();
+    for note in &config.notes {
+        eprintln!("qbx-lint: {note}");
+    }
+    Ok(config)
 }
 
 fn run(cli: &Cli) -> Result<ExitCode, String> {

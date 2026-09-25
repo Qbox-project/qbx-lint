@@ -173,13 +173,15 @@ fn lua_ls_settings_apply_when_no_qbxlint_toml_exists() {
     let fixture = Fixture::new();
     fixture.write(
         ".luarc.json",
-        "{\n\t\"runtime.version\": \"Lua 5.4\",\n\t\"diagnostics.globals\": [\"lib\"],\n\t\"workspace.ignoreDir\": [\"\\\\[standalone\\\\]\"],\n\t\"diagnostics.disable\": [\"lowercase-global\", \"duplicate-doc-class\"]\n}\n",
+        "{\n\t\"runtime.version\": \"Lua 5.4\",\n\t\"diagnostics.globals\": [\"Config\"],\n\t\"workspace.ignoreDir\": [\"\\\\[standalone\\\\]\"],\n\t\"diagnostics.disable\": [\"lowercase-global\", \"duplicate-doc-class\"]\n}\n",
     );
-    fixture.write("main.lua", "helper = function() return lib end\nprint(helper, Missing)\n");
+    fixture.write("main.lua", "helper = function() return Config end\nprint(helper, Missing)\n");
     fixture.write("[standalone]/broken.lua", "local =\n");
     for args in [vec!["--format", "json", "."], vec!["--config", ".luarc.json", "--format", "json", "."]] {
         let output = fixture.run(&args);
         assert_success(&output);
+        let noted = String::from_utf8_lossy(&output.stderr).contains("falling back to the supported settings");
+        assert_eq!(noted, args[0] != "--config", "{args:?}: {output:?}");
         let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
         let files = json["files"].as_array().unwrap();
         assert_eq!(files.len(), 1, "{args:?}: {json}");
