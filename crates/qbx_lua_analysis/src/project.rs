@@ -82,7 +82,11 @@ pub fn manifest_path(resource_root: &Path) -> Option<PathBuf> {
         return None;
     }
 
-    MANIFEST_FILE_NAMES.iter().map(|name| resource_root.join(name)).find(|p| p.is_file())
+    manifest_in(resource_root)
+}
+
+pub fn manifest_in(dir: &Path) -> Option<PathBuf> {
+    MANIFEST_FILE_NAMES.iter().map(|name| dir.join(name)).find(|p| p.is_file())
 }
 
 pub fn is_manifest_file(path: &Path) -> bool {
