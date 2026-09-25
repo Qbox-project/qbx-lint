@@ -299,7 +299,7 @@ impl Resource {
         let mut env = ResourceEnv { opaque: is_escrowed_resource(root), ..ResourceEnv::default() };
         let mut files = Vec::new();
         for path in lua_files_under(root, config) {
-            if is_manifest_file(&path) || find_manifest_dir(&path).as_deref() != Some(root) {
+            if is_manifest_file(&path) {
                 continue;
             }
             let Ok(source) = read_source(&path) else {
