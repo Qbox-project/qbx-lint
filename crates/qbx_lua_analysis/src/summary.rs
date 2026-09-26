@@ -18,6 +18,22 @@ pub struct FileSummary {
     pub global_defs: Vec<GlobalDef>,
     /// `(table, field)` pairs assigned on global tables, e.g. `function table.contains() end`.
     pub global_field_defs: Vec<(SmolStr, SmolStr)>,
+    /// Files of other resources loaded at runtime, as `@resource/path.lua` import patterns:
+    /// `lib.load('@qbx_core.modules.lib')` or `require '@ox_lib.imports.callback.client'`.
+    pub module_imports: Vec<SmolStr>,
+}
+
+/// The `@resource/file.lua` import a `lib.load`/`require` module name refers to.
+pub fn module_import_pattern(module: &str) -> Option<SmolStr> {
+    let rest = module.strip_prefix('@')?;
+    if rest.is_empty() || rest.starts_with(['.', '/']) {
+        return None;
+    }
+    let mut path = if rest.contains('/') { rest.to_string() } else { rest.replace('.', "/") };
+    if !path.ends_with(".lua") {
+        path.push_str(".lua");
+    }
+    Some(SmolStr::new(format!("@{path}")))
 }
 
 pub fn summarize(chunk: &Chunk, resolution: &Resolution) -> FileSummary {
@@ -32,17 +48,19 @@ pub fn summarize(chunk: &Chunk, resolution: &Resolution) -> FileSummary {
             at_file_scope: g.func == MAIN_CHUNK,
         })
         .collect();
-    let mut collector = FieldDefs { resolution, out: Vec::new(), env_defs: Vec::new(), depth: 0 };
+    let mut collector =
+        FieldDefs { resolution, out: Vec::new(), env_defs: Vec::new(), module_imports: Vec::new(), depth: 0 };
     collector.visit_block(&chunk.block);
     let mut global_defs: Vec<GlobalDef> = global_defs;
     global_defs.extend(collector.env_defs);
-    FileSummary { global_defs, global_field_defs: collector.out }
+    FileSummary { global_defs, global_field_defs: collector.out, module_imports: collector.module_imports }
 }
 
 struct FieldDefs<'a> {
     resolution: &'a Resolution,
     out: Vec<(SmolStr, SmolStr)>,
     env_defs: Vec<GlobalDef>,
+    module_imports: Vec<SmolStr>,
     depth: u32,
 }
 
@@ -57,6 +75,20 @@ impl<'ast> Visitor<'ast> for FieldDefs<'_> {
         self.depth += 1;
         visit::walk_func_body(self, func);
         self.depth -= 1;
+    }
+
+    fn visit_expr(&mut self, expr: &'ast Expr) {
+        if let ExprKind::Call { callee, args, .. } = &expr.kind {
+            let loader = matches!(callee.dotted_path().as_deref(), Some("lib.load" | "lib.require" | "require"));
+            if let (true, Some(module)) = (loader, args.first().and_then(Expr::as_string)) {
+                if let Some(pattern) = module_import_pattern(module) {
+                    if !self.module_imports.contains(&pattern) {
+                        self.module_imports.push(pattern);
+                    }
+                }
+            }
+        }
+        visit::walk_expr(self, expr);
     }
 
     fn visit_stmt(&mut self, stmt: &'ast Stmt) {
