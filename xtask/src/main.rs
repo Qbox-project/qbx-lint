@@ -99,9 +99,13 @@ impl BodyExt for ureq::Response {
     }
 }
 
+/// Natives whose declaration is filed under RedM although the FiveM client has them too.
+const ALSO_IN_FIVEM: &[&str] = &["REGISTER_RAW_KEYMAP"];
+
 fn add_native(natives: &mut BTreeMap<String, Native>, ns: &str, hash: &str, native: &Value) {
     let game = native["game"].as_str();
-    if matches!(game, Some("rdr3" | "ny")) {
+    let declared_name = native["name"].as_str().unwrap_or("");
+    if matches!(game, Some("rdr3" | "ny")) && !ALSO_IN_FIVEM.contains(&declared_name) {
         return;
     }
     let raw_name = native["name"].as_str().filter(|n| !n.is_empty()).unwrap_or(hash);

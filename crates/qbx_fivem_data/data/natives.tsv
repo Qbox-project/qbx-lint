@@ -7316,6 +7316,7 @@ RegisterObjectScriptBrain	c	BRAIN	0x0BE84C318BA6EC22		scriptName:string,modelHas
 RegisterPedheadshot	c	PED	0x4462658788425076	integer	ped:Ped	
 RegisterPedheadshotTransparent	c	PED	0x953563CE563143AF	integer	ped:Ped	
 RegisterPedheadshot_3	c	PED	0xBA8805A1108A2515	integer	ped:Ped	
+RegisterRawKeymap	c	CFX	0x49C1F6DC		keymapName:string,onKeyDown:function,onKeyUp:function,rawKeyIndex:integer,canBeDisabled:boolean	
 RegisterRawNuiCallback	c	CFX	0xA8AE9C2F		callbackType:string,callback:function	
 RegisterResourceAsEventHandler	b	CFX	0xD233A168		eventName:string	
 RegisterResourceAsset	s	CFX	0x9862B266	string	resourceName:string,fileName:string	
