@@ -100,6 +100,9 @@ fn check_read(input: &FileInput, global: &GlobalRef, regions: &SideRegions, sink
             .filter(|_| !AMBIGUOUS_IMPORT_GLOBALS.contains(&name))
             .find(|import| import.globals.contains(&name));
         if let Some(provider) = provider {
+            if resource.env.loads_module(provider.path) {
+                return;
+            }
             let scripts = input.side.map_or("this resource's", |s| s.label());
             sink.report(
                 rules::IMPORT_NOT_DECLARED,

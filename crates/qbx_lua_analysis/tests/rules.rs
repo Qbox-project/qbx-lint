@@ -201,6 +201,54 @@ fn data_files_are_found_by_streamed_asset_name() {
 }
 
 #[test]
+fn modules_loaded_at_runtime_provide_their_globals() {
+    fn codes(source: &str) -> Vec<&'static str> {
+        let chunk = parse(source);
+        let resolution = resolve(&chunk);
+        let summary = summarize(&chunk, &resolution);
+        let mut env = qbx_lua_analysis::project::ResourceEnv::default();
+        env.add_summary(&summary, Some(Side::Client));
+        let manifest = qbx_lua_analysis::manifest::Manifest::default();
+        let resource = qbx_lua_analysis::ResourceInput {
+            name: "prison",
+            env: &env,
+            manifest: &manifest,
+            started_before: None,
+            installed: None,
+        };
+        let mut config = FileConfig::default();
+        config.globals.push("lib".into());
+        let input = FileInput {
+            source,
+            chunk: &chunk,
+            resolution: &resolution,
+            summary: &summary,
+            config: &config,
+            side: Some(Side::Client),
+            resource: Some(resource),
+            crossrefs: None,
+            locale: None,
+            relative_path: "client.lua",
+        };
+        check_file(&input).into_iter().map(|d| d.code).collect()
+    }
+    assert_eq!(codes("qbx.playAudio({ audioName = 'cell_door' })"), ["fivem/import-not-declared"]);
+    assert_eq!(
+        codes("lib.load('@qbx_core.modules.lib')\nqbx.playAudio({ audioName = 'cell_door' })"),
+        Vec::<&str>::new()
+    );
+    assert_eq!(
+        codes("require '@qbx_core/modules/lib.lua'\nqbx.playAudio({ audioName = 'cell_door' })"),
+        Vec::<&str>::new()
+    );
+    assert_eq!(
+        qbx_lua_analysis::summary::module_import_pattern("@ox_lib.imports.callback.client").as_deref(),
+        Some("@ox_lib/imports/callback/client.lua")
+    );
+    assert_eq!(qbx_lua_analysis::summary::module_import_pattern("modules.lib"), None);
+}
+
+#[test]
 fn side_checks_follow_is_duplicity_version() {
     let client = |source: &str| project(source, Side::Client, &[]);
     let wrong = ["fivem/native-wrong-side"];

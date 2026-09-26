@@ -161,6 +161,8 @@ pub struct ResourceEnv {
     server: FxHashSet<SmolStr>,
     field_defs: FxHashSet<(SmolStr, SmolStr)>,
     file_scope: FxHashSet<SmolStr>,
+    /// `@resource/file.lua` patterns the scripts load at runtime through `lib.load` or `require`.
+    module_imports: FxHashSet<SmolStr>,
     pub unresolved_imports: Vec<UnresolvedImport>,
     /// Part of the resource is encrypted or unreadable, so neither what it defines nor what it
     /// uses is known; rules that need the whole picture stay quiet.
@@ -190,6 +192,13 @@ impl ResourceEnv {
             }
         }
         self.field_defs.extend(summary.global_field_defs.iter().cloned());
+        self.module_imports.extend(summary.module_imports.iter().cloned());
+    }
+
+    /// Whether a script of the resource loads `@resource/file.lua` itself at runtime, so the
+    /// globals that file defines need no manifest entry.
+    pub fn loads_module(&self, pattern: &str) -> bool {
+        self.module_imports.contains(pattern)
     }
 
     pub fn defines(&self, name: &str, side: Option<Side>) -> bool {
