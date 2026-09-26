@@ -7,17 +7,35 @@ use walkdir::WalkDir;
 
 use crate::project::manifest_in;
 
+/// Resources the server artifact ships in `citizen/system_resources`. They are installed on
+/// every server without appearing under `resources`, so a recipe may even delete its own copy.
+pub const SYSTEM_RESOURCES: &[&str] = &["chat", "monitor", "webpack", "yarn"];
+
 /// The order in which a server's cfg files start resources. Resources started by one
 /// `ensure [category]` line share a group, because their relative order is not defined.
 #[derive(Debug, Default)]
 pub struct StartOrder {
     groups: FxHashMap<SmolStr, usize>,
-    /// Every resource under the server's `resources` folder, plus the names they `provide`.
+    /// Every resource under the server's `resources` folder, plus the names they `provide` and
+    /// the artifact's system resources.
     pub installed: FxHashSet<SmolStr>,
+    /// Names a resource answers to through `provide`, so starting it also starts those.
+    provided: FxHashMap<SmolStr, Vec<SmolStr>>,
 }
 
-fn installed_resources(resources_dir: &Path) -> FxHashSet<SmolStr> {
-    let mut names = FxHashSet::default();
+fn provided_names(manifest_text: &str) -> impl Iterator<Item = SmolStr> + '_ {
+    manifest_text
+        .lines()
+        .map(str::trim)
+        .filter(|line| line.starts_with("provide"))
+        .filter_map(|line| line.split(['\'', '"']).nth(1))
+        .filter(|name| !name.is_empty())
+        .map(SmolStr::new)
+}
+
+fn installed_resources(resources_dir: &Path) -> (FxHashSet<SmolStr>, FxHashMap<SmolStr, Vec<SmolStr>>) {
+    let mut names: FxHashSet<SmolStr> = SYSTEM_RESOURCES.iter().map(SmolStr::new).collect();
+    let mut provided: FxHashMap<SmolStr, Vec<SmolStr>> = FxHashMap::default();
     let mut walker = WalkDir::new(resources_dir).max_depth(7).into_iter().filter_entry(|entry| {
         let name = entry.file_name().to_string_lossy();
         entry.depth() == 0 || !(name == "node_modules" || name.starts_with('.'))
@@ -29,15 +47,16 @@ fn installed_resources(resources_dir: &Path) -> FxHashSet<SmolStr> {
         }
         let Some(manifest) = manifest_in(entry.path()) else { continue };
         walker.skip_current_dir();
-        names.insert(SmolStr::new(entry.file_name().to_string_lossy()));
+        let name = SmolStr::new(entry.file_name().to_string_lossy());
+        names.insert(name.clone());
         // `provide 'qb-core'` lets a resource answer to another name, exports included.
         let Ok(text) = std::fs::read_to_string(&manifest) else { continue };
-        for line in text.lines().map(str::trim).filter(|l| l.starts_with("provide")) {
-            let quoted = line.split(['\'', '"']).nth(1);
-            names.extend(quoted.filter(|name| !name.is_empty()).map(SmolStr::new));
+        for alias in provided_names(&text) {
+            names.insert(alias.clone());
+            provided.entry(name.clone()).or_default().push(alias);
         }
     }
-    names
+    (names, provided)
 }
 
 const MAX_EXEC_DEPTH: u32 = 5;
@@ -95,6 +114,7 @@ impl StartOrder {
         let Some(first) = read(&cfg) else { return (None, true) };
         let resources_dir = cfg.parent().unwrap_or(Path::new(".")).join("resources");
         let mut order = Self::default();
+        order.installed.extend(SYSTEM_RESOURCES.iter().map(SmolStr::new));
         let mut resources = Vec::new();
         let mut partial = false;
         let mut walker = WalkDir::new(&resources_dir).max_depth(7).into_iter().filter_entry(|entry| {
@@ -115,12 +135,11 @@ impl StartOrder {
             walker.skip_current_dir();
             let name = SmolStr::new(entry.file_name().to_string_lossy());
             order.installed.insert(name.clone());
-            resources.push((entry.path().to_path_buf(), name));
+            resources.push((entry.path().to_path_buf(), name.clone()));
             if let Some(text) = read(&manifest) {
-                for line in text.lines().map(str::trim).filter(|line| line.starts_with("provide")) {
-                    order
-                        .installed
-                        .extend(line.split(['\'', '"']).nth(1).filter(|name| !name.is_empty()).map(SmolStr::new));
+                for alias in provided_names(&text) {
+                    order.installed.insert(alias.clone());
+                    order.provided.entry(name.clone()).or_default().push(alias);
                 }
             } else {
                 partial = true;
@@ -172,11 +191,11 @@ impl StartOrder {
                             if path.starts_with(&category_root)
                                 && path.ancestors().any(|part| part.file_name().is_some_and(|name| name == target))
                             {
-                                order.groups.entry(name.clone()).or_insert(context.next);
+                                order.assign(name.clone(), context.next);
                             }
                         }
                     } else {
-                        order.groups.entry(SmolStr::new(target)).or_insert(context.next);
+                        order.assign(SmolStr::new(target), context.next);
                     }
                     context.next += 1;
                 }
@@ -195,7 +214,8 @@ impl StartOrder {
             return Some(order.clone());
         }
         let resources_dir = cfg.parent().unwrap_or(Path::new(".")).join("resources");
-        let mut order = StartOrder { installed: installed_resources(&resources_dir), ..StartOrder::default() };
+        let (installed, provided) = installed_resources(&resources_dir);
+        let mut order = StartOrder { installed, provided, ..StartOrder::default() };
         let mut next_group = 0;
         order.read_cfg(&cfg, &mut next_group, 0);
         let order = Arc::new(order);
@@ -220,13 +240,21 @@ impl StartOrder {
                         vec![SmolStr::new(target)]
                     };
                     for name in names {
-                        self.groups.entry(name).or_insert(*next_group);
+                        self.assign(name, *next_group);
                     }
                     *next_group += 1;
                 }
                 _ => {}
             }
         }
+    }
+
+    /// Starting a resource also starts every name it provides, at the same position.
+    fn assign(&mut self, name: SmolStr, group: usize) {
+        for alias in self.provided.get(&name).into_iter().flatten() {
+            self.groups.entry(alias.clone()).or_insert(group);
+        }
+        self.groups.entry(name).or_insert(group);
     }
 
     /// Resources that are certain to be running before `resource` starts.
@@ -270,6 +298,12 @@ mod tests {
         assert!(order.installed.contains("unlisted") && order.installed.contains("ox_lib"));
         assert!(!order.installed.contains("not_here") && !order.installed.contains("[ox]"));
         assert!(order.installed.contains("qb-core"), "provided names count as installed");
+        assert!(
+            order.installed.contains("chat") && order.installed.contains("monitor"),
+            "system resources are installed"
+        );
+        assert!(before.contains("qb-core"), "starting qbx_core also starts the name it provides: {before:?}");
+        assert!(!order.started_before("qbx_core").contains("qb-core"), "an alias starts with its resource, not before");
         let (bounded, partial) = StartOrder::discover_bounded(
             &root.join("resources/[standalone]/mything"),
             &mut |path| std::fs::read_to_string(path).ok(),
