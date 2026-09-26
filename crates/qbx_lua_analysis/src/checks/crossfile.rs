@@ -5,7 +5,7 @@ use qbx_lua_syntax::SmolStr;
 use rustc_hash::FxHashSet;
 
 use super::{FileInput, Sink};
-use crate::crossref::{trigger_target, Arity, CrossRefs};
+use crate::crossref::{trigger_target, Arity, CrossRefs, EventRegistration};
 use crate::rules;
 use crate::scope::Resolved;
 use crate::side_guard::SideRegions;
@@ -67,6 +67,13 @@ fn plural(count: usize) -> &'static str {
     }
 }
 
+/// Events of the artifact's system resources: their handlers live outside any resources folder,
+/// so nothing can be said about the side or arguments they expect.
+fn is_system_event(name: &str) -> bool {
+    let owner = name.split(':').next().unwrap_or(name);
+    crate::startup::SYSTEM_RESOURCES.contains(&owner) || name == "chatMessage"
+}
+
 impl CrossFile<'_, '_> {
     fn is_global(&self, name: &Name) -> bool {
         matches!(self.input.resolution.resolve_at(name.span.start), Some(Resolved::Global(_)))
@@ -83,12 +90,22 @@ impl CrossFile<'_, '_> {
             (Some(target), Some(side)) => side.is_available_on(target),
             _ => true,
         };
+        let own = self.input.resource.map(|r| r.name);
+        let owned_by = |registration: &EventRegistration| own.is_some() && registration.resource.as_deref() == own;
         let reachable: Vec<_> = registrations.iter().filter(|r| reaches(r.side)).collect();
         if reachable.is_empty() {
             // Events are named `resource:event` by convention; an escrowed resource may well handle
             // this one on the other side too, inside a file that cannot be read.
             let owner = name.split(':').next().unwrap_or(name);
-            if refs.opaque_resources.contains(owner) {
+            if refs.opaque_resources.contains(owner) || is_system_event(name) {
+                return;
+            }
+            // A local event that only other resources handle is a hook offered to them: on this
+            // side it is theirs to listen for. The same goes for a local copy of an event the file
+            // also sends across the network, the usual way to notify listeners on both sides.
+            if call == "TriggerEvent"
+                && ((own.is_some() && !registrations.iter().any(&owned_by)) || self.mirrors_over_network(name))
+            {
                 return;
             }
             let (Some(target), Some(other)) = (target, registrations.iter().find_map(|r| r.side)) else { return };
@@ -109,9 +126,16 @@ impl CrossFile<'_, '_> {
         if arities.is_empty() || arities.iter().any(|a| a.vararg) {
             return;
         }
-        let most = arities.iter().map(|a| a.params).max().unwrap_or(0);
+        // Another resource's handler may ignore trailing payload on purpose, so only the
+        // resource's own handlers decide whether a trigger passes too much.
+        let most = if own.is_some() {
+            reachable.iter().filter(|r| owned_by(r)).filter_map(|r| r.handler).map(|a| a.params).max()
+        } else {
+            arities.iter().map(|a| a.params).max()
+        };
         let least = arities.iter().map(|a| a.params).min().unwrap_or(0);
-        if passed > most {
+        if most.is_some_and(|most| passed > most) {
+            let most = most.unwrap_or(0);
             self.sink.report(
                 rules::EVENT_ARGUMENT_COUNT,
                 expr.span,
@@ -130,6 +154,13 @@ impl CrossFile<'_, '_> {
                 ),
             );
         }
+    }
+
+    /// Whether this file also delivers the event to the other side with a network trigger.
+    fn mirrors_over_network(&self, event: &str) -> bool {
+        ["TriggerServerEvent", "TriggerClientEvent", "TriggerLatentServerEvent", "TriggerLatentClientEvent"].iter().any(
+            |call| ['\'', '"'].iter().any(|quote| self.input.source.contains(&format!("{call}({quote}{event}{quote}"))),
+        )
     }
 
     fn exported_resource<'e>(&self, base: &'e Expr) -> Option<(SmolStr, &'e Expr)> {

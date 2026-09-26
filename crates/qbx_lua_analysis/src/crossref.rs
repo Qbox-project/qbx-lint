@@ -20,6 +20,8 @@ impl Arity {
 pub struct EventRegistration {
     pub side: Option<Side>,
     pub handler: Option<Arity>,
+    /// The resource whose script registers the handler, when known.
+    pub resource: Option<SmolStr>,
 }
 
 /// Facts that one file needs to know about every other file: who handles which event and what
@@ -39,8 +41,8 @@ pub struct CrossRefs {
 pub const EVENT_REGISTRATION_CALLS: &[&str] = &["RegisterNetEvent", "RegisterServerEvent", "AddEventHandler"];
 
 impl CrossRefs {
-    pub fn add_event(&mut self, name: SmolStr, side: Option<Side>, handler: Option<Arity>) {
-        self.events.entry(name).or_default().push(EventRegistration { side, handler });
+    pub fn add_event(&mut self, name: SmolStr, side: Option<Side>, handler: Option<Arity>, resource: Option<SmolStr>) {
+        self.events.entry(name).or_default().push(EventRegistration { side, handler, resource });
     }
 
     pub fn collect(&mut self, chunk: &Chunk, side: Option<Side>, resource: Option<&str>) {
@@ -90,7 +92,7 @@ impl<'ast> Visitor<'ast> for Collector<'_> {
                 (Some(call), Some(name)) if EVENT_REGISTRATION_CALLS.contains(&call) => {
                     let handler = args.iter().skip(1).find_map(|arg| self.arity_of(arg));
                     let side = self.regions.effective(expr.span.start, self.side);
-                    self.refs.add_event(name.clone(), side, handler);
+                    self.refs.add_event(name.clone(), side, handler, self.resource.map(SmolStr::new));
                 }
                 (Some("exports"), Some(name)) => {
                     if let (Some(resource), Some(arity)) = (self.resource, args.get(1).and_then(|a| self.arity_of(a))) {
