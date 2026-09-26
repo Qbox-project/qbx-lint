@@ -14,8 +14,15 @@ fn normalises_spacing_and_indentation() {
 #[test]
 fn keeps_comments_blank_lines_and_trailing_comments() {
     let source = "-- header\n\n\n\nlocal a = 1 -- trailing\n--[[ block\n   comment ]]\nlocal t = {\n  -- first\n  x = 1, -- one\n\n  y = 2,\n  -- last\n}\nif a then -- why\n  -- only a comment\nend\n";
-    let expected = "-- header\n\nlocal a = 1 -- trailing\n--[[ block\n   comment ]]\nlocal t = {\n    -- first\n    x = 1, -- one\n\n    y = 2,\n    -- last\n}\nif a then\n    -- why\n    -- only a comment\nend\n";
+    let expected = "-- header\n\nlocal a = 1 -- trailing\n--[[ block\n   comment ]]\nlocal t = {\n    -- first\n    x = 1, -- one\n\n    y = 2,\n    -- last\n}\nif a then -- why\n    -- only a comment\nend\n";
     assert_eq!(fmt(source), expected);
+}
+
+#[test]
+fn comments_after_block_headers_stay_on_their_line() {
+    // `-- luacheck: ignore` and `---@diagnostic disable-line` only apply to the line they end.
+    let source = "if not ok then -- luacheck: ignore\n    print(1)\nelse -- fallback\n    print(2)\nend\nwhile x do -- spin\n    x = x - 1\nend\nfor i = 1, 3 do -- count\n    print(i)\nend\nfor _, v in pairs(t) do -- each\n    print(v)\nend\nlocal function f(a) -- doc\n    return a\nend\nrepeat -- again\n    x = x + 1\nuntil x > 3\n";
+    assert_eq!(fmt(source), source);
 }
 
 #[test]

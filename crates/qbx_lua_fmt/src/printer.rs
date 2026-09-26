@@ -118,7 +118,10 @@ impl Printer<'_> {
         out
     }
 
-    fn body(&mut self, block: &Block, level: usize, end_limit: u32, out: &mut String) {
+    /// Prints a block below its header, keeping a comment written after the header keyword on
+    /// that line: `-- luacheck: ignore` or `---@diagnostic disable-line` only apply there.
+    fn body(&mut self, block: &Block, level: usize, end_limit: u32, out: &mut String, header_end: u32) {
+        self.trailing_comment(header_end, out);
         for line in self.block(block, level + 1, end_limit) {
             out.push('\n');
             out.push_str(&line);
@@ -177,23 +180,23 @@ impl Printer<'_> {
             StmtKind::Expr(expr) => format!("{pad}{}", self.expr(expr, level, col)),
             StmtKind::Do(body) => {
                 let mut out = format!("{pad}do");
-                self.body(body, level, end_keyword, &mut out);
+                self.body(body, level, end_keyword, &mut out, stmt.span.start);
                 out + &pad + "end"
             }
             StmtKind::Defer(body) => {
                 let mut out = format!("{pad}defer");
-                self.body(body, level, end_keyword, &mut out);
+                self.body(body, level, end_keyword, &mut out, stmt.span.start);
                 out + &pad + "end"
             }
             StmtKind::While { cond, body } => {
                 let mut out = format!("{pad}while {} do", self.expr(cond, level, col + 6));
-                self.body(body, level, end_keyword, &mut out);
+                self.body(body, level, end_keyword, &mut out, cond.span.end);
                 out + &pad + "end"
             }
             StmtKind::Repeat { body, cond } => {
                 let mut out = format!("{pad}repeat");
                 let until = self.src[..cond.span.start as usize].rfind("until").map_or(cond.span.start, |i| i as u32);
-                self.body(body, level, until, &mut out);
+                self.body(body, level, until, &mut out, stmt.span.start);
                 out + &pad + "until " + &self.expr(cond, level, col + 6)
             }
             StmtKind::If { branches, else_block } => {
@@ -215,11 +218,12 @@ impl Printer<'_> {
                         .map(|next| next.keyword_span.start)
                         .or_else(|| else_block.as_ref().map(|b| self.else_keyword(branch, b)))
                         .unwrap_or(end_keyword);
-                    self.body(&branch.block, level, limit, &mut out);
+                    self.body(&branch.block, level, limit, &mut out, branch.cond.span.end);
                 }
                 if let Some(block) = else_block {
+                    let keyword = branches.last().map_or(stmt.span.start, |branch| self.else_keyword(branch, block));
                     out.push_str(&format!("{pad}else"));
-                    self.body(block, level, end_keyword, &mut out);
+                    self.body(block, level, end_keyword, &mut out, keyword);
                 }
                 out + &pad + "end"
             }
@@ -234,7 +238,8 @@ impl Printer<'_> {
                     head.push_str(&format!(", {}", self.expr(step, level, col)));
                 }
                 let mut out = head + " do";
-                self.body(body, level, end_keyword, &mut out);
+                let header_end = step.as_ref().map_or(limit.span.end, |step| step.span.end);
+                self.body(body, level, end_keyword, &mut out, header_end);
                 out + &pad + "end"
             }
             StmtKind::GenericFor { names, exprs, body } => {
@@ -243,7 +248,8 @@ impl Printer<'_> {
                 let start = width(&out);
                 out.push_str(&self.expr_list(exprs, level, start));
                 out.push_str(" do");
-                self.body(body, level, end_keyword, &mut out);
+                let header_end = exprs.last().map_or(stmt.span.start, |expr| expr.span.end);
+                self.body(body, level, end_keyword, &mut out, header_end);
                 out + &pad + "end"
             }
             StmtKind::Return(exprs) if exprs.is_empty() => format!("{pad}return"),
@@ -301,7 +307,7 @@ impl Printer<'_> {
                 return line;
             }
         }
-        self.body(&func.body, level, func.end_span.start, &mut out);
+        self.body(&func.body, level, func.end_span.start, &mut out, func.params_span.end);
         out + &self.indent(level) + "end"
     }
 
