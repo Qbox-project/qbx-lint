@@ -194,6 +194,10 @@ fn literal_prefix(expr: &Expr) -> Option<String> {
 impl<'ast> Visitor<'ast> for Usage {
     fn visit_expr(&mut self, expr: &'ast Expr) {
         if let ExprKind::Call { callee, args, .. } = &expr.kind {
+            // `lib.getLocales()` hands the whole table to code the linter cannot see, usually a NUI.
+            if callee.dotted_path().as_deref() == Some("lib.getLocales") {
+                self.0.dynamic = true;
+            }
             if matches!(&callee.kind, ExprKind::Name(name) if name.text == "locale") {
                 match args.first() {
                     Some(arg) => match (arg.as_string(), literal_prefix(arg)) {
@@ -212,6 +216,14 @@ impl<'ast> Visitor<'ast> for Usage {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn handing_out_the_whole_table_makes_usage_dynamic() {
+        let usage =
+            locale_usage(&qbx_lua_syntax::parse("SendNUIMessage({ action = 'setLocales', data = lib.getLocales() })"));
+        assert!(usage.dynamic);
+        assert!(!locale_usage(&qbx_lua_syntax::parse("print(locale('greeting'))")).dynamic);
+    }
 
     #[test]
     fn flattens_nested_locale_files() {
