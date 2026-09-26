@@ -86,9 +86,15 @@ pub fn check_manifest(input: &ManifestInput) -> Vec<Diagnostic> {
         }
         // Game data entries name a base path: `audio/x.dat` is `audio/x.dat151.rel` on disk, an
         // audio wave pack entry is a folder, and streamed assets are found by name anywhere
-        // below `stream/`.
+        // below `stream/`. A `data_file` such as `DLC_ITYP_REQUEST 'props.ytyp'` refers to the
+        // streamed asset by its name alone.
         let base = pattern.trim_start_matches("./").to_ascii_lowercase();
-        let streamed = base.strip_prefix("stream/").and_then(|rest| rest.rsplit('/').next());
+        let is_data_file = !is_script && manifest.data_files.iter().any(|entry| entry.span == span);
+        let streamed = match base.strip_prefix("stream/") {
+            Some(rest) => rest.rsplit('/').next(),
+            None if is_data_file && !base.contains('/') => Some(base.as_str()),
+            None => None,
+        };
         let matches = |file: &String| {
             let file_lower = file.to_ascii_lowercase();
             manifest_glob_match(pattern, file)

@@ -173,6 +173,34 @@ fn event_checks_distinguish_own_handlers_from_other_resources() {
 }
 
 #[test]
+fn data_files_are_found_by_streamed_asset_name() {
+    use qbx_lua_analysis::{check_manifest, ManifestInput};
+    let source = "fx_version 'cerulean'\ngame 'gta5'\nfiles { 'client.lua', 'missing.png' }\ndata_file 'DLC_ITYP_REQUEST' 'props.ytyp'\ndata_file 'DLC_ITYP_REQUEST' 'absent.ytyp'\ndata_file 'HANDLING_FILE' 'data/handling.meta'\n";
+    let chunk = parse(source);
+    let manifest = qbx_lua_analysis::manifest::Manifest::from_chunk(&chunk);
+    let files = ["client.lua".to_string(), "stream/[props]/props.ytyp".to_string(), "data/handling.meta".to_string()];
+    let config = FileConfig::default();
+    let input = ManifestInput {
+        source,
+        chunk: &chunk,
+        manifest: &manifest,
+        config: &config,
+        resource_files: &files,
+        has_lua_scripts: false,
+    };
+    let missing: Vec<String> = check_manifest(&input)
+        .into_iter()
+        .filter(|d| d.code == "manifest/missing-file")
+        .map(|d| source[d.span.start as usize..d.span.end as usize].to_string())
+        .collect();
+    assert_eq!(
+        missing,
+        ["'missing.png'", "'absent.ytyp'"],
+        "streamed data files are matched by name, plain files by path"
+    );
+}
+
+#[test]
 fn side_checks_follow_is_duplicity_version() {
     let client = |source: &str| project(source, Side::Client, &[]);
     let wrong = ["fivem/native-wrong-side"];
