@@ -30,6 +30,7 @@ jobs:
             ~/.cargo/git
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
       - run: cargo xtask natives
+      - run: cargo xtask references
 
       - name: Summarize changes
         id: diff
@@ -44,7 +45,8 @@ jobs:
           {
             echo "changed=true"
             echo "body<<EOF"
-            echo "Regenerated from runtime.fivem.net by \`cargo xtask natives\`."
+            echo "Native signatures/docs regenerated from runtime.fivem.net by \`cargo xtask natives\`."
+            echo "Control and ped flag references regenerated from Cfx documentation by \`cargo xtask references\`; source revisions are recorded in reference_sources.json."
             echo
             echo "**Added ($(comm -13 before.txt after.txt | wc -l))**"
             comm -13 before.txt after.txt | head -100 | sed 's/^/- `/; s/$/`/'
@@ -52,13 +54,13 @@ jobs:
             echo "**Removed ($(comm -23 before.txt after.txt | wc -l))**"
             comm -23 before.txt after.txt | head -100 | sed 's/^/- `/; s/$/`/'
             echo
-            echo "Signature or documentation changes of existing natives are in the diff."
+            echo "Signature, documentation and game-reference changes are in the diff."
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
           rm before.txt after.txt
 
       - if: steps.diff.outputs.changed == 'true'
-        run: cargo test --workspace
+        run: cargo test --workspace --all-features --locked
 
       - name: Create or update pull request
         if: steps.diff.outputs.changed == 'true'
@@ -82,7 +84,7 @@ jobs:
             git fetch origin "refs/heads/$branch:refs/remotes/origin/$branch"
             previous=$(git rev-parse "refs/remotes/origin/$branch")
             # Never replace a branch that contains unrelated or human-authored work.
-            if git diff --name-only "$base...$previous" | grep -Ev '^crates/qbx_fivem_data/data/(natives|natives_docs)\.tsv$'; then
+            if git diff --name-only "$base...$previous" | grep -Ev '^crates/qbx_fivem_data/data/((natives|natives_docs|controls|ped_config_flags)\.tsv|reference_sources\.json)$'; then
               echo '::error::The update branch contains changes outside the native data files.'
               exit 1
             fi
@@ -98,7 +100,7 @@ jobs:
               parents+=(-p "$base")
             fi
           fi
-          git add -- crates/qbx_fivem_data/data/natives.tsv crates/qbx_fivem_data/data/natives_docs.tsv
+          git add -- crates/qbx_fivem_data/data/natives.tsv crates/qbx_fivem_data/data/natives_docs.tsv crates/qbx_fivem_data/data/controls.tsv crates/qbx_fivem_data/data/ped_config_flags.tsv crates/qbx_fivem_data/data/reference_sources.json
           tree=$(git write-tree)
           if [ -n "${previous:-}" ] && [ "$tree" = "$(git rev-parse "$previous^{tree}")" ]; then
             commit=$previous

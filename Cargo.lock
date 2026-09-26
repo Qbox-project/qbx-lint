@@ -500,11 +500,11 @@ dependencies = [
 
 [[package]]
 name = "qbx_fivem_data"
-version = "1.0.3"
+version = "1.0.4"
 
 [[package]]
 name = "qbx_lint"
-version = "1.0.3"
+version = "1.0.4"
 dependencies = [
  "clap",
  "qbx_lua_analysis",
@@ -515,7 +515,7 @@ dependencies = [
 
 [[package]]
 name = "qbx_lua_analysis"
-version = "1.0.3"
+version = "1.0.4"
 dependencies = [
  "globset",
  "ignore",
@@ -533,7 +533,7 @@ dependencies = [
 
 [[package]]
 name = "qbx_lua_fmt"
-version = "1.0.3"
+version = "1.0.4"
 dependencies = [
  "qbx_lua_syntax",
  "serde",
@@ -541,7 +541,7 @@ dependencies = [
 
 [[package]]
 name = "qbx_lua_syntax"
-version = "1.0.3"
+version = "1.0.4"
 dependencies = [
  "smol_str",
 ]
@@ -1027,7 +1027,7 @@ checksum = "3ad82d2a33cdc9674dc7465672f271e096168fcdbe0f799d9e6db8c5892679dc"
 
 [[package]]
 name = "xtask"
-version = "1.0.3"
+version = "1.0.4"
 dependencies = [
  "serde_json",
  "ureq",

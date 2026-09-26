@@ -4,6 +4,8 @@ use std::path::PathBuf;
 
 use serde_json::Value;
 
+mod references;
+
 const SOURCES: &[&str] =
     &["https://runtime.fivem.net/doc/natives.json", "https://runtime.fivem.net/doc/natives_cfx.json"];
 
@@ -21,8 +23,14 @@ fn main() {
     let task = std::env::args().nth(1).unwrap_or_default();
     match task.as_str() {
         "natives" => generate_natives(),
+        "references" => {
+            if let Err(error) = references::generate(std::env::args().skip(2)) {
+                eprintln!("reference generation failed: {error}");
+                std::process::exit(1);
+            }
+        }
         _ => {
-            eprintln!("usage: cargo xtask natives");
+            eprintln!("usage: cargo xtask natives | references [--pinned]");
             std::process::exit(2);
         }
     }

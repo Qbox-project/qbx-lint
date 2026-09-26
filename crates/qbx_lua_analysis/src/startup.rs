@@ -80,6 +80,112 @@ fn resources_in_category(resources_dir: &Path, category: &str) -> Vec<SmolStr> {
 }
 
 impl StartOrder {
+    /// The configuration governing a resource, without reading its contents.
+    pub fn configuration_path(resource_root: &Path) -> Option<PathBuf> {
+        find_server_cfg(resource_root)
+    }
+    /// Uncached, bounded discovery for explicit assistant snapshots. The caller controls every
+    /// source read (including containment and byte limits); ordinary editor discovery is unchanged.
+    pub fn discover_bounded(
+        resource_root: &Path,
+        read: &mut impl FnMut(&Path) -> Option<String>,
+        remaining_entries: &mut usize,
+    ) -> (Option<Self>, bool) {
+        let Some(cfg) = find_server_cfg(resource_root) else { return (None, false) };
+        let Some(first) = read(&cfg) else { return (None, true) };
+        let resources_dir = cfg.parent().unwrap_or(Path::new(".")).join("resources");
+        let mut order = Self::default();
+        let mut resources = Vec::new();
+        let mut partial = false;
+        let mut walker = WalkDir::new(&resources_dir).max_depth(7).into_iter().filter_entry(|entry| {
+            let name = entry.file_name().to_string_lossy();
+            entry.depth() == 0 || !(name == "node_modules" || name.starts_with('.'))
+        });
+        while *remaining_entries > 0 {
+            let Some(entry) = walker.next() else { break };
+            *remaining_entries -= 1;
+            let Ok(entry) = entry else {
+                partial = true;
+                continue;
+            };
+            if !entry.file_type().is_dir() {
+                continue;
+            }
+            let Some(manifest) = manifest_in(entry.path()) else { continue };
+            walker.skip_current_dir();
+            let name = SmolStr::new(entry.file_name().to_string_lossy());
+            order.installed.insert(name.clone());
+            resources.push((entry.path().to_path_buf(), name));
+            if let Some(text) = read(&manifest) {
+                for line in text.lines().map(str::trim).filter(|line| line.starts_with("provide")) {
+                    order
+                        .installed
+                        .extend(line.split(['\'', '"']).nth(1).filter(|name| !name.is_empty()).map(SmolStr::new));
+                }
+            } else {
+                partial = true;
+            }
+        }
+        if walker.next().is_some() {
+            partial = true;
+        }
+        struct Context<'a, F> {
+            read: &'a mut F,
+            resources: &'a [(PathBuf, SmolStr)],
+            visited: FxHashSet<PathBuf>,
+            next: usize,
+            partial: bool,
+        }
+        fn read_cfg_bounded<F: FnMut(&Path) -> Option<String>>(
+            order: &mut StartOrder,
+            path: &Path,
+            text: String,
+            depth: u32,
+            context: &mut Context<'_, F>,
+        ) {
+            if !context.visited.insert(path.to_path_buf()) {
+                return;
+            }
+            let dir = path.parent().unwrap_or(Path::new("."));
+            for line in text.lines() {
+                let mut words = line.split('#').next().unwrap_or("").split_whitespace();
+                let (Some(command), Some(target)) = (words.next(), words.next()) else { continue };
+                let target = target.trim_matches(['"', '\'']);
+                if command == "exec" {
+                    if depth >= MAX_EXEC_DEPTH {
+                        context.partial = true;
+                        continue;
+                    }
+                    let child = dir.join(target);
+                    if context.visited.contains(&child) {
+                        continue;
+                    }
+                    if let Some(text) = (context.read)(&child) {
+                        read_cfg_bounded(order, &child, text, depth + 1, context);
+                    } else {
+                        context.partial = true;
+                    }
+                } else if command == "ensure" || command == "start" {
+                    if target.starts_with('[') && target.ends_with(']') {
+                        let category_root = dir.join("resources");
+                        for (path, name) in context.resources {
+                            if path.starts_with(&category_root)
+                                && path.ancestors().any(|part| part.file_name().is_some_and(|name| name == target))
+                            {
+                                order.groups.entry(name.clone()).or_insert(context.next);
+                            }
+                        }
+                    } else {
+                        order.groups.entry(SmolStr::new(target)).or_insert(context.next);
+                    }
+                    context.next += 1;
+                }
+            }
+        }
+        let mut context = Context { read, resources: &resources, visited: FxHashSet::default(), next: 0, partial };
+        read_cfg_bounded(&mut order, &cfg, first, 0, &mut context);
+        (Some(order), context.partial)
+    }
     /// The start order that applies to the resource at `resource_root`, if a `server.cfg` sits
     /// above it.
     pub fn discover(resource_root: &Path) -> Option<Arc<StartOrder>> {
@@ -164,6 +270,31 @@ mod tests {
         assert!(order.installed.contains("unlisted") && order.installed.contains("ox_lib"));
         assert!(!order.installed.contains("not_here") && !order.installed.contains("[ox]"));
         assert!(order.installed.contains("qb-core"), "provided names count as installed");
+        let (bounded, partial) = StartOrder::discover_bounded(
+            &root.join("resources/[standalone]/mything"),
+            &mut |path| std::fs::read_to_string(path).ok(),
+            &mut 1000,
+        );
+        let bounded = bounded.unwrap();
+        assert!(!partial);
+        assert_eq!(bounded.installed, order.installed);
+        for name in ["mything", "ox_lib", "qbx_core", "unlisted"] {
+            assert_eq!(bounded.started_before(name), order.started_before(name));
+        }
+        let (_, partial) = StartOrder::discover_bounded(
+            &root.join("resources/[standalone]/mything"),
+            &mut |path| std::fs::read_to_string(path).ok(),
+            &mut 1,
+        );
+        assert!(partial, "exhausted directory inspection must not claim complete installed resources");
+        let (_, partial) = StartOrder::discover_bounded(
+            &root.join("resources/[standalone]/mything"),
+            &mut |path| {
+                (path.file_name().unwrap() != "extra.cfg").then(|| std::fs::read_to_string(path).ok()).flatten()
+            },
+            &mut 1000,
+        );
+        assert!(partial, "an omitted exec file must be reported");
         std::fs::remove_dir_all(&root).ok();
     }
 }

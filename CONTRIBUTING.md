@@ -67,6 +67,13 @@ The generator rejects a download that would reduce the native count by more than
 the data diff even when generation succeeds. The [natives workflow](.github/workflows/natives.yml)
 also proposes updates.
 
+Control and ped configuration flag references are generated separately from official Cfx
+documentation. Refresh them with `cargo xtask references`, or reproduce the recorded source
+revisions with `cargo xtask references --pinned`. The same weekly workflow proposes updates.
+See [game reference data](docs/game-references.md) for sources, provenance and validation.
+These tables are included only with the `qbx_fivem_data` crate's `docs` feature; check that
+path with `cargo test --locked -p qbx_fivem_data --features docs`.
+
 The GLM stub generator requires Node.js with built-in `fetch`. It accepts either a local binding
 source directory or a base URL, and uses the configured CfxLua source URL when omitted:
 

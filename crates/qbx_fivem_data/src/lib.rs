@@ -1,5 +1,13 @@
 use std::sync::OnceLock;
 
+#[cfg(feature = "docs")]
+mod references;
+#[cfg(feature = "docs")]
+pub use references::{
+    control, controls, ped_config_flag, ped_config_flags, Control, PedConfigFlag, CONTROLS_SOURCE_URL,
+    PED_CONFIG_FLAGS_SOURCE_URL,
+};
+
 static NATIVES: &str = include_str!("../data/natives.tsv");
 #[cfg(feature = "docs")]
 static NATIVE_DOCS: &str = include_str!("../data/natives_docs.tsv");
