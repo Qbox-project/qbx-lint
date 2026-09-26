@@ -46,6 +46,42 @@ fn project(source: &str, side: Side, others: &[(Option<Side>, &str)]) -> Vec<&'s
     codes_in_project(source, &FileConfig::default(), Some(side), others, None)
 }
 
+/// Lints `source` as a `side` script of the resource `own`, with `others` (resource, side, source)
+/// providing the event handlers of named resources.
+fn resource_project(source: &str, side: Side, own: &str, others: &[(&str, Option<Side>, &str)]) -> Vec<&'static str> {
+    let chunk = parse(source);
+    let resolution = resolve(&chunk);
+    let summary = summarize(&chunk, &resolution);
+    let mut crossrefs = CrossRefs::default();
+    crossrefs.collect(&chunk, Some(side), Some(own));
+    for (resource, other_side, other) in others {
+        crossrefs.collect(&parse(other), *other_side, Some(resource));
+    }
+    let env = qbx_lua_analysis::project::ResourceEnv::default();
+    let manifest = qbx_lua_analysis::manifest::Manifest::default();
+    let resource = qbx_lua_analysis::ResourceInput {
+        name: own,
+        env: &env,
+        manifest: &manifest,
+        started_before: None,
+        installed: None,
+    };
+    let config = FileConfig::default();
+    let input = FileInput {
+        source,
+        chunk: &chunk,
+        resolution: &resolution,
+        summary: &summary,
+        config: &config,
+        side: Some(side),
+        resource: Some(resource),
+        crossrefs: Some(&crossrefs),
+        locale: None,
+        relative_path: "",
+    };
+    check_file(&input).into_iter().map(|d| d.code).collect()
+}
+
 #[test]
 fn events_are_checked_against_their_handlers() {
     let server = (Some(Side::Server), "RegisterNetEvent('shop:buy', function(item, amount) print(item, amount) end)");
@@ -73,6 +109,66 @@ fn events_are_checked_against_their_handlers() {
     assert_eq!(
         project("TriggerClientEvent('hud:update', -1, 1, 2)", Side::Server, &[client]),
         ["fivem/event-argument-count"]
+    );
+}
+
+#[test]
+fn event_checks_distinguish_own_handlers_from_other_resources() {
+    let none = Vec::<&str>::new();
+    let own_handler = ("hud", Some(Side::Client), "RegisterNetEvent('hud:update', function(value) print(value) end)");
+    let other_handler = ("other", Some(Side::Client), "AddEventHandler('hud:update', function() end)");
+    let source = "TriggerClientEvent('hud:update', -1, 1, 2)";
+    assert_eq!(resource_project(source, Side::Server, "hud", &[own_handler]), ["fivem/event-argument-count"]);
+    assert_eq!(resource_project(source, Side::Server, "hud", &[other_handler]), none, "a consumer may ignore payload");
+    assert_eq!(
+        resource_project(source, Side::Server, "hud", &[own_handler, other_handler]),
+        ["fivem/event-argument-count"]
+    );
+    let wide = ("other", Some(Side::Client), "AddEventHandler('hud:update', function(value, extra, more) end)");
+    assert_eq!(
+        resource_project("TriggerClientEvent('hud:update', -1, 1)", Side::Server, "hud", &[wide]),
+        ["fivem/event-missing-arguments"],
+        "too few arguments for another resource's handler is still worth knowing"
+    );
+
+    let server_only = ("medical", Some(Side::Server), "RegisterNetEvent('base:playerDied', function(killer) end)");
+    assert_eq!(
+        resource_project("TriggerEvent('base:playerDied', 1)", Side::Client, "base", &[server_only]),
+        none,
+        "a local hook for other resources"
+    );
+    assert_eq!(
+        resource_project(
+            "TriggerEvent('base:playerDied', 1)",
+            Side::Client,
+            "base",
+            &[("base", Some(Side::Server), "RegisterNetEvent('base:playerDied', function(killer) end)")]
+        ),
+        ["fivem/event-wrong-side"],
+        "the resource's own handler is on the other side"
+    );
+    assert_eq!(
+        resource_project("TriggerClientEvent('base:playerDied', -1, 1)", Side::Server, "other", &[server_only]),
+        ["fivem/event-wrong-side"],
+        "sending a server-handled event to clients is wrong whoever handles it"
+    );
+    let mirrored = "TriggerEvent('base:playerDied', 1)\nTriggerServerEvent('base:playerDied', 1)";
+    let own_server = ("base", Some(Side::Server), "RegisterNetEvent('base:playerDied', function(killer) end)");
+    assert_eq!(
+        resource_project(mirrored, Side::Client, "base", &[own_server]),
+        none,
+        "a local copy of a mirrored event"
+    );
+    let chat_hook = ("core", Some(Side::Server), "AddEventHandler('chatMessage', function(source, name, message) end)");
+    assert_eq!(
+        resource_project(
+            "TriggerClientEvent('chatMessage', -1, 'sys', {0, 0, 255}, 'hi')",
+            Side::Server,
+            "admin",
+            &[chat_hook]
+        ),
+        none,
+        "chat is a system resource"
     );
 }
 
