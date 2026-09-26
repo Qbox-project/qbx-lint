@@ -91,6 +91,8 @@ pub struct Manifest {
     pub lua54: Option<Entry>,
     pub scripts: Vec<ScriptEntry>,
     pub files: Vec<Entry>,
+    /// The `data_file` entries among `files`: game data that is found by asset name, not by path.
+    pub data_files: Vec<Entry>,
     pub dependencies: Vec<Entry>,
     pub ui_page: Option<Entry>,
     /// Files named by `map '...'`; mapmanager runs them in its own environment (`spawnpoint` etc.).
@@ -164,7 +166,9 @@ impl Manifest {
             "loadscreen" => self.files.extend(first),
             "data_file" => {
                 if let Some(paths) = arg_groups.get(1) {
-                    self.files.extend(collect_strings(paths));
+                    let paths = collect_strings(paths);
+                    self.data_files.extend(paths.iter().cloned());
+                    self.files.extend(paths);
                 }
             }
             _ => {}
@@ -248,6 +252,7 @@ mod tests {
         assert!(manifest.imports_path("@oxmysql/lib/MySQL.lua", Side::Server));
         assert!(!manifest.imports_path("@oxmysql/lib/MySQL.lua", Side::Client));
         assert_eq!(manifest.files.len(), 3);
+        assert_eq!(manifest.data_files.len(), 1);
         assert_eq!(manifest.dependencies.len(), 2);
     }
 
