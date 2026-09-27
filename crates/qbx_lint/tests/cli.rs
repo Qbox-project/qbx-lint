@@ -165,6 +165,46 @@ fn ignored_diagnostics_keep_the_files_in_the_analysis() {
 }
 
 #[test]
+fn configured_imports_define_globals_by_side_for_matching_resources() {
+    let fixture = Fixture::new();
+    let manifest = "fx_version 'cerulean'\ngame 'gta5'\n";
+    fixture.write("resources/lib/fxmanifest.lua", format!("{manifest}files {{ 'shared/**.lua', 'client/*.lua' }}\n"));
+    fixture.write("resources/lib/shared/deep/api.lua", "SharedApi = {}\n");
+    fixture.write("resources/lib/client/api.lua", "function ClientApi() end\n");
+    for resource in ["[lib]/shop", "other"] {
+        let scripts = "client_script 'client.lua'\nserver_script 'server.lua'\n";
+        fixture.write(&format!("resources/{resource}/fxmanifest.lua"), format!("{manifest}{scripts}"));
+        fixture.write(&format!("resources/{resource}/client.lua"), "print(SharedApi, ClientApi)\n");
+        fixture.write(&format!("resources/{resource}/server.lua"), "print(SharedApi, ClientApi)\n");
+    }
+    fixture.write(
+        "qbxlint.toml",
+        "[[overrides]]\nfiles = ['resources/[[]lib[]]/**']\n\
+         [overrides.imports]\nshared = ['@lib/shared/**.lua']\nclient = ['@lib/client/*.lua']\n",
+    );
+    let output = fixture.run(&["--format", "json", "--no-fail", "resources"]);
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let mut undefined: Vec<String> = Vec::new();
+    for file in json["files"].as_array().unwrap() {
+        for diagnostic in file["diagnostics"].as_array().unwrap().iter().filter(|d| d["code"] == "undefined-global") {
+            let name = diagnostic["message"].as_str().unwrap().split('\'').nth(1).unwrap();
+            undefined.push(format!("{} {name}", file["path"].as_str().unwrap().replace('\\', "/")));
+        }
+    }
+    undefined.sort();
+    assert_eq!(
+        undefined,
+        [
+            "resources/[lib]/shop/server.lua ClientApi",
+            "resources/other/client.lua ClientApi",
+            "resources/other/client.lua SharedApi",
+            "resources/other/server.lua ClientApi",
+            "resources/other/server.lua SharedApi",
+        ]
+    );
+}
+
+#[test]
 fn relative_and_absolute_config_paths_apply_identical_exclusions_and_overrides() {
     let fixture = Fixture::new();
     fixture.write(

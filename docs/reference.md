@@ -26,6 +26,9 @@ ignore_unused_prefix = "_"
 "fivem/citizen-prefix" = "warning"
 "qbox/prefer-cache" = "info"
 
+[imports]
+shared = ["@my_lib/shared/**.lua"]
+
 [[overrides]]
 files = ["tests/**", "**/*.spec.lua"]
 globals = ["describe", "it"]
@@ -43,9 +46,10 @@ quote_style = "preserve"
 | `exclude` | Additional glob patterns for paths to skip. Skipped files are not analyzed at all, so other files do not see their globals, exports or events. |
 | `ignore_diagnostics` | Gitignore-style patterns for paths that are analyzed but never reported. |
 | `globals` | Names supplied at runtime that the linter cannot discover. |
+| `imports` | Files every resource runs without an fxmanifest.lua entry, grouped as `shared`, `client` and `server`. See [Runtime imports](#runtime-imports). |
 | `ignore_unused_prefix` | Locals and arguments with this prefix are exempt from unused checks; defaults to `_`. |
 | `rules` | Per-rule levels: `off`, `hint`, `info`, `warning` (or `warn`), and `error`. |
-| `overrides` | Per-file globals and rule levels, selected by the `files` patterns. Later matching overrides take precedence for rule levels. |
+| `overrides` | Per-file globals and rule levels, selected by the `files` patterns, and imports for the resources whose `fxmanifest.lua` the patterns match. Later matching overrides take precedence for rule levels. |
 | `format` | Formatting options, shown with their defaults above. |
 
 The default exclusions include `node_modules`, `.git`, and `[builders]` directory contents.
@@ -137,12 +141,44 @@ paths and sides. The analysis combines:
 1. Lua and CfxLua runtime definitions from the [bundled stubs](../crates/qbx_fivem_data/stubs).
 2. Bundled FiveM native signatures and client/server metadata, including `N_0x...` names.
 3. Globals defined by scripts available on the file's side.
-4. Globals from manifest imports such as `@resource/file.lua`.
+4. Globals from manifest imports such as `@resource/file.lua`, and from configured `imports`.
 5. Configured `globals`.
 
 An import is read from a sibling resource when available. Otherwise, known imports supply their
 usual globals, such as `lib` and `cache` for `@ox_lib/init.lua`, `MySQL` for
 `@oxmysql/lib/MySQL.lua`, and `qbx` for `@qbx_core/modules/lib.lua`.
+
+### Runtime imports
+
+Some resources run code from another resource without an fxmanifest.lua entry, for example a
+loader that calls `load(LoadResourceFile(...))` for each file of a shared library. `imports` lists
+those files as `@resource/path` patterns, grouped by the side they run on, and each resource then
+sees their globals as if its manifest imported them:
+
+```toml
+[imports]
+shared = ["@my_lib/shared/**.lua"]
+client = ["@my_lib/client/**.lua"]
+server = ["@my_lib/server/**.lua", "@oxmysql/lib/MySQL.lua"]
+```
+
+Paths may use manifest globs, where `*` stays within a folder and `**` crosses folders. Top-level
+`imports` apply to every resource. To limit them to some resources, put them in an override: its
+imports apply to each resource whose `fxmanifest.lua` its `files` patterns match, since all
+scripts of a resource share their globals. Keeping those resources in one category folder makes
+the pattern short:
+
+```toml
+[[overrides]]
+files = ["resources/[[]my_lib[]]/**"]
+
+[overrides.imports]
+shared = ["@my_lib/shared/**.lua"]
+```
+
+In `files` patterns, `[[]` and `[]]` match literal brackets; `[my_lib]` alone would be a character
+class. Server scripts do not see the globals of `client` imports, and client scripts do not see
+those of `server` imports. Excluded files add nothing.
 
 Files not listed as manifest scripts, including modules loaded through `require` or `lib.load`,
 use globals from both sides. Files outside a resource are checked without a manifest environment.

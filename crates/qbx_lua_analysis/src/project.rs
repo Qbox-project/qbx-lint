@@ -7,8 +7,8 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use walkdir::WalkDir;
 
 use crate::config::Config;
-use crate::glob::manifest_glob_match;
-use crate::manifest::{Manifest, ScriptEntry, MANIFEST_FILE_NAMES};
+use crate::glob::{is_glob, manifest_glob_match};
+use crate::manifest::{Manifest, MANIFEST_FILE_NAMES};
 use crate::scope::{resolve, Resolution};
 use crate::summary::{summarize, FileSummary};
 
@@ -221,12 +221,39 @@ impl ResourceEnv {
     pub fn has_unresolved_import_for(&self, side: Option<Side>) -> Option<&UnresolvedImport> {
         self.unresolved_imports.iter().find(|import| side.is_none_or(|s| import.side.is_available_on(s)))
     }
+
+    /// Adds what an `@resource/path` import provides on `side`: the globals of the files it names,
+    /// and the usual globals of well-known imports such as `@ox_lib/init.lua`, which also cover
+    /// imports whose resource is not installed. Any other import that names no file is recorded as
+    /// unresolved.
+    pub fn add_import<'a>(&mut self, pattern: &str, side: Side, files: impl IntoIterator<Item = &'a FileSummary>) {
+        let mut resolved = false;
+        for summary in files {
+            self.add_summary(summary, Some(side));
+            resolved = true;
+        }
+        match known_import(pattern) {
+            Some(known) => known.globals.iter().for_each(|g| self.add_global(&SmolStr::new(g), Some(side))),
+            None if !resolved => self.unresolved_imports.push(UnresolvedImport { path: pattern.into(), side }),
+            None => {}
+        }
+    }
 }
 
-/// Finds sibling resources by name so `@resource/file.lua` imports can be followed.
+/// Every Lua import of a resource with the side it runs on: the `@resource/path` entries of its
+/// manifest, then the `imports` the configuration adds for files it loads at runtime.
+pub fn resource_imports<'a>(manifest: &'a Manifest, manifest_path: &Path, config: &'a Config) -> Vec<(&'a str, Side)> {
+    let own = manifest.imports().filter(|s| s.is_lua()).map(|s| (s.pattern.as_str(), s.side));
+    own.chain(config.imports_for(manifest_path)).collect()
+}
+
+/// Finds sibling resources by name so `@resource/file.lua` imports can be followed, and keeps
+/// what it read for them, since many resources often import the same files.
 #[derive(Default)]
 pub struct ResourceLocator {
     roots: FxHashMap<PathBuf, FxHashMap<String, PathBuf>>,
+    lua_files: FxHashMap<PathBuf, Vec<PathBuf>>,
+    summaries: FxHashMap<PathBuf, Option<FileSummary>>,
 }
 
 impl ResourceLocator {
@@ -262,36 +289,31 @@ impl ResourceLocator {
         });
         index.get(&name.to_lowercase()).cloned()
     }
+
+    /// The summaries of the readable files an `@resource/path` import names, where the path may be
+    /// a manifest glob, read from the resource of that name next to `from_resource`.
+    pub fn import_summaries(&mut self, from_resource: &Path, pattern: &str, config: &Config) -> Vec<&FileSummary> {
+        let Some((resource, file)) = split_import(pattern) else { return Vec::new() };
+        let Some(root) = self.locate(from_resource, resource) else { return Vec::new() };
+        let paths = if is_glob(file) {
+            let all = self.lua_files.entry(root.clone()).or_insert_with(|| lua_files_under(&root, config));
+            all.iter().filter(|path| manifest_glob_match(file, &relative_slash_path(&root, path))).cloned().collect()
+        } else {
+            vec![root.join(file)]
+        };
+        for path in &paths {
+            self.summaries.entry(path.clone()).or_insert_with(|| {
+                let source = read_source(path).ok()?;
+                let chunk = parse(&source);
+                Some(summarize(&chunk, &resolve(&chunk)))
+            });
+        }
+        paths.iter().filter_map(|path| self.summaries.get(path)?.as_ref()).collect()
+    }
 }
 
 pub fn split_import(pattern: &str) -> Option<(&str, &str)> {
     pattern.strip_prefix('@')?.split_once('/')
-}
-
-/// Adds the globals an `@resource/file.lua` import provides, reading the real file when the
-/// resource can be found on disk and falling back to the built-in table of well-known imports.
-pub fn add_import(env: &mut ResourceEnv, entry: &ScriptEntry, resource_root: &Path, locator: &mut ResourceLocator) {
-    if !entry.pattern.ends_with(".lua") {
-        return;
-    }
-    let side = Some(entry.side);
-    let on_disk = split_import(&entry.pattern).and_then(|(resource, file)| {
-        let root = locator.locate(resource_root, resource)?;
-        read_source(&root.join(file)).ok()
-    });
-    if let Some(source) = on_disk {
-        let chunk = parse(&source);
-        let resolution = resolve(&chunk);
-        env.add_summary(&summarize(&chunk, &resolution), side);
-        if let Some(known) = known_import(&entry.pattern) {
-            known.globals.iter().for_each(|g| env.add_global(&SmolStr::new(g), side));
-        }
-        return;
-    }
-    match known_import(&entry.pattern) {
-        Some(known) => known.globals.iter().for_each(|g| env.add_global(&SmolStr::new(g), side)),
-        None => env.unresolved_imports.push(UnresolvedImport { path: entry.pattern.clone(), side: entry.side }),
-    }
 }
 
 pub struct Resource {
@@ -325,8 +347,8 @@ impl Resource {
             env.add_summary(&file.summary, side);
             files.push(file);
         }
-        for entry in manifest.imports() {
-            add_import(&mut env, entry, root, locator);
+        for (pattern, side) in resource_imports(&manifest, &manifest_path, config) {
+            env.add_import(pattern, side, locator.import_summaries(root, pattern, config));
         }
         let name = root.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         Some(Self { name, root: root.to_path_buf(), manifest_path, manifest, files, env })
