@@ -12,6 +12,13 @@ globals = []
 # Locals and arguments starting with this prefix are never reported as unused.
 ignore_unused_prefix = "_"
 
+# Files resources run without an fxmanifest.lua entry, for example through load(LoadResourceFile(...)).
+# Put them in an [[overrides]] entry instead to limit them to some resources.
+[imports]
+shared = []
+client = []
+server = []
+
 [rules]
 # Levels: "off", "hint", "info", "warning", "error". Run `qbx-lint --list-rules` for all codes.
 "unused-argument" = "off"

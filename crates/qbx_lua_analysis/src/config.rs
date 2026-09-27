@@ -3,9 +3,11 @@ use std::path::{Path, PathBuf};
 
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
+use qbx_fivem_data::Side;
 use serde::Deserialize;
 
 use crate::diagnostic::Severity;
+use crate::project::split_import;
 use crate::{lua_ls_config, rules};
 
 pub const CONFIG_FILE_NAMES: &[&str] = &["qbxlint.toml", ".qbxlint.toml"];
@@ -42,7 +44,26 @@ struct RawConfig {
     ignore_unused_prefix: Option<String>,
     rules: BTreeMap<String, Level>,
     overrides: Vec<RawOverride>,
+    imports: Imports,
     format: qbx_lua_fmt::FormatOptions,
+}
+
+/// Files a resource runs without an fxmanifest.lua entry, for example through
+/// `load(LoadResourceFile(...))`, as `@resource/path` patterns grouped by the side they run on.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+struct Imports {
+    shared: Vec<String>,
+    client: Vec<String>,
+    server: Vec<String>,
+}
+
+impl Imports {
+    fn entries(&self) -> impl Iterator<Item = (&str, Side)> {
+        [(&self.shared, Side::Shared), (&self.client, Side::Client), (&self.server, Side::Server)]
+            .into_iter()
+            .flat_map(|(patterns, side)| patterns.iter().map(move |p| (p.as_str(), side)))
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -51,6 +72,7 @@ struct RawOverride {
     files: Vec<String>,
     globals: Vec<String>,
     rules: BTreeMap<String, Level>,
+    imports: Imports,
 }
 
 #[derive(Clone, Debug)]
@@ -58,6 +80,7 @@ struct Override {
     files: GlobSet,
     globals: Vec<String>,
     rules: BTreeMap<String, Level>,
+    imports: Imports,
 }
 
 #[derive(Clone, Debug)]
@@ -74,6 +97,7 @@ pub struct Config {
     pub notes: Vec<String>,
     rules: BTreeMap<String, Level>,
     overrides: Vec<Override>,
+    imports: Imports,
 }
 
 const DEFAULT_EXCLUDES: &[&str] = &["**/node_modules/**", "**/.git/**", "**/[[]builders[]]/**"];
@@ -178,6 +202,15 @@ impl Config {
                 return Err(format!("unknown rule '{code}'"));
             }
         }
+        let imports = std::iter::once(&raw.imports).chain(raw.overrides.iter().map(|o| &o.imports));
+        for (pattern, _) in imports.flat_map(Imports::entries) {
+            let lua = pattern.ends_with(".lua") || pattern.ends_with('*');
+            if split_import(pattern).is_none() || !lua {
+                return Err(format!(
+                    "import '{pattern}' must name Lua files as '@resource/path', such as '@lib/shared/**.lua'"
+                ));
+            }
+        }
         let exclude = build_globset(DEFAULT_EXCLUDES.iter().copied().chain(raw.exclude.iter().map(String::as_str)))?;
         let ignore_diagnostics = build_gitignore(&root, &raw.ignore_diagnostics)?;
         let overrides = raw
@@ -188,6 +221,7 @@ impl Config {
                     files: build_globset(o.files.iter().map(String::as_str))?,
                     globals: o.globals,
                     rules: o.rules,
+                    imports: o.imports,
                 })
             })
             .collect::<Result<Vec<_>, String>>()?;
@@ -202,6 +236,7 @@ impl Config {
             notes: Vec::new(),
             rules: raw.rules,
             overrides,
+            imports: raw.imports,
         })
     }
 
@@ -238,6 +273,15 @@ impl Config {
             globals.extend(entry.globals.iter().cloned());
         }
         FileConfig { rules, globals, ignore_unused_prefix: self.ignore_unused_prefix.clone() }
+    }
+
+    /// The configured `imports` of the resource whose manifest is `manifest_path`. The scripts of a
+    /// resource share their globals, so an override adds its imports to every resource whose
+    /// manifest its `files` patterns match.
+    pub fn imports_for(&self, manifest_path: &Path) -> Vec<(&str, Side)> {
+        let relative = self.relative(manifest_path);
+        let overrides = self.overrides.iter().filter(|o| o.files.is_match(relative)).map(|o| &o.imports);
+        std::iter::once(&self.imports).chain(overrides).flat_map(Imports::entries).collect()
     }
 }
 
@@ -337,6 +381,31 @@ mod tests {
         assert!(!ignored("client/main.lua"));
         assert!(!config.ignores_diagnostics(Path::new("/elsewhere/vendor/lib.lua")));
         assert!(!config.is_excluded(Path::new("/repo/vendor/lib.lua")));
+    }
+
+    #[test]
+    fn imports_apply_to_resources_whose_manifest_an_override_matches() {
+        let config = Config::parse(
+            r#"
+            [imports]
+            shared = ["@lib/shared/**.lua"]
+            [[overrides]]
+            files = ["resources/[[]lib[]]/**"]
+            imports = { client = ["@lib/client/*.lua"], server = ["@oxmysql/lib/MySQL.lua"] }
+            "#,
+            PathBuf::from("/repo"),
+        )
+        .unwrap();
+        let everywhere = [("@lib/shared/**.lua", Side::Shared)];
+        assert_eq!(config.imports_for(Path::new("/repo/resources/chat/fxmanifest.lua")), everywhere);
+        assert_eq!(
+            config.imports_for(Path::new("/repo/resources/[lib]/shop/fxmanifest.lua")),
+            [everywhere[0], ("@lib/client/*.lua", Side::Client), ("@oxmysql/lib/MySQL.lua", Side::Server)]
+        );
+        for pattern in ["lib/shared/a.lua", "@lib", "@lib/web/app.js"] {
+            let error = Config::parse(&format!("imports = {{ shared = ['{pattern}'] }}"), PathBuf::new()).unwrap_err();
+            assert!(error.contains(pattern), "{error}");
+        }
     }
 
     #[test]
