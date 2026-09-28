@@ -52,6 +52,12 @@ The server discovers `qbxlint.toml` from the first workspace root and its ancest
 request supplies indentation width and tabs/spaces. Diagnostic rule overrides from the client
 take precedence over the config file.
 
+On-type formatting triggers on a newline and only touches LuaCATS lines. Enter at the end of a
+`---@tag ...` line starts the new line with `---@` at the same indentation. Enter on a line that
+holds only `---@` removes it and leaves the cursor on that line. A bare `---` that the editor
+added to the new line counts as empty. Editors such as VS Code run it only with
+`editor.formatOnType` enabled; the VS Code extension enables it for Lua by default.
+
 Files matching the config's `exclude` patterns are never indexed or diagnosed, even while they are
 open. Files matching `ignore_diagnostics` are indexed like any other file, so definitions, hover
 and completion still reach their symbols, but the server publishes no diagnostics for them.

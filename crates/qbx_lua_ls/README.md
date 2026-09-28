@@ -20,6 +20,7 @@ Available features depend on the editor's LSP client.
 
 - Completion and hover for Lua symbols, FiveM natives, exports, events and callbacks.
 - Call snippets for functions that take a callback, with the function literal written out.
+- `---@` continuation on Enter inside LuaCATS annotation blocks, through on-type formatting.
 - Reference hovers for literal control IDs in PAD natives and ped configuration flags
   in `SetPedConfigFlag` / `GetPedConfigFlag`, using bundled Cfx documentation.
 - Optional read-only reference search/detail requests for native, control and ped flag browsers,

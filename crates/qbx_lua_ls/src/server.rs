@@ -13,8 +13,8 @@ use serde_json::{json, Value};
 
 use crate::document::Document;
 use crate::features::{
-    code_action, completion, definition, diagnostics, folding, hover, inlay, reference, references, semantic_tokens,
-    signature, symbols,
+    code_action, completion, definition, diagnostics, folding, hover, inlay, on_type, reference, references,
+    semantic_tokens, signature, symbols,
 };
 use crate::index::FileOrigin;
 use crate::workspace::{uri_to_path, Workspace};
@@ -119,6 +119,10 @@ pub fn capabilities() -> ServerCapabilities {
         folding_range_provider: Some(FoldingRangeProviderCapability::Simple(true)),
         inlay_hint_provider: Some(OneOf::Left(true)),
         document_formatting_provider: Some(OneOf::Left(true)),
+        document_on_type_formatting_provider: Some(DocumentOnTypeFormattingOptions {
+            first_trigger_character: "\n".into(),
+            more_trigger_character: None,
+        }),
         semantic_tokens_provider: Some(SemanticTokensServerCapabilities::SemanticTokensOptions(
             SemanticTokensOptions {
                 legend: semantic_tokens::legend(),
@@ -670,6 +674,11 @@ impl Server {
                     return reply(SemanticTokens::default());
                 }
                 reply(semantic_tokens::semantic_tokens(&self.ws, self.doc(&p.text_document.uri)?))
+            }
+            req::OnTypeFormatting::METHOD => {
+                let p: DocumentOnTypeFormattingParams = params(raw)?;
+                let doc = self.doc(&p.text_document_position.text_document.uri)?;
+                reply(on_type::on_type_formatting(doc, p.text_document_position.position, &p.ch))
             }
             req::Formatting::METHOD => {
                 let p: DocumentFormattingParams = params(raw)?;

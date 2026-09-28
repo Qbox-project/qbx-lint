@@ -2270,6 +2270,57 @@ fn capable_clients_keep_file_watches_and_annotation_and_manifest_snippets() {
 }
 
 #[test]
+fn enter_continues_and_clears_annotation_lines() {
+    let mut client = Client::start(fixture_root());
+    let mut edits = |text: &str, line: u32, character: u32, ch: &str| -> Vec<(u32, u32, u32, u32, String)> {
+        client.open_with(CLIENT, text);
+        let result = client.request(
+            "textDocument/onTypeFormatting",
+            json!({
+                "textDocument": { "uri": client.uri(CLIENT) },
+                "position": { "line": line, "character": character },
+                "ch": ch,
+                "options": { "tabSize": 4, "insertSpaces": true },
+            }),
+        );
+        let n = |v: &Value| v.as_u64().unwrap() as u32;
+        result
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| {
+                let (start, end) = (&e["range"]["start"], &e["range"]["end"]);
+                let text = e["newText"].as_str().unwrap().to_string();
+                (n(&start["line"]), n(&start["character"]), n(&end["line"]), n(&end["character"]), text)
+            })
+            .collect()
+    };
+
+    let continued = [(1, 0, 1, 0, "---@".to_string())];
+    assert_eq!(edits("---@param event string\n", 1, 0, "\n"), continued);
+    assert_eq!(edits("    ---@return boolean\n    ", 1, 4, "\n"), [(1, 0, 1, 4, "    ---@".to_string())]);
+    // Some editors continue `---` comments themselves.
+    assert_eq!(edits("---@param event string\n--- ", 1, 4, "\n"), [(1, 0, 1, 4, "---@".to_string())]);
+    // Enter on a bare `---@` clears it and stays on that line.
+    assert_eq!(edits("---@param a string\n    ---@\n    ", 2, 4, "\n"), [(1, 4, 2, 4, String::new())]);
+    assert_eq!(edits("---@param a string\r\n---@ \r\n", 2, 0, "\n"), [(1, 0, 2, 0, String::new())]);
+
+    for (text, line, character, ch) in [
+        // Enter in the middle of a line.
+        ("---@param a\n string", 1, 0, "\n"),
+        // Not an annotation.
+        ("-- note\n", 1, 0, "\n"),
+        ("--- A description.\n", 1, 0, "\n"),
+        // Inside a long string.
+        ("local s = [[\n---@param x\n\n]]", 2, 0, "\n"),
+        ("---@param event string\n", 1, 0, "}"),
+        ("---@param event string", 0, 22, "\n"),
+    ] {
+        assert!(edits(text, line, character, ch).is_empty(), "{text:?}");
+    }
+}
+
+#[test]
 fn knows_glm_and_keeps_native_handle_names() {
     let mut client = Client::start(fixture_root());
     let text = client.open(CLIENT);
