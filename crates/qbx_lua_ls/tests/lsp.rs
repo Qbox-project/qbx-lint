@@ -2132,6 +2132,80 @@ fn snippets_outrank_the_plain_name() {
 }
 
 #[test]
+fn call_snippets_write_out_the_callbacks_a_function_takes() {
+    let mut client = Client::start(fixture_root());
+    let defs = "\
+---@param event string
+---@param cb fun(...)
+---@param ... any
+function TriggerCallback(event, cb, ...) end
+
+---@param ms integer
+---@param cb fun(elapsed: number, late: boolean)
+---@param label? string
+local function after(ms, cb, label) end
+
+---@class Poller
+local Poller = {}
+
+---@param cb fun()
+function Poller:every(cb) end
+
+---@param name string
+function PlainGreeting(name) end
+";
+    // `|` marks the cursor.
+    let mut snippets = |typed: &str, label: &str| -> Vec<String> {
+        let text = format!("{defs}{}", typed.replace('|', ""));
+        let (line, column) = pos(&format!("{defs}{typed}"), "|", 0);
+        client.open_with(CLIENT, &text);
+        let result = client.request("textDocument/completion", client.position_params(CLIENT, line, column));
+        let items = result["items"].as_array().cloned().unwrap_or_default();
+        assert!(items.iter().any(|item| item["label"] == label), "{typed}: no plain {label} in {result}");
+        items
+            .iter()
+            .filter(|item| item["label"] == label && item["labelDetails"]["description"] == "snippet")
+            .map(|item| item["insertText"].as_str().unwrap_or_default().to_string())
+            .collect()
+    };
+
+    let cases = [
+        ("TriggerCall|", "TriggerCallback", "TriggerCallback('${1:event}', function(${2:...})\n\t$0\nend$3)"),
+        ("aft|", "after", "after(${1:ms}, function(${2:elapsed, late})\n\t$0\nend$3)"),
+        ("Poller:ev|", "every", "every(function()\n\t$0\nend)"),
+        // The runtime stub names the callback's parameters.
+        (
+            "RegisterNuiCall|",
+            "RegisterNuiCallback",
+            "RegisterNuiCallback('${1:name}', function(${2:data, cb})\n\t$0\nend)",
+        ),
+        // Native data only says `function`.
+        (
+            "AddStateBagChange|",
+            "AddStateBagChangeHandler",
+            "AddStateBagChangeHandler('${1:keyFilter}', '${2:bagFilter}', function(${3})\n\t$0\nend)",
+        ),
+    ];
+    for (typed, label, expected) in cases {
+        assert_eq!(snippets(typed, label), [expected], "{typed}");
+    }
+    for (typed, label) in [
+        // Only functions that take a callback get one.
+        ("PlainGree|", "PlainGreeting"),
+        // A `(` already follows the name.
+        ("TriggerCall|()", "TriggerCallback"),
+        ("function TriggerCall|", "TriggerCallback"),
+        // A dot call of a `:` method would have to pass `self` itself.
+        ("Poller.ev|", "every"),
+    ] {
+        assert!(snippets(typed, label).is_empty(), "{typed}");
+    }
+    // `CreateThread` keeps its hand-written snippet and gets no second one.
+    let thread = snippets("CreateThre|", "CreateThread");
+    assert!(thread.len() == 1 && thread[0].contains("while true do"), "{thread:?}");
+}
+
+#[test]
 fn minimal_clients_receive_plain_completions_and_no_dynamic_watch_registration() {
     for capabilities in [
         json!({}),
@@ -2146,6 +2220,7 @@ fn minimal_clients_receive_plain_completions_and_no_dynamic_watch_registration()
 
         let cases = [
             (CLIENT, "CreateThread", 0, 12, Some("CreateThread")),
+            (CLIENT, "RegisterNuiCall", 0, 15, Some("RegisterNuiCallback")),
             (CLIENT, "local Useful = 1\nUse", 1, 3, Some("Useful")),
             (CLIENT, "lib.onCa", 0, 8, None),
             (CLIENT, "oncache", 0, 7, None),
