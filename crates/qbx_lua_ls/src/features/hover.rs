@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use lsp_types::{Hover, HoverContents, Position};
 use qbx_fivem_data::{native, native_docs, Side};
 use qbx_lua_analysis::scope::{LocalId, LocalKind, Resolved};
@@ -173,9 +175,9 @@ fn alias_expansions(infer: &Infer, ty: &Type) -> Vec<(SmolStr, Type)> {
     out
 }
 
-fn local_hover(infer: &Infer, id: LocalId) -> String {
+fn local_hover(infer: &Infer, id: LocalId, called: Option<Type>) -> String {
     let local = infer.ctx.resolution.local(id);
-    let ty = infer.local_type(id);
+    let ty = called.unwrap_or_else(|| infer.local_type(id));
     let prefix = match local.kind {
         LocalKind::Param => "(parameter) ",
         LocalKind::ImplicitSelf => "(self) ",
@@ -216,7 +218,7 @@ fn native_hover(name: &str) -> Option<String> {
     Some(out)
 }
 
-fn global_hover(ws: &Workspace, infer: &Infer, name: &str) -> Option<String> {
+fn global_hover(ws: &Workspace, infer: &Infer, name: &str, called: Option<Type>) -> Option<String> {
     let symbols = ws.index.globals_named(name, infer.ctx.file);
     let preferred = symbols
         .iter()
@@ -229,7 +231,7 @@ fn global_hover(ws: &Workspace, infer: &Infer, name: &str) -> Option<String> {
         return (!ty.is_unknown()).then(|| lua_block(&describe_value(infer, "(global) ", name, &ty, None)));
     };
     // Going through `global_type` merges the table with members other files of the resource add.
-    let ty = match infer.global_type(name) {
+    let ty = match called.unwrap_or_else(|| infer.global_type(name)) {
         Type::Unknown => symbol.ty.clone(),
         resolved => resolved,
     };
@@ -319,6 +321,18 @@ fn type_hover(infer: &Infer, name: &str) -> Option<String> {
         out.push_str(doc);
     }
     Some(out)
+}
+
+/// The `@overload` picked by the call whose function name is under the cursor, so hovering
+/// `OnAction` in `OnAction('keyPressed', function(key) end)` shows the signature `key` is typed from.
+fn called_overload(infer: &Infer, doc: &Document, offset: u32) -> Option<Type> {
+    let site = locate(&doc.chunk, offset).callee?;
+    let (fun, _) = infer.callee_fun(site.base, site.method)?;
+    if fun.overloads.is_empty() {
+        return None;
+    }
+    let picked = infer.call_signature(&fun, site.args, site.method.is_some());
+    (!Arc::ptr_eq(&picked, &fun)).then_some(Type::Fun(picked))
 }
 
 pub(super) struct EventStringContext {
@@ -441,10 +455,14 @@ pub fn hover(ws: &Workspace, doc: &Document, position: Position) -> Option<Hover
         let Some(target) = target_at(infer, doc, offset) else {
             return super::native_argument::hover(ws, doc, offset).or_else(|| string_hover(ws, infer, doc, offset));
         };
+        let called = called_overload(infer, doc, offset);
         let text = match &target {
-            Target::Local(id, _) => Some(local_hover(infer, *id)),
-            Target::Global(name, _) => global_hover(ws, infer, name),
-            Target::Member { info, owner, .. } => Some(member_hover(infer, info, owner)),
+            Target::Local(id, _) => Some(local_hover(infer, *id, called)),
+            Target::Global(name, _) => global_hover(ws, infer, name, called),
+            Target::Member { info, owner, .. } => match called {
+                Some(ty) => Some(member_hover(infer, &MemberInfo { ty, ..info.clone() }, owner)),
+                None => Some(member_hover(infer, info, owner)),
+            },
             Target::Type(name, _) => type_hover(infer, name),
         };
         text.map(|t| (t, target.span()))

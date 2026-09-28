@@ -913,6 +913,29 @@ function OverloadedShop:price(id) end
 ---@return integer
 function OverloadedShop:stock(id) end
 
+---@alias MoveAction 'moved'|'dragged'
+
+---@param action string
+---@param handler fun(...)
+---@return number id
+---@overload fun(action: \"keyPressed\", handler: fun(key: string)) : number
+---@overload fun(action: MoveAction, handler: fun(x: number, y: number)): number
+---@overload fun(action: 'closed', handler: fun()): boolean
+local function onAction(action, handler) end
+
+---@overload fun(label: string, cb: fun(entry: string))
+---@overload fun(label: 'all', cb: fun(entry: table))
+---@param id integer
+---@param cb fun(entry: integer)
+local function listing(id, cb) end
+
+---@alias ShopAction 'opened'|'closed'|string
+
+---@param action ShopAction
+---@param handler fun(...)
+---@overload fun(action: 'opened', handler: fun(shopId: integer))
+local function onShop(action, handler) end
+
 local byId = find(1)
 local byName = find('x')
 local none = arity()
@@ -926,6 +949,14 @@ local stockViaDot = OverloadedShop.stock(OverloadedShop, 'bread')
 local priceViaDot = OverloadedShop.price(OverloadedShop, 'bread')
 local flat = vec(1, 2)
 local deep = vec(1, 2, 3)
+local pressedId = onAction('keyPressed', function(pressedKey) end)
+onAction('dragged', function(dragX, dragY) end)
+local closedId = onAction('closed', function() end)
+local scrolledId = onAction('scrolled', function(scrollArg) end)
+listing('all', function(allEntry) end)
+listing('shop', function(labelEntry) end)
+onShop('opened', function(openedShop) end)
+onShop('closed', function(closedShop) end)
 ";
     client.open_with(CLIENT, text);
     let cases = [
@@ -944,12 +975,106 @@ local deep = vec(1, 2, 3)
         // `vec(...)` takes any number of values, but its overloads name the exact ones.
         ("flat", "flat: vector2"),
         ("deep", "deep: vector3"),
+        // A literal argument picks the overload that lists it over the declared `action: string`.
+        ("pressedKey", "pressedKey: string"),
+        ("pressedId", "pressedId: number"),
+        ("dragY", "dragY: number"),
+        ("closedId", "closedId: boolean"),
+        // A literal no overload lists stays with the declared signature.
+        ("scrolledId", "scrolledId: number"),
+        ("scrollArg", "scrollArg: any"),
+        // Of two overloads that fit, the one listing the literal wins, though it comes later.
+        ("allEntry", "allEntry: table"),
+        ("labelEntry", "labelEntry: string"),
+        // An alias listing the literal among other values loses to the overload that takes only it.
+        ("openedShop", "openedShop: integer"),
+        ("closedShop", "closedShop: any"),
     ];
     for (needle, expected) in cases {
         let (l, c) = pos(text, needle, 0);
         let hover = client.hover_text(CLIENT, l, c);
         assert!(hover.contains(expected), "{needle}: expected {expected:?} in {hover}");
     }
+}
+
+#[test]
+fn calls_show_the_overload_they_pick() {
+    let mut client = Client::start(fixture_root());
+    let text = "---@param action string
+---@param handler fun(...)
+---@return number id
+---@overload fun(action: 'keyPressed', handler: fun(key: string)): number
+function OnInput(action, handler) end
+
+---@param action string
+---@overload fun(action: 'jobUpdated', job: table, oldJob?: table)
+function EmitInput(action, ...) end
+
+---@class InputShop
+local InputShop = {}
+
+---@overload fun(label: string): string
+---@param id integer
+---@return integer
+function InputShop:stock(id) end
+
+---@overload fun(name: string): string
+---@param id integer
+---@return integer
+local function findInput(id) end
+
+OnInput('keyPressed', function(key) end)
+OnInput('scrolled', function(delta) end)
+EmitInput('jobUpdated', {}, nil)
+local labelStock = InputShop:stock('bread')
+local named = findInput('x')
+local numbered = findInput(1)
+";
+    client.open_with(CLIENT, text);
+    let hovers = [
+        (
+            "OnInput('keyPressed'",
+            "(global) function OnInput(action: \"keyPressed\", handler: fun(key: string)): number",
+        ),
+        // A literal no overload lists keeps the declared signature, as does the declaration itself.
+        ("OnInput('scrolled'", "(global) function OnInput(action: string, handler: fun(...: any)): number"),
+        ("OnInput(action", "(global) function OnInput(action: string, handler: fun(...: any)): number"),
+        ("EmitInput('jobUpdated'", "(global) function EmitInput(action: \"jobUpdated\", job: table, oldJob?: table)"),
+        ("stock('bread')", "function InputShop:stock(label: string): string"),
+        ("findInput('x')", "local function findInput(name: string): string"),
+        ("findInput(1)", "local function findInput(id: integer): integer"),
+    ];
+    for (needle, expected) in hovers {
+        let (l, c) = pos(text, needle, 0);
+        let hover = client.hover_text(CLIENT, l, c);
+        assert!(hover.contains(expected), "{needle}: expected {expected:?} in {hover}");
+    }
+
+    // Signature help lists the declared signature and the overloads.
+    let (l, c) = pos(text, "OnInput('keyPressed', f", 22);
+    let result = client.request("textDocument/signatureHelp", client.position_params(CLIENT, l, c));
+    let labels: Vec<&str> =
+        result["signatures"].as_array().unwrap().iter().filter_map(|s| s["label"].as_str()).collect();
+    assert_eq!(
+        labels,
+        [
+            "OnInput(action: string, handler: fun(...: any)): number",
+            "OnInput(action: \"keyPressed\", handler: fun(key: string)): number"
+        ]
+    );
+    assert_eq!(result["activeSignature"], 1);
+    assert_eq!(result["activeParameter"], 1);
+
+    let (l, c) = pos(text, "OnInput('scrolled', f", 20);
+    let result = client.request("textDocument/signatureHelp", client.position_params(CLIENT, l, c));
+    assert_eq!(result["activeSignature"], 0);
+
+    let (l, c) = pos(text, "EmitInput('jobUpdated', {}, nil", 28);
+    let result = client.request("textDocument/signatureHelp", client.position_params(CLIENT, l, c));
+    assert_eq!(result["activeSignature"], 1);
+    assert_eq!(result["signatures"][1]["activeParameter"], 2);
+    // The declared signature passes the same argument to its `...`.
+    assert_eq!(result["signatures"][0]["activeParameter"], 1);
 }
 
 #[test]

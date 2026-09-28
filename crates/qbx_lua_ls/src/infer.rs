@@ -28,13 +28,22 @@ mod kind {
     pub const OTHER: u8 = 64;
 }
 
-/// How well a call's arguments line up with a signature.
+/// How well a call's arguments line up with a signature. Each fit counts the arguments that are one
+/// of the literal values their parameter lists, like `"keyPressed"` for `action: "keyPressed"`.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Fit {
     No,
     /// Only by passing some of them to its `...`.
-    ThroughVararg,
-    Exact,
+    ThroughVararg(Literals),
+    Exact(Literals),
+}
+
+/// The literal arguments a parameter lists, and of those the ones it takes alone: `"keyPressed"`
+/// is listed by `"keyPressed"|"keyReleased"|string` too, but only `action: "keyPressed"` pins it.
+#[derive(Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
+struct Literals {
+    listed: usize,
+    pinned: usize,
 }
 
 /// The arguments of one call, each inferred at most once while its signature is chosen and its
@@ -934,14 +943,41 @@ impl<'a> Infer<'a> {
         }
     }
 
-    /// The signature a call uses: the declared one, or else the first `@overload` that fits better,
-    /// so `fun(x, y, z): vector3` wins over a `vec(...)` that only takes three values through `...`.
+    /// The signature a call uses: the declared one, or else the `@overload` that fits best, so
+    /// `fun(x, y, z): vector3` wins over a `vec(...)` that only takes three values through `...`, and
+    /// `fun(action: "keyPressed")` wins over `fun(action: string)` for `"keyPressed"`, as well as over
+    /// an `action: Actions` whose alias lists `"keyPressed"` among others. Ties go to the declared
+    /// signature, then to the earliest overload.
     fn signature_for(&self, fun: &Arc<FunType>, args: &CallArgs, via_method: bool) -> Arc<FunType> {
         if fun.overloads.is_empty() {
             return fun.clone();
         }
-        let declared = self.fit(fun, args, via_method);
-        fun.overloads.iter().find(|overload| self.fit(overload, args, via_method) > declared).unwrap_or(fun).clone()
+        let signatures = signatures(fun);
+        signatures[self.best_fit(&signatures, args, via_method)].clone()
+    }
+
+    /// The signature a call picks, as `signature_for` does while inferring it.
+    pub fn call_signature(&self, fun: &Arc<FunType>, args: &[Expr], via_method: bool) -> Arc<FunType> {
+        self.signature_for(fun, &CallArgs::new(args), via_method)
+    }
+
+    /// The signatures a call can use, and the index of the one its arguments pick.
+    pub fn call_signatures(&self, fun: &Arc<FunType>, args: &[Expr], via_method: bool) -> (Vec<Arc<FunType>>, usize) {
+        let signatures = signatures(fun);
+        let best = if signatures.len() > 1 { self.best_fit(&signatures, &CallArgs::new(args), via_method) } else { 0 };
+        (signatures, best)
+    }
+
+    /// The index of the signature a call fits best, the earliest of those that fit equally well.
+    fn best_fit(&self, signatures: &[Arc<FunType>], args: &CallArgs, via_method: bool) -> usize {
+        let mut best = (Fit::No, 0);
+        for (i, signature) in signatures.iter().enumerate() {
+            let fit = self.fit(signature, args, via_method);
+            if i == 0 || fit > best.0 {
+                best = (fit, i);
+            }
+        }
+        best.1
     }
 
     fn fit(&self, fun: &FunType, call: &CallArgs, via_method: bool) -> Fit {
@@ -963,21 +999,93 @@ impl<'a> Infer<'a> {
         if missing_required && !open_ended {
             return Fit::No;
         }
-        let kinds_fit = fixed.iter().zip(args).enumerate().all(|(i, (param, arg))| {
+        let mut literals = Literals::default();
+        for (i, (param, arg)) in fixed.iter().zip(args).enumerate() {
             // A function literal is not inferred here: its parameters may be typed from this very call.
             let given = match arg.unparen().kind {
-                ExprKind::Function(_) => Some(kind::FUNCTION),
-                _ => self.value_kinds(fun, call.ty(self, skip_args + i), 0),
+                ExprKind::Function(_) => None,
+                _ => Some(call.ty(self, skip_args + i)),
             };
-            match (self.param_kinds(fun, param), given) {
-                (Some(wanted), Some(given)) => wanted & given != 0,
-                _ => true,
+            let given_kinds = given.map_or(Some(kind::FUNCTION), |ty| self.value_kinds(fun, ty, 0));
+            if let (Some(wanted), Some(given_kinds)) = (self.param_kinds(fun, param), given_kinds) {
+                if wanted & given_kinds == 0 {
+                    return Fit::No;
+                }
             }
-        });
-        match (kinds_fit, through_vararg) {
-            (false, _) => Fit::No,
-            (true, true) => Fit::ThroughVararg,
-            (true, false) => Fit::Exact,
+            let Some(given) = given else { continue };
+            match self.literal_fit(fun, &param.ty, given, 0) {
+                Some(true) => {
+                    literals.listed += 1;
+                    literals.pinned += usize::from(self.sole_literal(&param.ty, 0).as_ref() == Some(given));
+                }
+                Some(false) => return Fit::No,
+                None => {}
+            }
+        }
+        if through_vararg {
+            Fit::ThroughVararg(literals)
+        } else {
+            Fit::Exact(literals)
+        }
+    }
+
+    /// Whether a literal argument is one of the values its parameter lists, such as `"keyPressed"`
+    /// for `action: "keyPressed"|"keyReleased"`. `None` when the argument is no literal, or the
+    /// parameter also takes other values of its kind, as `string` or `any` does.
+    fn literal_fit(&self, fun: &FunType, param: &Type, arg: &Type, depth: u32) -> Option<bool> {
+        if depth > 8 || !matches!(arg, Type::StringLit(_) | Type::IntLit(_) | Type::BooleanLit(_)) {
+            return None;
+        }
+        let resolved;
+        let param = match param {
+            Type::Named(..) => {
+                resolved = self.resolve_alias(param);
+                &resolved
+            }
+            _ => param,
+        };
+        match param {
+            Type::StringLit(_) | Type::IntLit(_) | Type::BooleanLit(_) => Some(param == arg),
+            Type::Union(types) => {
+                let mut fit = Some(false);
+                for part in types {
+                    match self.literal_fit(fun, part, arg, depth + 1) {
+                        Some(true) => return Some(true),
+                        Some(false) => {}
+                        None => fit = None,
+                    }
+                }
+                fit
+            }
+            // The `nil` of `"all"|nil` takes a string no more than `"all"` does.
+            _ => {
+                let wanted = self.value_kinds(fun, param, depth + 1)?;
+                let given = self.value_kinds(fun, arg, 0)?;
+                (wanted & given == 0).then_some(false)
+            }
+        }
+    }
+
+    /// The one literal a parameter takes besides `nil`: `"keyPressed"` for `action: "keyPressed"`,
+    /// `key?: "E"` or an alias of either.
+    fn sole_literal(&self, param: &Type, depth: u32) -> Option<Type> {
+        if depth > 8 {
+            return None;
+        }
+        match param {
+            Type::StringLit(_) | Type::IntLit(_) | Type::BooleanLit(_) => Some(param.clone()),
+            Type::Named(..) => match self.resolve_alias(param) {
+                Type::Named(..) => None,
+                resolved => self.sole_literal(&resolved, depth + 1),
+            },
+            Type::Union(types) => {
+                let mut parts = types.iter().filter(|t| !matches!(t, Type::Nil));
+                match (parts.next(), parts.next()) {
+                    (Some(only), None) => self.sole_literal(only, depth + 1),
+                    _ => None,
+                }
+            }
+            _ => None,
         }
     }
 
@@ -1211,6 +1319,11 @@ fn member_from_symbol(file: FileId, symbol: &crate::index::Symbol) -> MemberInfo
         kind: symbol.kind,
         location: Some((file, symbol.range)),
     }
+}
+
+/// The declared signature of `fun`, then its `@overload`s.
+fn signatures(fun: &Arc<FunType>) -> Vec<Arc<FunType>> {
+    std::iter::once(fun).chain(&fun.overloads).cloned().collect()
 }
 
 fn substitute(ty: &Type, generics: &[(SmolStr, Type)]) -> Type {

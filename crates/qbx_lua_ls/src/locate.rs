@@ -85,6 +85,7 @@ struct Locator<'a> {
     offset: u32,
     member: Option<MemberAccess<'a>>,
     call: Option<CallSite<'a>>,
+    callee: Option<CallSite<'a>>,
     string: Option<(&'a Expr, Option<(&'a Expr, usize)>)>,
     func_name: Option<(&'a FuncName, usize)>,
     table_in_call: Option<(&'a Expr, usize, &'a Expr)>,
@@ -137,6 +138,8 @@ impl<'a> Visitor<'a> for Locator<'a> {
             ExprKind::MethodCall { base, method, args, args_span, .. } => {
                 if method.span.contains_inclusive(self.offset) {
                     self.member = Some(MemberAccess::Method { base, name: method });
+                    self.callee =
+                        Some(CallSite { call: expr, base, method: Some(method), args, args_span: *args_span });
                 }
                 if args_span.start < self.offset && self.offset <= args_span.end {
                     self.call = Some(CallSite { call: expr, base, method: Some(method), args, args_span: *args_span });
@@ -144,6 +147,15 @@ impl<'a> Visitor<'a> for Locator<'a> {
                 self.visit_args(expr, args);
             }
             ExprKind::Call { callee, args, args_span, .. } => {
+                let name = match &callee.kind {
+                    ExprKind::Name(name) | ExprKind::Field { name, .. } => Some(name.span),
+                    ExprKind::Index { index, .. } if index.as_string().is_some() => Some(index.span),
+                    _ => None,
+                };
+                if name.is_some_and(|name| name.contains_inclusive(self.offset)) {
+                    self.callee =
+                        Some(CallSite { call: expr, base: callee, method: None, args, args_span: *args_span });
+                }
                 if args_span.start < self.offset && self.offset <= args_span.end {
                     self.call = Some(CallSite { call: expr, base: callee, method: None, args, args_span: *args_span });
                 }
@@ -162,6 +174,9 @@ pub struct Located<'a> {
     pub member: Option<MemberAccess<'a>>,
     /// The innermost call whose argument list contains the cursor.
     pub call: Option<CallSite<'a>>,
+    /// The call whose function name is under the cursor: `f` of `f(x)`, `c` of `a.b.c(x)` or `m` of
+    /// `obj:m(x)`.
+    pub callee: Option<CallSite<'a>>,
     /// A string literal under the cursor, with the call and argument position it is passed to.
     pub string: Option<(&'a Expr, Option<(&'a Expr, usize)>)>,
     /// A segment of a `function a.b:c()` name under the cursor.
@@ -171,11 +186,13 @@ pub struct Located<'a> {
 }
 
 pub fn locate(chunk: &Chunk, offset: u32) -> Located<'_> {
-    let mut locator = Locator { offset, member: None, call: None, string: None, func_name: None, table_in_call: None };
+    let mut locator =
+        Locator { offset, member: None, call: None, callee: None, string: None, func_name: None, table_in_call: None };
     locator.visit_block(&chunk.block);
     Located {
         member: locator.member,
         call: locator.call,
+        callee: locator.callee,
         string: locator.string,
         func_name: locator.func_name,
         table_in_call: locator.table_in_call,

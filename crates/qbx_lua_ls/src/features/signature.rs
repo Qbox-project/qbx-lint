@@ -6,6 +6,7 @@ use super::event_call::event_call;
 use super::{markdown, with_infer};
 use crate::document::Document;
 use crate::locate::locate;
+use crate::types::FunType;
 use crate::workspace::Workspace;
 
 pub fn signature_help(ws: &Workspace, doc: &Document, position: Position) -> Option<SignatureHelp> {
@@ -21,19 +22,17 @@ pub fn signature_help(ws: &Workspace, doc: &Document, position: Position) -> Opt
             .flatten();
         let (native, member) = resolved.map(|(fun, member)| (Some(fun), member)).unwrap_or_default();
         let fun = event.as_ref().map(|e| e.fun.clone().into()).or(native)?;
-        let (skip_params, skip_args) = fun.call_offsets(site.method.is_some());
-        let params: Vec<_> = fun.params.iter().skip(skip_params).collect();
+        // A function lists its `@overload`s after the declared signature, with the one the call
+        // picks active. An event's handler is its only signature.
+        let (signatures, active_signature) = match &event {
+            Some(_) => (vec![fun], 0),
+            None => infer.call_signatures(&fun, site.args, site.method.is_some()),
+        };
 
         let name = match (site.method, &site.base.kind) {
             (Some(method), _) => method.text.to_string(),
             (None, _) => site.base.dotted_path().unwrap_or_default(),
         };
-        let labels: Vec<String> = params.iter().map(|p| p.to_string()).collect();
-        let mut label = format!("{name}({})", labels.join(", "));
-        if !fun.returns.is_empty() {
-            let returns: Vec<String> = fun.returns.iter().map(|r| r.to_string()).collect();
-            label.push_str(&format!(": {}", returns.join(", ")));
-        }
 
         let mut documentation = member.and_then(|m| m.doc).map(|d| d.to_string());
         if documentation.is_none() {
@@ -58,25 +57,47 @@ pub fn signature_help(ws: &Workspace, doc: &Document, position: Position) -> Opt
             }));
         }
 
-        let mut active = site.active_argument(&doc.text, offset).saturating_sub(skip_args);
-        let is_variadic = params.last().is_some_and(|p| p.name == "...");
-        if active >= params.len() && is_variadic {
-            active = params.len() - 1;
-        }
-        Some(SignatureHelp {
-            signatures: vec![SignatureInformation {
-                label,
-                documentation: documentation.map(|d| Documentation::MarkupContent(markdown(d))),
-                parameters: Some(
-                    labels
-                        .into_iter()
-                        .map(|l| ParameterInformation { label: ParameterLabel::Simple(l), documentation: None })
-                        .collect(),
-                ),
-                active_parameter: Some(active as u32),
-            }],
-            active_signature: Some(0),
-            active_parameter: Some(active as u32),
-        })
+        let argument = site.active_argument(&doc.text, offset);
+        let signatures: Vec<SignatureInformation> = signatures
+            .iter()
+            .map(|fun| information(fun, &name, argument, site.method.is_some(), documentation.as_deref()))
+            .collect();
+        let active_parameter = signatures[active_signature].active_parameter;
+        Some(SignatureHelp { signatures, active_signature: Some(active_signature as u32), active_parameter })
     })
+}
+
+/// One signature of a call, with the parameter that the argument at index `argument` is passed to.
+fn information(
+    fun: &FunType,
+    name: &str,
+    argument: usize,
+    via_method: bool,
+    documentation: Option<&str>,
+) -> SignatureInformation {
+    let (skip_params, skip_args) = fun.call_offsets(via_method);
+    let params: Vec<_> = fun.params.iter().skip(skip_params).collect();
+    let labels: Vec<String> = params.iter().map(|p| p.to_string()).collect();
+    let mut label = format!("{name}({})", labels.join(", "));
+    if !fun.returns.is_empty() {
+        let returns: Vec<String> = fun.returns.iter().map(|r| r.to_string()).collect();
+        label.push_str(&format!(": {}", returns.join(", ")));
+    }
+
+    let mut active = argument.saturating_sub(skip_args);
+    let is_variadic = params.last().is_some_and(|p| p.name == "...");
+    if active >= params.len() && is_variadic {
+        active = params.len() - 1;
+    }
+    SignatureInformation {
+        label,
+        documentation: documentation.map(|d| Documentation::MarkupContent(markdown(d.to_string()))),
+        parameters: Some(
+            labels
+                .into_iter()
+                .map(|l| ParameterInformation { label: ParameterLabel::Simple(l), documentation: None })
+                .collect(),
+        ),
+        active_parameter: Some(active as u32),
+    }
 }
