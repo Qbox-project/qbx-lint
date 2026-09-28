@@ -1,0 +1,10 @@
+[package]
+name = "qbx_luacats"
+description = "LuaCATS annotation and type parser shared by qbx-lint and qbx-lua-ls"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+smol_str.workspace = true

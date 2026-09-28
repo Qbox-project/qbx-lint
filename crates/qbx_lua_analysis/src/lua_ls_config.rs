@@ -28,6 +28,7 @@ const EQUIVALENT_CODES: &[&str] = &[
     "empty-block",
     "unbalanced-assignments",
     "duplicate-index",
+    "missing-parameter",
 ];
 
 #[derive(Debug, Default)]
@@ -255,9 +256,12 @@ mod tests {
     #[test]
     fn maps_only_codes_that_mean_the_same() {
         let settings = parse_luals(
-            r#"{ "diagnostics.disable": ["undefined-field", "deprecated", "syntax-error", "undefined-global"] }"#,
+            r#"{ "diagnostics.disable": ["undefined-field", "deprecated", "syntax-error", "undefined-global", "missing-parameter"] }"#,
         );
-        assert_eq!(settings.rules, [("undefined-global".to_string(), Level::Off)]);
+        assert_eq!(
+            settings.rules,
+            [("undefined-global".to_string(), Level::Off), ("missing-parameter".to_string(), Level::Off)]
+        );
         let targets = EQUIVALENT_CODES.iter().chain(ALIASES.iter().flat_map(|(_, codes)| codes.iter()));
         for code in targets {
             assert!(crate::rules::find(code).is_some(), "{code} is not a rule");

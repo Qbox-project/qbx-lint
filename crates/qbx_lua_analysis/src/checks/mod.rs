@@ -1,3 +1,4 @@
+mod arity;
 mod crossfile;
 mod fivem;
 mod flow;
@@ -106,6 +107,7 @@ pub fn check_file(input: &FileInput) -> Vec<Diagnostic> {
     locals::check(input, &mut sink);
     flow::check(input, &mut sink);
     globals::check(input, &mut sink);
+    arity::check(input, &mut sink);
     fivem::check(input, &mut sink);
     crossfile::check(input, &mut sink);
     security::check(input, &mut sink);

@@ -13,6 +13,7 @@ path = "src/main.rs"
 [dependencies]
 qbx_lua_syntax.workspace = true
 qbx_lua_fmt.workspace = true
+qbx_luacats.workspace = true
 qbx_lua_analysis = { workspace = true, features = ["docs"] }
 qbx_fivem_data = { workspace = true, features = ["docs"] }
 lsp-server = "0.7"

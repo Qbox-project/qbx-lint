@@ -3,8 +3,8 @@
 ## Set up
 
 Install stable Rust and clone [qbx-lua](https://github.com/Qbox-project/qbx-lua). The language
-server is a member of the same Cargo workspace as the parser, formatter, analysis and FiveM data
-crates:
+server is a member of the same Cargo workspace as the parser, formatter, LuaCATS, analysis and
+FiveM data crates:
 
 ```text
 qbx-lua/
@@ -52,7 +52,7 @@ Windows. Run the command in a shell that supports input redirection.
 
 | Location | Purpose |
 | --- | --- |
-| `src/types.rs`, `src/luacats.rs` | Type representation and LuaCATS annotations. |
+| `qbx_luacats` (workspace crate) | Type representation and LuaCATS annotations, re-exported as `crate::types` and `crate::luacats`. |
 | `src/indexer.rs`, `src/index.rs` | File summaries, symbols and visibility between resources. |
 | `src/infer.rs` | Type inference used by editor features. |
 | `src/workspace.rs` | Resource discovery, manifests, dependencies and index refreshes. |

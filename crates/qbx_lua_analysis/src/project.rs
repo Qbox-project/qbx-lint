@@ -1,8 +1,10 @@
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use qbx_fivem_data::{known_import, Side};
 use qbx_lua_syntax::ast::Chunk;
 use qbx_lua_syntax::{parse, SmolStr};
+use qbx_luacats::types::{FunType, Type};
 use rustc_hash::{FxHashMap, FxHashSet};
 use walkdir::WalkDir;
 
@@ -143,7 +145,7 @@ impl ParsedFile {
     pub fn new(path: PathBuf, relative: String, source: String, side: Option<Side>) -> Self {
         let chunk = parse(&source);
         let resolution = resolve(&chunk);
-        let summary = summarize(&chunk, &resolution);
+        let summary = summarize(&source, &chunk, &resolution);
         Self { path, relative, source, chunk, resolution, summary, side }
     }
 }
@@ -153,6 +155,9 @@ pub struct UnresolvedImport {
     pub path: SmolStr,
     pub side: Side,
 }
+
+/// The side of the file that assigns a function, and its signature as in `FunctionDef`.
+type SidedSignature = (Option<Side>, Option<Arc<FunType>>);
 
 /// The globals visible to scripts of one resource, split by the side they are loaded on.
 #[derive(Clone, Debug, Default)]
@@ -165,6 +170,9 @@ pub struct ResourceEnv {
     module_imports: FxHashSet<SmolStr>,
     /// Manifest and configured imports, with the side they run on.
     imports: Vec<(SmolStr, Side)>,
+    /// Every assignment to a global or global table field by dotted path, with the side of its file.
+    functions: FxHashMap<SmolStr, Vec<SidedSignature>>,
+    aliases: FxHashMap<SmolStr, Type>,
     pub unresolved_imports: Vec<UnresolvedImport>,
     /// Part of the resource is encrypted or unreadable, so neither what it defines nor what it
     /// uses is known; rules that need the whole picture stay quiet.
@@ -195,6 +203,36 @@ impl ResourceEnv {
         }
         self.field_defs.extend(summary.global_field_defs.iter().cloned());
         self.module_imports.extend(summary.module_imports.iter().cloned());
+        for def in &summary.functions {
+            self.functions.entry(def.path.clone()).or_default().push((side, def.signature.clone()));
+        }
+        for (name, ty) in &summary.aliases {
+            let merged = match self.aliases.remove(name) {
+                Some(existing) => Type::union([existing, ty.clone()]),
+                None => ty.clone(),
+            };
+            self.aliases.insert(name.clone(), merged);
+        }
+    }
+
+    /// The signatures of the assignments to the global or global table field at `path` that code on
+    /// `side` can see. `None` stands for a value whose parameters are unknown.
+    pub fn function_defs(&self, path: &str, side: Option<Side>) -> impl Iterator<Item = Option<&Arc<FunType>>> {
+        let visible = move |def: Option<Side>| match side {
+            Some(Side::Client) => def != Some(Side::Server),
+            Some(Side::Server) => def != Some(Side::Client),
+            _ => true,
+        };
+        self.functions
+            .get(path)
+            .into_iter()
+            .flatten()
+            .filter(move |(def, _)| visible(*def))
+            .map(|(_, sig)| sig.as_ref())
+    }
+
+    pub fn alias(&self, name: &str) -> Option<&Type> {
+        self.aliases.get(name)
     }
 
     /// Whether a script of the resource loads `@resource/file.lua` itself at runtime, so the
@@ -319,7 +357,7 @@ impl ResourceLocator {
             self.summaries.entry(path.clone()).or_insert_with(|| {
                 let source = read_source(path).ok()?;
                 let chunk = parse(&source);
-                Some(summarize(&chunk, &resolve(&chunk)))
+                Some(summarize(&source, &chunk, &resolve(&chunk)))
             });
         }
         paths.iter().filter_map(|path| self.summaries.get(path)?.as_ref()).collect()

@@ -76,7 +76,7 @@ pub fn index_file(
         indexer.module_return(exprs);
     }
     let mut out = indexer.out;
-    out.summary = summarize(chunk, resolution);
+    out.summary = summarize(source, chunk, resolution);
     out
 }
 

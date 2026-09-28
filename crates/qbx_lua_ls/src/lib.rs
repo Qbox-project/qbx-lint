@@ -5,8 +5,8 @@ pub mod index;
 pub mod indexer;
 pub mod infer;
 pub mod locate;
-pub mod luacats;
 mod nui_callbacks;
 pub mod server;
-pub mod types;
 pub mod workspace;
+
+pub use qbx_luacats::{luacats, types};

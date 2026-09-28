@@ -51,7 +51,7 @@ struct CrossFile<'a, 'b> {
     regions: SideRegions,
 }
 
-fn passed_count(args: &[Expr], skip: usize) -> Option<usize> {
+pub(super) fn passed_count(args: &[Expr], skip: usize) -> Option<usize> {
     let payload = args.get(skip..)?;
     match payload.last() {
         Some(last) if last.is_multi_value() => None,
@@ -59,7 +59,7 @@ fn passed_count(args: &[Expr], skip: usize) -> Option<usize> {
     }
 }
 
-fn plural(count: usize) -> &'static str {
+pub(super) fn plural(count: usize) -> &'static str {
     if count == 1 {
         ""
     } else {

@@ -563,6 +563,7 @@ dependencies = [
  "qbx_fivem_data",
  "qbx_lua_fmt",
  "qbx_lua_syntax",
+ "qbx_luacats",
  "rayon",
  "rustc-hash",
  "serde",
@@ -591,6 +592,7 @@ dependencies = [
  "qbx_lua_analysis",
  "qbx_lua_fmt",
  "qbx_lua_syntax",
+ "qbx_luacats",
  "rustc-hash",
  "serde",
  "serde_json",
@@ -600,6 +602,13 @@ dependencies = [
 
 [[package]]
 name = "qbx_lua_syntax"
+version = "1.0.6"
+dependencies = [
+ "smol_str",
+]
+
+[[package]]
+name = "qbx_luacats"
 version = "1.0.6"
 dependencies = [
  "smol_str",

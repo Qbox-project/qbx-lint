@@ -25,6 +25,7 @@ client/main.lua:28:5 error const-reassign
 client/main.lua:31:9 warning unreachable-code
 client/main.lua:33:10 error undefined-label
 client/main.lua:34:5 warning unreachable-code
+client/main.lua:37:1 warning missing-parameter
 fxmanifest.lua:8:1 warning manifest/unknown-directive
 fxmanifest.lua:14:15 warning manifest/missing-file
 server/main.lua:3:11 warning fivem/source-after-yield

@@ -20,7 +20,7 @@ fn codes_in_project(
 ) -> Vec<&'static str> {
     let chunk = parse(source);
     let resolution = resolve(&chunk);
-    let summary = summarize(&chunk, &resolution);
+    let summary = summarize(source, &chunk, &resolution);
     let mut crossrefs = CrossRefs::default();
     crossrefs.collect(&chunk, side, None);
     for (other_side, other) in others {
@@ -51,7 +51,7 @@ fn project(source: &str, side: Side, others: &[(Option<Side>, &str)]) -> Vec<&'s
 fn resource_project(source: &str, side: Side, own: &str, others: &[(&str, Option<Side>, &str)]) -> Vec<&'static str> {
     let chunk = parse(source);
     let resolution = resolve(&chunk);
-    let summary = summarize(&chunk, &resolution);
+    let summary = summarize(source, &chunk, &resolution);
     let mut crossrefs = CrossRefs::default();
     crossrefs.collect(&chunk, Some(side), Some(own));
     for (resource, other_side, other) in others {
@@ -205,7 +205,7 @@ fn modules_loaded_at_runtime_provide_their_globals() {
     fn codes(source: &str) -> Vec<&'static str> {
         let chunk = parse(source);
         let resolution = resolve(&chunk);
-        let summary = summarize(&chunk, &resolution);
+        let summary = summarize(source, &chunk, &resolution);
         let mut env = qbx_lua_analysis::project::ResourceEnv::default();
         env.add_summary(&summary, Some(Side::Client));
         let manifest = qbx_lua_analysis::manifest::Manifest::default();
@@ -420,7 +420,7 @@ fn hash_fixes(source: &str) -> (String, usize) {
     let chunk = parse(source);
     assert!(chunk.errors.is_empty(), "invalid test input: {source}");
     let resolution = resolve(&chunk);
-    let summary = summarize(&chunk, &resolution);
+    let summary = summarize(source, &chunk, &resolution);
     let config = FileConfig::default();
     let diagnostics = check_file(&FileInput {
         source,
@@ -491,5 +491,159 @@ fn source_tracking_respects_handlers_and_locals() {
             config
         }),
         ["fivem/source-after-yield"]
+    );
+}
+
+/// An escrow-encrypted script, as it starts on disk.
+const OPAQUE: &str = "FXAP";
+
+/// The `missing-parameter` messages for `source`, a `side` script of a resource whose other scripts
+/// are `others` (side, source).
+fn missing_parameters(source: &str, side: Option<Side>, others: &[(Option<Side>, &str)]) -> Vec<String> {
+    let chunk = parse(source);
+    let resolution = resolve(&chunk);
+    let summary = summarize(source, &chunk, &resolution);
+    let mut env = qbx_lua_analysis::project::ResourceEnv::default();
+    env.add_summary(&summary, side);
+    for (other_side, other) in others {
+        if qbx_lua_analysis::project::is_not_source(other.as_bytes()) {
+            env.opaque = true;
+            continue;
+        }
+        let chunk = parse(other);
+        env.add_summary(&summarize(other, &chunk, &resolve(&chunk)), *other_side);
+    }
+    let manifest = qbx_lua_analysis::manifest::Manifest::default();
+    let resource = qbx_lua_analysis::ResourceInput {
+        name: "res",
+        env: &env,
+        manifest: &manifest,
+        started_before: None,
+        installed: None,
+    };
+    let config = FileConfig::default();
+    let input = FileInput {
+        source,
+        chunk: &chunk,
+        resolution: &resolution,
+        summary: &summary,
+        config: &config,
+        side,
+        resource: Some(resource),
+        crossrefs: None,
+        locale: None,
+        relative_path: "",
+    };
+    check_file(&input).into_iter().filter(|d| d.code == "missing-parameter").map(|d| d.message).collect()
+}
+
+#[test]
+fn documented_parameters_need_an_argument() {
+    let missing = |source: &str| missing_parameters(source, None, &[]);
+    let bezier = "---@param handler fun(progress: number)\n---@param time number\n---@param transition? \"ease\"|\"linear\" | { p1: vector2, p2: vector2 }\nfunction BezierAnimate(handler, time, transition) end\n";
+    assert_eq!(
+        missing(&format!("{bezier}BezierAnimate(function(progress) end)")),
+        ["'BezierAnimate' is called with 1 argument, but needs 2; 'time' (number) will be nil"]
+    );
+    assert!(missing(&format!("{bezier}BezierAnimate(function(progress) end, 500)")).is_empty());
+
+    let opt_first = "---@param a? string\n---@param b number\nlocal function f(a, b) end\n";
+    assert_eq!(
+        missing(&format!("{opt_first}f()")),
+        ["'f' is called with 0 arguments, but needs 2; 'b' (number) will be nil"],
+        "an optional parameter before a required one still takes a position"
+    );
+    assert!(missing(&format!("{opt_first}f(nil, 1)")).is_empty());
+
+    // The cases below behave as in LuaLS: nothing that may be nil or is left undocumented is required.
+    for source in [
+        "function Plain(a, b) end\nPlain(1)",
+        "---@param a string\n---@param b any\n---@param c string|nil\nlocal function f(a, b, c) end\nf('x')",
+        "---@param a string\n---@param b number\n---@overload fun(a: string)\nlocal function f(a, b) end\nf('x')",
+        "---@alias MaybeNum number|nil\n---@param a string\n---@param b MaybeNum\nlocal function f(a, b) end\nf('x')",
+        "---@param a string\n---@param b number\nlocal function f(a, b) end\nlocal function two() return 1, 2 end\nf(two())",
+        "---@param a string\n---@param b number\nlocal function f(a, b) end\nlocal function g(...) f(...) end",
+        "---@param a string\nlocal function f(a) end\n---@diagnostic disable-next-line: missing-parameter\nf()",
+    ] {
+        assert_eq!(missing(source), Vec::<String>::new(), "{source}");
+    }
+}
+
+#[test]
+fn methods_count_self_the_way_they_are_called() {
+    let missing = |call: &str| {
+        missing_parameters(&format!("local M = {{}}\n---@param x number\nfunction M:m(x) end\n{call}"), None, &[])
+    };
+    assert_eq!(missing("M:m()"), ["'M:m' is called with 0 arguments, but needs 1; 'x' (number) will be nil"]);
+    assert_eq!(
+        missing("M.m()"),
+        ["'M.m' is called with 0 arguments, but needs 2; 'self' (call it with ':') will be nil"]
+    );
+    assert!(missing("M.m(M, 1)").is_empty());
+    assert!(missing("M:m(1)").is_empty());
+
+    let locale = "Locale = {}\n---@param opts table\nfunction Locale.new(_, opts) end\n";
+    assert!(
+        missing_parameters(&format!("{locale}Lang = Locale:new({{}})"), None, &[]).is_empty(),
+        "the receiver fills '_'"
+    );
+}
+
+#[test]
+fn global_functions_are_checked_on_the_side_that_calls_them() {
+    let client = (Some(Side::Client), "---@param message string\nfunction Notify(message) end");
+    let server = (
+        Some(Side::Server),
+        "---@param source integer\n---@param message string\nfunction Notify(source, message) end",
+    );
+    let both = [client, server];
+    assert!(missing_parameters("Notify('hi')", Some(Side::Client), &both).is_empty());
+    assert_eq!(
+        missing_parameters("Notify('hi')", Some(Side::Server), &both),
+        ["'Notify' is called with 1 argument, but needs 2; 'message' (string) will be nil"]
+    );
+    assert!(
+        missing_parameters("Notify('hi')", Some(Side::Shared), &both).is_empty(),
+        "shared code may reach the client definition"
+    );
+    assert_eq!(
+        missing_parameters("if IsDuplicityVersion() then Notify('hi') end", Some(Side::Shared), &both).len(),
+        1,
+        "only the server definition runs inside an IsDuplicityVersion branch"
+    );
+
+    let utils = (
+        Some(Side::Shared),
+        "Utils = {}\n---@param a number\n---@param b number\nfunction Utils.add(a, b) return a + b end",
+    );
+    assert_eq!(missing_parameters("Utils.add(1)", Some(Side::Client), &[utils]).len(), 1);
+    assert!(missing_parameters("Utils.other(1)", Some(Side::Client), &[utils]).is_empty());
+    assert!(
+        missing_parameters("Notify('hi')", Some(Side::Server), &[client, server, (Some(Side::Server), OPAQUE)])
+            .is_empty(),
+        "an encrypted script may define Notify differently"
+    );
+    assert_eq!(missing_parameters("---@param a number\nfunction Loose(a) end\nLoose()", None, &[]).len(), 1);
+}
+
+#[test]
+fn values_the_linter_cannot_follow_are_not_checked() {
+    let missing = |source: &str| missing_parameters(source, Some(Side::Client), &[]);
+    for source in [
+        // Another definition of the name, which may be the one that runs.
+        "---@param a number\nfunction F(a) end\nF = print\nF()",
+        "---@param a number\nlocal function f(a) end\nf = print\nf()",
+        "local t = {}\n---@param a number\nfunction t.f(a) end\nt.f = nil\nt.f()",
+        // A parameter holds whatever the caller passed.
+        "---@param cb fun(a: number)\nlocal function run(cb) cb() end",
+        // Natives and runtime functions are not defined by the resource.
+        "SetEntityCoords(PlayerPedId(), 1.0, 2.0, 3.0)",
+    ] {
+        assert_eq!(missing(source), Vec::<String>::new(), "{source}");
+    }
+    assert_eq!(
+        missing("local f\n---@param a number\nfunction f(a) end\nf()").len(),
+        1,
+        "a forward-declared local takes the function assigned to it"
     );
 }

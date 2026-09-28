@@ -3,6 +3,8 @@ SharedConfig = {
     .enabled,
 }
 
-function SharedHelper(value)
-    return value?.nested?.field
+---@param value table
+---@param fallback? string
+function SharedHelper(value, fallback)
+    return value?.nested?.field or fallback
 end
