@@ -8,6 +8,7 @@ use qbx_lua_analysis::summary::FileSummary;
 use rustc_hash::FxHashMap;
 use smol_str::SmolStr;
 
+use crate::luacats::applies_on;
 use crate::types::{FunType, Type};
 
 pub type FileId = u32;
@@ -57,10 +58,14 @@ pub struct ClassDef {
     pub name: SmolStr,
     pub parents: Vec<SmolStr>,
     pub fields: Vec<Symbol>,
+    /// The side each of `fields` is scoped to by `@field (server) name type`.
+    pub field_sides: Vec<Option<Side>>,
     pub index: Option<(Type, Type)>,
     pub call: Option<Arc<FunType>>,
     pub doc: Option<Arc<str>>,
     pub range: Range,
+    /// The side of `@class (server) Name`.
+    pub side: Option<Side>,
 }
 
 #[derive(Clone, Debug)]
@@ -69,6 +74,8 @@ pub struct AliasDef {
     pub ty: Type,
     pub doc: Option<Arc<str>>,
     pub range: Range,
+    /// The side of `@alias (server) Name` or `@enum (server) Name`.
+    pub side: Option<Side>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -418,24 +425,34 @@ impl Index {
         self.members.contains_key(owner)
     }
 
-    pub fn class(&self, name: &str) -> Option<(FileId, &ClassDef)> {
-        let (file, i) = *self.classes.get(name)?.first()?;
-        Some((file, self.file(file)?.index.classes.get(i as usize)?))
+    fn class_slots(&self, name: &str) -> impl Iterator<Item = (FileId, &ClassDef)> {
+        let slots = self.classes.get(name).into_iter().flatten();
+        slots.filter_map(|(f, i)| Some((*f, self.file(*f)?.index.classes.get(*i as usize)?)))
     }
 
+    fn alias_slots(&self, name: &str) -> impl Iterator<Item = (FileId, &AliasDef)> {
+        let slots = self.aliases.get(name).into_iter().flatten();
+        slots.filter_map(|(f, i)| Some((*f, self.file(*f)?.index.aliases.get(*i as usize)?)))
+    }
+
+    /// The first declaration of the class `name` that applies to code on `side`.
+    pub fn class(&self, name: &str, side: Option<Side>) -> Option<(FileId, &ClassDef)> {
+        self.class_slots(name).find(|(_, class)| applies_on(class.side, side))
+    }
+
+    /// Every declaration of the class `name`, whatever side it is scoped to.
     pub fn class_defs(&self, name: &str) -> Vec<(FileId, &ClassDef)> {
-        let Some(slots) = self.classes.get(name) else { return Vec::new() };
-        slots.iter().filter_map(|(f, i)| Some((*f, self.file(*f)?.index.classes.get(*i as usize)?))).collect()
+        self.class_slots(name).collect()
     }
 
-    pub fn alias(&self, name: &str) -> Option<(FileId, &AliasDef)> {
-        let (file, i) = *self.aliases.get(name)?.first()?;
-        Some((file, self.file(file)?.index.aliases.get(i as usize)?))
+    /// The first declaration of the alias or enum `name` that applies to code on `side`.
+    pub fn alias(&self, name: &str, side: Option<Side>) -> Option<(FileId, &AliasDef)> {
+        self.alias_slots(name).find(|(_, alias)| applies_on(alias.side, side))
     }
 
+    /// Every declaration of the alias or enum `name`, whatever side it is scoped to.
     pub fn alias_defs(&self, name: &str) -> Vec<(FileId, &AliasDef)> {
-        let Some(slots) = self.aliases.get(name) else { return Vec::new() };
-        slots.iter().filter_map(|(f, i)| Some((*f, self.file(*f)?.index.aliases.get(*i as usize)?))).collect()
+        self.alias_slots(name).collect()
     }
 
     pub fn class_names(&self) -> impl Iterator<Item = &SmolStr> {

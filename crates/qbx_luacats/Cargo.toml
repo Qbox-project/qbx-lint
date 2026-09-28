@@ -7,4 +7,5 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+qbx_fivem_data.workspace = true
 smol_str.workspace = true

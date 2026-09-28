@@ -48,6 +48,22 @@ undocumented behavior is identified as such. References work offline and include
 source links. ID hovers apply only to recognized native arguments, not variables,
 calculated expressions or functions that shadow the native.
 
+## Client and server annotations
+
+A `(server)` or `(client)` attribute scopes a LuaCATS declaration to one side:
+
+```lua
+---@class (server) BankAccount
+---@field (client) hud table
+---@alias (client) Key 'E'|'F'
+---@enum (server) Jobs
+---@overload (server) fun(source: integer, message: string)
+```
+
+Overloads follow the side of the call, including `IsDuplicityVersion()` and `lib.context`
+guards. Classes, fields, aliases and enums follow the manifest side of the file. Shared files
+and files of an unknown side see both sides.
+
 ## Framework callbacks
 
 The server recognizes QB-Core `Functions.CreateCallback` / `Functions.TriggerCallback`

@@ -360,13 +360,7 @@ fn long_display_strings_are_bounded_after_full_name_resolution() {
         family: EventFamily::Native,
         kind: EventKind::NetEvent,
         side: None,
-        handler: Some(std::sync::Arc::new(qbx_lua_ls::types::FunType {
-            params: Vec::new(),
-            returns: Vec::new(),
-            is_method: false,
-            generics: Vec::new(),
-            overloads: Vec::new(),
-        })),
+        handler: Some(std::sync::Arc::new(qbx_lua_ls::types::FunType::default())),
         range: Range::new(Position::new(0, 0), Position::new(0, 1)),
     });
     index.set_file(

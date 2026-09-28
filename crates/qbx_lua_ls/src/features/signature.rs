@@ -26,7 +26,7 @@ pub fn signature_help(ws: &Workspace, doc: &Document, position: Position) -> Opt
         // picks active. An event's handler is its only signature.
         let (signatures, active_signature) = match &event {
             Some(_) => (vec![fun], 0),
-            None => infer.call_signatures(&fun, site.args, site.method.is_some()),
+            None => infer.call_signatures(&fun, site.args, site.method.is_some(), site.base.span.start),
         };
 
         let name = match (site.method, &site.base.kind) {

@@ -12,7 +12,7 @@ use crate::index::{ClassDef, EventDef, EventFamily, EventKind, FileId, FileOrigi
 use crate::indexer::render_doc;
 use crate::infer::{Decl, Infer, MemberInfo};
 use crate::locate::locate;
-use crate::luacats::type_name_at;
+use crate::luacats::{applies_on, type_name_at};
 use crate::types::Type;
 use crate::workspace::Workspace;
 
@@ -164,10 +164,10 @@ fn alias_expansions(infer: &Infer, ty: &Type) -> Vec<(SmolStr, Type)> {
             other => other,
         };
         let Type::Named(name, _) = part else { continue };
-        if infer.index.class(name).is_some() || out.iter().any(|(seen, _)| seen == name) {
+        if infer.index.class(name, infer.side()).is_some() || out.iter().any(|(seen, _)| seen == name) {
             continue;
         }
-        let Some((_, alias)) = infer.index.alias(name) else { continue };
+        let Some((_, alias)) = infer.index.alias(name, infer.side()) else { continue };
         if table_part(infer, &alias.ty, 0).is_unknown() {
             out.push((name.clone(), alias.ty.clone()));
         }
@@ -305,16 +305,22 @@ fn class_hover(infer: &Infer, class: &ClassDef) -> String {
     out
 }
 
-/// A class or alias, preferring workspace declarations over the built-in library and this file's
-/// over those of other files.
+/// A class or alias, preferring declarations for this file's side, then workspace declarations over
+/// the built-in library, then this file's over those of other files.
 fn type_hover(infer: &Infer, name: &str) -> Option<String> {
-    let preference = |file: FileId| {
-        (infer.index.file(file).is_some_and(|entry| entry.origin != FileOrigin::Stub), file == infer.ctx.file)
+    let preference = |file: FileId, side: Option<Side>| {
+        (
+            applies_on(side, infer.side()),
+            infer.index.file(file).is_some_and(|entry| entry.origin != FileOrigin::Stub),
+            file == infer.ctx.file,
+        )
     };
-    if let Some((_, class)) = infer.index.class_defs(name).into_iter().max_by_key(|(file, _)| preference(*file)) {
+    let classes = infer.index.class_defs(name).into_iter();
+    if let Some((_, class)) = classes.max_by_key(|(file, class)| preference(*file, class.side)) {
         return Some(class_hover(infer, class));
     }
-    let (_, alias) = infer.index.alias_defs(name).into_iter().max_by_key(|(file, _)| preference(*file))?;
+    let aliases = infer.index.alias_defs(name).into_iter();
+    let (_, alias) = aliases.max_by_key(|(file, alias)| preference(*file, alias.side))?;
     let mut out = lua_block(&format!("type {name} = {}", alias.ty));
     if let Some(doc) = &alias.doc {
         out.push_str("\n\n");
@@ -331,7 +337,7 @@ fn called_overload(infer: &Infer, doc: &Document, offset: u32) -> Option<Type> {
     if fun.overloads.is_empty() {
         return None;
     }
-    let picked = infer.call_signature(&fun, site.args, site.method.is_some());
+    let picked = infer.call_signature(&fun, site.args, site.method.is_some(), site.base.span.start);
     (!Arc::ptr_eq(&picked, &fun)).then_some(Type::Fun(picked))
 }
 
