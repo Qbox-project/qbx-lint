@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use lsp_types::{
     CompletionItem, CompletionItemKind, CompletionItemLabelDetails, CompletionItemTag, CompletionList,
     CompletionResponse, Documentation, InsertTextFormat, Position, TextEdit,
@@ -15,9 +17,9 @@ use super::hover::{event_handler_signature, event_string_context};
 use super::{lua_block, markdown, with_infer};
 use crate::document::Document;
 use crate::index::{EventFamily, EventKind, FileOrigin, SymbolKind};
-use crate::infer::{Infer, MemberInfo};
+use crate::infer::{native_fun_type, Infer, MemberInfo};
 use crate::locate::{locate, string_content_span};
-use crate::types::Type;
+use crate::types::{FunType, Type};
 use crate::workspace::Workspace;
 
 const MAX_NATIVES: usize = 120;
@@ -152,6 +154,61 @@ fn snippet_item(label: &str, body: &str, description: &str) -> CompletionItem {
     out
 }
 
+/// Whether a parameter takes a function, which a call snippet writes out as a function literal.
+fn takes_function(ty: &Type) -> bool {
+    ty.as_fun().is_some() || matches!(ty.without_nil(), Type::Function)
+}
+
+/// A call to `name` with its callbacks written out, for functions that take one, such as
+/// `TriggerCallback('${1:event}', function(${2:...})\n\t$0\nend)`. Arguments after the last callback
+/// that may be left out, such as a `...` payload, share one stop after its `end`.
+fn call_snippet(name: &str, fun: &FunType, via_colon: bool) -> Option<String> {
+    let (skip_params, _) = fun.call_offsets(via_colon);
+    let params = fun.params.get(skip_params..)?;
+    let last_callback = params.iter().rposition(|p| p.name != "..." && takes_function(&p.ty))?;
+    let required_after = params[last_callback + 1..].iter().take_while(|p| p.name != "..." && !p.optional).count();
+    let written = &params[..=last_callback + required_after];
+    let mut stop = 0;
+    let mut next = || {
+        stop += 1;
+        stop
+    };
+    let mut args = Vec::new();
+    for (i, param) in written.iter().enumerate() {
+        if i > last_callback || !takes_function(&param.ty) {
+            let is_string = matches!(param.ty.without_nil(), Type::String | Type::StringLit(_));
+            let quote = if is_string { "'" } else { "" };
+            args.push(format!("{quote}${{{}:{}}}{quote}", next(), param.name));
+            continue;
+        }
+        let callback_params = match param.ty.as_fun() {
+            Some(callback) if callback.params.is_empty() => String::new(),
+            Some(callback) => {
+                let names: Vec<&str> = callback.params.iter().map(|p| p.name.as_str()).collect();
+                format!("${{{}:{}}}", next(), names.join(", "))
+            }
+            None => format!("${{{}}}", next()),
+        };
+        let body = if i == last_callback { "$0".to_string() } else { format!("${}", next()) };
+        args.push(format!("function({callback_params})\n\t{body}\nend"));
+    }
+    let rest = if params.len() > written.len() { format!("${}", next()) } else { String::new() };
+    Some(format!("{name}({}{rest})", args.join(", ")))
+}
+
+/// The call snippet of a completed function, beside the item that inserts only its name.
+fn call_snippet_item(name: &str, ty: &Type, via_colon: bool) -> Option<CompletionItem> {
+    let fun = ty.as_fun()?;
+    // `Shop.price(` has to pass `self` itself; the snippet would leave it out.
+    if fun.is_method && !via_colon {
+        return None;
+    }
+    let body = call_snippet(name, fun, via_colon)?;
+    let mut out = snippet_item(name, &body, &fun.signature(name));
+    out.kind = Some(if via_colon { CompletionItemKind::METHOD } else { CompletionItemKind::FUNCTION });
+    Some(out)
+}
+
 /// The snippet as it looks right after insertion: `${1:0}` becomes `0`, `${1|a,b|}` becomes `a`.
 pub fn snippet_preview(body: &str) -> String {
     let mut out = String::new();
@@ -257,10 +314,17 @@ pub fn completion(ws: &Workspace, doc: &Document, position: Position, snippets: 
     if prefix.chars().next().is_some_and(|c| c.is_ascii_digit()) {
         return None;
     }
+    // A call snippet would repeat a `(` that already follows the name, and has no place in
+    // `function name`.
+    let after = doc.text[offset as usize..].trim_start_matches(|c: char| c.is_ascii_alphanumeric() || c == '_');
+    let statement = head.trim_start();
+    let defines = matches!(statement, "function" | "local function") || statement.starts_with("function ");
+    let call_snippets = snippets && !after.starts_with('(') && !defines;
 
     if (head.ends_with('.') && !head.ends_with("..")) || (head.ends_with(':') && !head.ends_with("::")) {
         let via_colon = head.ends_with(':');
-        let mut items = with_infer(ws, doc, |infer| member_items(infer, doc, offset, head, via_colon, snippets));
+        let mut items =
+            with_infer(ws, doc, |infer| member_items(infer, doc, offset, head, via_colon, snippets, call_snippets));
         let base = head[..head.len() - 1].trim_end();
         if !via_colon && (base.ends_with(".state") || base.ends_with("GlobalState")) {
             items.extend(state_key_items(ws));
@@ -281,7 +345,8 @@ pub fn completion(ws: &Workspace, doc: &Document, position: Position, snippets: 
     if prefix.is_empty() {
         return None;
     }
-    let (items, incomplete) = with_infer(ws, doc, |infer| scope_items(ws, infer, doc, offset, prefix, snippets));
+    let (items, incomplete) =
+        with_infer(ws, doc, |infer| scope_items(ws, infer, doc, offset, prefix, snippets, call_snippets));
     Some(respond(items, incomplete))
 }
 
@@ -563,6 +628,7 @@ fn member_items(
     head: &str,
     via_colon: bool,
     snippets: bool,
+    call_snippets: bool,
 ) -> Vec<CompletionItem> {
     let located = locate(&doc.chunk, offset);
     let base_type = match &located.member {
@@ -571,20 +637,25 @@ fn member_items(
     };
     let members = infer.members(&base_type);
     let has_methods = members.iter().any(|m| m.ty.as_fun().is_some());
-    members
-        .iter()
-        .filter(|m| !via_colon || !has_methods || m.ty.as_fun().is_some())
-        .filter(|m| is_identifier(&m.name))
-        .map(|m| {
-            let mut out = member_item(m);
-            let is_method = m.ty.as_fun().is_some_and(|f| f.is_method);
-            if via_colon != is_method && m.ty.as_fun().is_some() {
-                out.sort_text = Some(format!("1{}", m.name));
-            }
-            out
-        })
-        .chain((snippets && head == "lib.").then(|| on_cache_snippet(infer, "")))
-        .collect()
+    let mut items = Vec::new();
+    for m in members.iter().filter(|m| !via_colon || !has_methods || m.ty.as_fun().is_some()) {
+        if !is_identifier(&m.name) {
+            continue;
+        }
+        let mut out = member_item(m);
+        let is_method = m.ty.as_fun().is_some_and(|f| f.is_method);
+        if via_colon != is_method && m.ty.as_fun().is_some() {
+            out.sort_text = Some(format!("1{}", m.name));
+        }
+        items.push(out);
+        if call_snippets {
+            items.extend(call_snippet_item(&m.name, &m.ty, via_colon));
+        }
+    }
+    if snippets && head == "lib." {
+        items.push(on_cache_snippet(infer, ""));
+    }
+    items
 }
 
 /// Fallback for member completion when the parser could not attach the trailing `.` to an expression.
@@ -644,10 +715,16 @@ fn scope_items(
     offset: u32,
     prefix: &str,
     snippets: bool,
+    call_snippets: bool,
 ) -> (Vec<CompletionItem>, bool) {
     let matches = |name: &str| name.len() >= prefix.len() && name[..prefix.len()].eq_ignore_ascii_case(prefix);
     let mut items = Vec::new();
     let mut seen: FxHashSet<String> = FxHashSet::default();
+    // `CreateThread` and the like have a hand-written snippet already.
+    let call_snippet = |name: &str, ty: &Type| {
+        let written = SNIPPETS.iter().any(|(label, ..)| *label == name);
+        (call_snippets && !written).then(|| call_snippet_item(name, ty, false)).flatten()
+    };
 
     let mut locals: Vec<_> = doc.resolution.locals_visible_at(offset).filter(|(_, l)| matches(&l.name)).collect();
     locals.sort_by_key(|(_, l)| std::cmp::Reverse(l.visible_from));
@@ -664,6 +741,7 @@ fn scope_items(
         let mut out = item(&local.name, kind, 0);
         out.detail = detail_of(&local.name, &ty);
         items.push(out);
+        items.extend(call_snippet(&local.name, &ty));
     }
 
     for (file, symbol) in ws.index.visible_globals(doc.file) {
@@ -678,6 +756,7 @@ fn scope_items(
             out.tags = Some(vec![CompletionItemTag::DEPRECATED]);
         }
         items.push(out);
+        items.extend(call_snippet(&symbol.name, &symbol.ty));
     }
 
     for keyword in KEYWORDS.iter().filter(|k| matches(k)) {
@@ -715,6 +794,7 @@ fn scope_items(
                 out.tags = Some(vec![CompletionItemTag::DEPRECATED]);
             }
             items.push(out);
+            items.extend(call_snippet(native.name, &Type::Fun(Arc::new(native_fun_type(&native)))));
         }
     } else {
         incomplete = true;

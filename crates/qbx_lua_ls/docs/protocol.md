@@ -64,7 +64,10 @@ or removed from `exclude` leave or enter the index on the next `qbx/reindex` or 
 
 Snippet completions are sent only when
 `textDocument.completion.completionItem.snippetSupport` is `true`. Other clients receive ordinary
-symbol, annotation and manifest completions without snippet placeholders.
+symbol, annotation and manifest completions without snippet placeholders. Snippet clients also get
+a second item beside each function that takes a callback, labelled like the function, with the
+description `snippet`. It inserts the call with the function literal written out. It is left out
+when a `(` already follows the name.
 
 The server requests file watches only when
 `workspace.didChangeWatchedFiles.dynamicRegistration` is `true`. It watches Lua, lint config,
