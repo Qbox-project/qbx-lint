@@ -2,7 +2,7 @@ use lsp_types::{Documentation, ParameterInformation, ParameterLabel, Position, S
 use qbx_fivem_data::native_docs;
 use qbx_lua_syntax::ast::ExprKind;
 
-use super::event_call::event_call;
+use super::event_call::{event_call, wrapper_call};
 use super::{markdown, with_infer};
 use crate::document::Document;
 use crate::locate::locate;
@@ -15,11 +15,13 @@ pub fn signature_help(ws: &Workspace, doc: &Document, position: Position) -> Opt
     let site = located.call?;
     with_infer(ws, doc, |infer| {
         let resolved = infer.callee_fun(site.base, site.method);
+        let callee = resolved.as_ref().map(|(fun, _)| fun.as_ref());
         let event = site
             .method
             .is_none()
-            .then(|| event_call(ws, doc, infer, site.base, site.args, resolved.as_ref().map(|(fun, _)| fun.as_ref())))
-            .flatten();
+            .then(|| event_call(ws, doc, infer, site.base, site.args, callee))
+            .flatten()
+            .or_else(|| wrapper_call(ws, infer, callee?, site.method.is_some(), site.args, site.base.span.start));
         let (native, member) = resolved.map(|(fun, member)| (Some(fun), member)).unwrap_or_default();
         let fun = event.as_ref().map(|e| e.fun.clone().into()).or(native)?;
         // A function lists its `@overload`s after the declared signature, with the one the call

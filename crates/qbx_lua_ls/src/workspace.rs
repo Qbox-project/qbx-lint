@@ -13,7 +13,7 @@ use qbx_lua_analysis::Config;
 use qbx_lua_syntax::{parse, SmolStr};
 use rustc_hash::FxHashSet;
 
-use crate::index::{normalize_path, FileEntry, FileId, FileOrigin, Index, ResourceEntry, ResourceId};
+use crate::index::{normalize_path, FileEntry, FileId, FileIndex, FileOrigin, Index, ResourceEntry, ResourceId};
 use crate::indexer::index_file;
 
 const MAX_INDEXED_FILE_BYTES: u64 = 2 * 1024 * 1024;
@@ -251,10 +251,16 @@ impl Workspace {
         let id = self.index.allocate(path);
         let (resource, side) = self.side_and_resource(path);
         let origin = self.index.file(id).map_or(origin, |f| f.origin);
-        let file_index = index_file(id, source, chunk, resolution, &self.index, side);
         let entry =
-            FileEntry { path: path.to_path_buf(), uri: path_to_uri(path), origin, resource, side, index: file_index };
-        self.index.set_file(id, entry);
+            |index| FileEntry { path: path.to_path_buf(), uri: path_to_uri(path), origin, resource, side, index };
+        // Globals are only visible from files the index knows, so a file indexed for the first time,
+        // such as a new one opened in the editor, needs its entry before its calls to a `---@callback`
+        // wrapper of another file can be recognized.
+        if self.index.file(id).is_none() {
+            self.index.set_file(id, entry(FileIndex::default()));
+        }
+        let file_index = index_file(id, source, chunk, resolution, &self.index, side);
+        self.index.set_file(id, entry(file_index));
         id
     }
 

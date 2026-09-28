@@ -3,7 +3,7 @@ use qbx_lua_syntax::ast::*;
 use qbx_lua_syntax::visit::{self, Visitor};
 use qbx_lua_syntax::Span;
 
-use super::event_call::event_call;
+use super::event_call::{event_call, wrapper_call};
 use super::with_infer;
 use crate::document::Document;
 use crate::infer::Infer;
@@ -37,7 +37,8 @@ impl Hints<'_, '_> {
         let event = method
             .is_none()
             .then(|| event_call(self.ws, self.doc, self.infer, base, args, native.as_deref()))
-            .flatten();
+            .flatten()
+            .or_else(|| wrapper_call(self.ws, self.infer, native.as_deref()?, method.is_some(), args, base.span.start));
         let Some(fun) = event.map(|e| e.fun.into()).or(native) else { return };
         let (skip_params, skip_args) = fun.call_offsets(method.is_some());
         for (arg, param) in args.iter().skip(skip_args).zip(fun.params.iter().skip(skip_params)) {

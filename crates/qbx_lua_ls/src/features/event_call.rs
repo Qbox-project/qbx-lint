@@ -2,11 +2,12 @@ use qbx_fivem_data::Side;
 use qbx_lua_analysis::crossref::trigger_target;
 use qbx_lua_syntax::ast::Expr;
 
+use crate::callback_wrappers::{self, Wrapper};
 use crate::document::Document;
 use crate::framework_callbacks;
-use crate::index::{EventFamily, EventKind};
+use crate::index::{EventDef, EventFamily, EventKind, FileEntry};
 use crate::infer::Infer;
-use crate::types::{FunType, Param, Type};
+use crate::types::{CallbackRole, FunType, Param, Type};
 use crate::workspace::Workspace;
 
 pub struct EventCall {
@@ -115,8 +116,6 @@ pub fn event_call(
     }
     params.extend(handler.params.iter().skip(handler_skip).cloned());
 
-    let file_name = entry.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    let resource = entry.resource.and_then(|id| ws.index.resource(id)).map(|r| format!("{}/", r.name));
     Some(EventCall {
         fun: FunType {
             params,
@@ -131,6 +130,53 @@ pub fn event_call(
             ..FunType::default()
         },
         event: name.to_string(),
-        handler_location: format!("{}{file_name}:{}", resource.unwrap_or_default(), event.range.start.line + 1),
+        handler_location: handler_location(ws, entry, event),
+    })
+}
+
+fn handler_location(ws: &Workspace, entry: &FileEntry, event: &EventDef) -> String {
+    let file_name = entry.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let resource = entry.resource.and_then(|id| ws.index.resource(id)).map(|r| format!("{}/", r.name));
+    format!("{}{file_name}:{}", resource.unwrap_or_default(), event.range.start.line + 1)
+}
+
+/// For a call to a `---@callback await` or `trigger` wrapper: the wrapper's own parameters up to its
+/// `...`, then the payload parameters of the handler registered under the name it passes. `await`
+/// returns what the handler returns, and `trigger` passes that to its response function.
+pub fn wrapper_call(
+    ws: &Workspace,
+    infer: &Infer,
+    fun: &FunType,
+    via_method: bool,
+    args: &[Expr],
+    at: u32,
+) -> Option<EventCall> {
+    let wrapper = Wrapper::of(fun, via_method)?;
+    if wrapper.tag.role == CallbackRole::Register {
+        return None;
+    }
+    let name = args.get(wrapper.arg(wrapper.name))?.as_string()?;
+    let target = callback_wrappers::target_of(infer.side_at(at));
+    let (file, event) = callback_wrappers::handler(&ws.index, &wrapper.family(), name, target)?;
+    let handler = event.handler.as_deref()?;
+    let (skip_params, _) = fun.call_offsets(via_method);
+    let own = &fun.params[skip_params..];
+    let mut params: Vec<Param> = own[..wrapper.payload.unwrap_or(own.len())].to_vec();
+    if wrapper.tag.role == CallbackRole::Trigger && !handler.returns.is_empty() {
+        if let Some(param) = wrapper.function.and_then(|i| params.get_mut(i)) {
+            param.ty = callback_wrappers::response_function(handler);
+        }
+    }
+    if wrapper.payload.is_some() {
+        params.extend(handler.params.iter().skip(callback_wrappers::source_skip(event, handler)).cloned());
+    }
+    let returns = match wrapper.tag.role {
+        CallbackRole::Await if !handler.returns.is_empty() => handler.returns.clone(),
+        _ => fun.returns.clone(),
+    };
+    Some(EventCall {
+        fun: FunType { params, returns, is_method: fun.is_method, ..FunType::default() },
+        event: name.to_string(),
+        handler_location: handler_location(ws, ws.index.file(file)?, event),
     })
 }

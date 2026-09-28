@@ -1143,6 +1143,208 @@ end
 }
 
 #[test]
+fn callback_wrappers_link_registrations_to_their_calls() {
+    const SHARED: &str = "myresource/shared/config.lua";
+    let mut client = Client::start(fixture_root());
+    client.open_with(
+        SHARED,
+        "\
+---@callback register
+---@param name string
+---@param handler fun(source: integer, ...): ...
+function RegisterServerCallback(name, handler) end
+
+---@callback await
+---@param name string
+---@param ... any
+function AwaitServerCallback(name, ...) end
+
+---@callback trigger
+---@param event string
+---@param cb fun(...)
+---@param ... any
+function TriggerServerCallback(event, cb, ...) end
+
+Shop = {}
+
+---@callback register shop
+---@param name string
+---@param handler function
+function Shop.register(name, handler) end
+
+---@callback await shop
+---@param name string
+---@param ... any
+function Shop:await(name, ...) end
+",
+    );
+    let server = "\
+---@param storeId number
+---@param index number
+---@param location vector3
+---@return boolean success
+RegisterServerCallback('removeStoreLocation', function(source, storeId, index, location)
+    print(storeId)
+end)
+
+---@param item string
+---@return integer price
+Shop.register('shop:price', function(source, item) end)
+";
+    client.open_with(SERVER, server);
+    let text = "\
+local removed = AwaitServerCallback('removeStoreLocation', 1, 2, vector3(0, 0, 0))
+TriggerServerCallback('removeStoreLocation', function(ok) end, 1, 2, vector3(0, 0, 0))
+local price = Shop:await('shop:price', 'water')
+AwaitServerCallback('')
+Shop:await('')
+local awaitAlias = AwaitServerCallback
+local aliased = awaitAlias('removeStoreLocation')
+";
+    client.open_with(CLIENT, text);
+
+    for (file, source, needle, expected) in [
+        (CLIENT, text, "removed", "removed: boolean"),
+        (CLIENT, text, "ok)", "ok: boolean"),
+        (CLIENT, text, "price", "price: integer"),
+        (CLIENT, text, "aliased", "aliased: boolean"),
+        // The doc comment above the registration types the handler's parameters.
+        (SERVER, server, "storeId)", "storeId: number"),
+    ] {
+        let (l, c) = pos(source, needle, 0);
+        let hover = client.hover_text(file, l, c);
+        assert!(hover.contains(expected), "{needle}: expected {expected:?} in {hover}");
+    }
+
+    let signature = |client: &mut Client, needle: &str| {
+        let (l, c) = pos(text, needle, 0);
+        let result = client.request("textDocument/signatureHelp", client.position_params(CLIENT, l, c));
+        (result["signatures"][0]["label"].as_str().unwrap_or_default().to_string(), result["activeParameter"].clone())
+    };
+    assert_eq!(
+        signature(&mut client, "2, vector3(0, 0, 0))\nTrigger"),
+        (
+            "AwaitServerCallback(name: string, storeId: number, index: number, location: vector3): boolean".into(),
+            json!(2)
+        ),
+        "the source the server passes is left out"
+    );
+    assert_eq!(
+        signature(&mut client, "1, 2, vector3(0, 0, 0))\nlocal price").0,
+        "TriggerServerCallback(event: string, cb: fun(response: boolean), storeId: number, index: number, location: vector3)"
+    );
+    assert_eq!(signature(&mut client, "'water'").0, "await(name: string, item: string): integer");
+
+    // Each family completes its own names.
+    // Between the quotes of `('')`.
+    let names = |client: &mut Client, needle: &str| {
+        let (l, c) = pos(text, needle, needle.len() as u32 - 2);
+        let mut labels = client.completion_labels(CLIENT, l, c);
+        labels.sort();
+        labels
+    };
+    assert_eq!(names(&mut client, "AwaitServerCallback('')"), ["removeStoreLocation"]);
+    assert_eq!(names(&mut client, "Shop:await('')"), ["shop:price"]);
+
+    let (l, c) = pos(text, "removeStoreLocation", 3);
+    let hover = client.hover_text(CLIENT, l, c);
+    assert!(hover.contains("callback `removeStoreLocation`") && hover.contains("storeId: number"), "{hover}");
+    let result = client.request("textDocument/definition", client.position_params(CLIENT, l, c));
+    assert!(result[0]["uri"].as_str().unwrap().ends_with("server/main.lua"), "{result}");
+    assert_eq!(result[0]["range"]["start"]["line"], 4);
+}
+
+#[test]
+fn callback_tags_complete_roles_and_the_families_in_use() {
+    let mut client = Client::start(fixture_root());
+    let wrappers = "\
+Shop = {}
+---@callback register shop
+---@param name string
+---@param handler function
+function Shop.register(name, handler) end
+
+---@callback await garage
+---@param name string
+---@param ... any
+function AwaitGarage(name, ...) end
+
+---@callback register
+---@param name string
+---@param handler function
+function RegisterPlain(name, handler) end
+";
+    client.open_with("myresource/shared/config.lua", wrappers);
+    let mut labels = |line: &str| {
+        let text = format!("{line}\nfunction Wrapper(name, handler) end\n");
+        client.open_with(CLIENT, &text);
+        let mut labels = client.completion_labels(CLIENT, 0, line.len() as u32);
+        labels.sort();
+        labels
+    };
+    assert_eq!(labels("---@callback "), ["await", "register", "trigger"]);
+    assert_eq!(labels("---@callback reg"), ["await", "register", "trigger"]);
+    // Wrappers tagged without a family share the unnamed one, which is not offered.
+    assert_eq!(labels("---@callback register "), ["garage", "shop"]);
+    assert_eq!(labels("---@callback await sh"), ["garage", "shop"]);
+    assert!(labels("---@callback call ").is_empty());
+    assert!(labels("---@callback register shop ").is_empty());
+}
+
+#[test]
+fn wrapper_call_snippets_stop_in_the_name_and_reopen_suggestions() {
+    let wrappers = "\
+---@callback register
+---@param name string
+---@param handler fun(source: integer, ...): ...
+function RegisterServerCallback(name, handler) end
+
+---@callback await
+---@param name string
+---@param ... any
+function AwaitServerCallback(name, ...) end
+
+---@callback trigger
+---@param cb fun(...)
+---@param event string
+---@param ... any
+function TriggerServerCallback(cb, event, ...) end
+";
+    let snippets = |capabilities: Value| -> Vec<(String, Value)> {
+        let mut client = Client::start_with_capabilities(fixture_root(), capabilities);
+        client.open_with("myresource/shared/config.lua", wrappers);
+        let mut found = Vec::new();
+        for typed in ["RegisterServerCallb", "AwaitServerCallb", "TriggerServerCallb"] {
+            client.open_with(CLIENT, typed);
+            let result =
+                client.request("textDocument/completion", client.position_params(CLIENT, 0, typed.len() as u32));
+            let items = result["items"].as_array().cloned().unwrap_or_default();
+            let snippet = items.iter().find(|item| item["labelDetails"]["description"] == "snippet");
+            let snippet = snippet.unwrap_or_else(|| panic!("{typed}: no call snippet in {result}"));
+            found.push((snippet["insertText"].as_str().unwrap().to_string(), snippet["command"].clone()));
+        }
+        found
+    };
+    let snippet_client = json!({ "textDocument": { "completion": { "completionItem": { "snippetSupport": true } } } });
+    let mut vscode = snippet_client.clone();
+    vscode["experimental"] = json!({ "commands": { "commands": ["editor.action.triggerSuggest"] } });
+
+    let reopen = json!({ "title": "Suggest callback names", "command": "editor.action.triggerSuggest" });
+    let found = snippets(vscode);
+    // A name to register is new, so the snippet keeps its placeholder and asks for no suggestions.
+    assert_eq!(
+        found[0],
+        ("RegisterServerCallback('${1:name}', function(${2:source, ...})\n\t$0\nend)".into(), Value::Null)
+    );
+    assert_eq!(found[1], ("AwaitServerCallback('$1'$2)".into(), reopen.clone()));
+    // The name is the first stop wherever the wrapper takes it.
+    assert_eq!(found[2], ("TriggerServerCallback(function(${2:...})\n\t$0\nend, '$1'$3)".into(), reopen));
+
+    let found = snippets(snippet_client);
+    assert_eq!(found[1], ("AwaitServerCallback('$1'$2)".into(), Value::Null), "the client cannot reopen suggestions");
+}
+
+#[test]
 fn hover_binds_generics_from_arguments_and_callbacks() {
     let mut client = Client::start(fixture_root());
     let text = "\

@@ -57,6 +57,42 @@ pub struct FunType {
     pub overloads: Vec<Arc<FunType>>,
     /// The side an `@overload (server)` or `(client)` signature applies to.
     pub side: Option<Side>,
+    /// What a function tagged `@callback` does with the callback names passed to it.
+    pub callback: Option<CallbackTag>,
+}
+
+/// The role of a function tagged `---@callback register|await|trigger [family]`, which wraps a
+/// callback system the way `lib.callback.register` and `lib.callback.await` do.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CallbackRole {
+    /// Registers a handler under a name: `RegisterServerCallback(name, handler)`.
+    Register,
+    /// Runs the handler of a name and returns its response: `local ok = AwaitServerCallback(name, ...)`.
+    Await,
+    /// Runs the handler of a name and passes its response on: `TriggerCallback(name, function(ok) end, ...)`.
+    Trigger,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CallbackTag {
+    pub role: CallbackRole,
+    /// Keeps separate callback systems apart; wrappers tagged without one share the empty family.
+    pub family: SmolStr,
+}
+
+impl CallbackTag {
+    /// Reads the text after `@callback`: a role, then an optional family name.
+    pub fn parse(text: &str) -> Option<Self> {
+        let mut words = text.split_whitespace();
+        let role = match words.next()? {
+            "register" => CallbackRole::Register,
+            "await" => CallbackRole::Await,
+            "trigger" => CallbackRole::Trigger,
+            _ => return None,
+        };
+        let family = words.next().filter(|word| !word.starts_with('#')).unwrap_or_default();
+        Some(Self { role, family: SmolStr::new(family) })
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Default)]

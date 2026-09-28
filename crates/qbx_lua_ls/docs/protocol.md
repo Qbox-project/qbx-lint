@@ -75,6 +75,12 @@ a second item beside each function that takes a callback, labelled like the func
 description `snippet`. It inserts the call with the function literal written out. It is left out
 when a `(` already follows the name.
 
+Functions tagged `---@callback await` or `trigger` also get this snippet. Its first stop is empty,
+between the quotes of the callback name. When the client lists `editor.action.triggerSuggest`
+under `capabilities.experimental.commands.commands`, as rust-analyzer's clients list the commands
+they run themselves, the snippet item carries that command so the registered names are suggested
+right after insertion. Other clients get the snippet without the command.
+
 The server requests file watches only when
 `workspace.didChangeWatchedFiles.dynamicRegistration` is `true`. It watches Lua, lint config,
 locale JSON and server config files through the client. It has no internal filesystem watcher

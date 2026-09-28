@@ -31,6 +31,8 @@ Available features depend on the editor's LSP client.
 - Diagnostics and quick fixes with resource and client/server context.
 - Signature help, parameter hints, semantic tokens, folding and document/workspace symbols.
 - QB-Core and ESX server callback completion, navigation and payload hints from local handlers.
+- Callback systems a resource wraps itself, declared with `---@callback`, with name completion,
+  payload hints and response types.
 - Whole-document formatting, configured through `qbxlint.toml`.
 - Completion for manifest paths, locale keys, convars, state bag keys and LuaCATS annotations.
 - Read-only resource, dependency-health, NUI callback and asset-reference requests
@@ -80,9 +82,29 @@ events have separate name spaces. Conflicting payload definitions suppress deriv
 hints, while navigation still lists the matching registrations. Handler return
 values are not treated as asynchronous callback responses.
 
-No framework API documentation is downloaded or bundled. Custom wrappers,
-client-callback/Await variants and response-type inference are not included.
+No framework API documentation is downloaded or bundled. Client-callback/Await
+variants and response-type inference are not included for these frameworks.
 See the [convention and maintenance notes](docs/framework-callbacks.md) for source revisions and recognition limits.
+
+A resource's own callback wrappers are declared with a `---@callback` tag:
+
+```lua
+---@callback register
+---@param name string
+---@param handler fun(source: integer, ...): ...
+function RegisterServerCallback(name, handler) end
+
+---@callback await
+---@param name string
+---@param ... any
+function AwaitServerCallback(name, ...) end
+```
+
+Calls to `AwaitServerCallback('name', ...)` then complete registered names and show
+the handler's payload parameters and return type, taken from the `---@param` and
+`---@return` lines above each `RegisterServerCallback('name', function(source, ...) end)`.
+A `---@callback trigger` wrapper passes the response to a function argument instead,
+and an optional family name (`---@callback register shop`) keeps separate systems apart.
 
 ## Build and run
 

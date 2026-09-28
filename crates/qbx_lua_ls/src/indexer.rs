@@ -9,13 +9,14 @@ use qbx_lua_analysis::summary::summarize;
 use qbx_lua_syntax::ast::*;
 use qbx_lua_syntax::{Comment, LineIndex, SmolStr, Span};
 
+use crate::callback_wrappers::Wrapper;
 use crate::index::{
     AliasDef, ClassDef, Element, EventDef, EventFamily, EventKind, FileId, FileIndex, Index, Member, NuiCallbackDef,
     Symbol, SymbolKind,
 };
 use crate::infer::{table_elements, table_fields, FileContext, Infer};
 use crate::luacats::{parse_doc_lines, DocGroup};
-use crate::types::Type;
+use crate::types::{CallbackRole, FunType, Type};
 
 const MAX_TABLE_DEPTH: u32 = 4;
 const MAX_TABLE_FIELDS: usize = 400;
@@ -623,16 +624,62 @@ impl<'a> Indexer<'a> {
         self.push_member(owner, symbol);
     }
 
+    /// The handler a framework or `@callback` registration passes: a function literal typed by the
+    /// doc comment above the call at `offset`, or a local function that is never reassigned.
+    fn handler_type(&self, arg: &Expr, offset: u32) -> Option<Arc<FunType>> {
+        match &arg.kind {
+            ExprKind::Function(func) => Some(Arc::new(self.infer.fun_type(func, Some(offset), false))),
+            ExprKind::Name(name) => {
+                let Some(Resolved::Local(id)) = self.ctx.resolution.resolve_at(name.span.start) else {
+                    return None;
+                };
+                if self.ctx.resolution.local(id).refs.iter().any(|reference| reference.write) {
+                    return None;
+                }
+                self.infer.expr(arg).as_fun().cloned()
+            }
+            _ => None,
+        }
+    }
+
+    /// A call to a `---@callback` wrapper: `RegisterServerCallback('name', handler)` registers a
+    /// handler, while `AwaitServerCallback('name', ...)` and `TriggerCallback('name', cb, ...)` call one.
+    fn wrapper_event(&mut self, base: &Expr, method: Option<&Name>, args: &[Expr], offset: u32) {
+        // Without a literal name there is nothing to index, and most calls pass none.
+        if !args.iter().any(|arg| arg.as_string().is_some()) {
+            return;
+        }
+        let Some((fun, _)) = self.infer.callee_fun(base, method) else { return };
+        let Some(wrapper) = Wrapper::of(&fun, method.is_some()) else { return };
+        let Some(name_arg) = args.get(wrapper.arg(wrapper.name)) else { return };
+        let Some(name) = name_arg.as_string().filter(|n| !n.is_empty()) else { return };
+        let (kind, handler) = match wrapper.tag.role {
+            CallbackRole::Register => {
+                let handler = wrapper.function.and_then(|param| args.get(wrapper.arg(param)));
+                (EventKind::Callback, handler.and_then(|arg| self.handler_type(arg, offset)))
+            }
+            CallbackRole::Await | CallbackRole::Trigger => (EventKind::Trigger, None),
+        };
+        self.out.events.push(EventDef {
+            name: name.clone(),
+            kind,
+            family: wrapper.family(),
+            side: self.regions.effective(offset, self.side),
+            handler,
+            range: self.range(name_arg.span),
+        });
+    }
+
     fn event(&mut self, callee: &Expr, args: &[Expr], offset: u32) {
         let framework = crate::framework_callbacks::classify(self.ctx, self.infer.index, callee);
         let side = self.regions.effective(offset, self.side);
-        let (family, kind) = if let Some(call) = framework {
+        let (family, kind) = if let Some(call) = &framework {
             if side != Some(call.required_side()) {
                 return;
             }
-            (call.family, call.kind)
+            (call.family.clone(), call.kind)
         } else {
-            let Some(path) = callee.dotted_path() else { return };
+            let Some(path) = callee.dotted_path() else { return self.wrapper_event(callee, None, args, offset) };
             let path = path.as_str();
             if NET_EVENT_CALLS.contains(&path) {
                 (EventFamily::Native, EventKind::NetEvent)
@@ -643,25 +690,13 @@ impl<'a> Indexer<'a> {
             } else if TRIGGER_CALLS.contains(&path) {
                 (if path.starts_with("lib.") { EventFamily::OxLib } else { EventFamily::Native }, EventKind::Trigger)
             } else {
-                return;
+                return self.wrapper_event(callee, None, args, offset);
             }
         };
         let Some(name_arg) = args.first() else { return };
         let Some(name) = name_arg.as_string().filter(|n| !n.is_empty()) else { return };
         let handler = if framework.is_some() {
-            args.get(1).filter(|_| kind == EventKind::Callback).and_then(|arg| match &arg.kind {
-                ExprKind::Function(func) => Some(Arc::new(self.infer.fun_type(func, Some(offset), false))),
-                ExprKind::Name(name) => {
-                    let Some(Resolved::Local(id)) = self.ctx.resolution.resolve_at(name.span.start) else {
-                        return None;
-                    };
-                    if self.ctx.resolution.local(id).refs.iter().any(|reference| reference.write) {
-                        return None;
-                    }
-                    self.infer.expr(arg).as_fun().cloned()
-                }
-                _ => None,
-            })
+            args.get(1).filter(|_| kind == EventKind::Callback).and_then(|arg| self.handler_type(arg, offset))
         } else {
             args.iter().skip(1).find_map(|arg| match &arg.kind {
                 ExprKind::Function(func) => Some(Arc::new(self.infer.fun_type(func, None, false))),
@@ -722,6 +757,7 @@ impl<'a> Indexer<'a> {
                 args.iter().for_each(|a| self.expr(a));
             }
             ExprKind::MethodCall { base, method, args, .. } => {
+                self.wrapper_event(base, Some(method), args, expr.span.start);
                 self.keyed_setter(base, method, args);
                 if let (true, "set", Some(key)) = (is_state_bag(base), method.text.as_str(), args.first()) {
                     self.state_key(key.as_string());
