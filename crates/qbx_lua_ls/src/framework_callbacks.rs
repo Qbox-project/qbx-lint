@@ -7,14 +7,14 @@ use qbx_lua_syntax::visit::{self, Visitor};
 use crate::index::{EventFamily, EventKind, FileOrigin, Index};
 use crate::infer::{Decl, FileContext};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FrameworkCallbackCall {
     pub family: EventFamily,
     pub kind: EventKind,
 }
 
 impl FrameworkCallbackCall {
-    pub fn required_side(self) -> Side {
+    pub fn required_side(&self) -> Side {
         if self.kind == EventKind::Callback {
             Side::Server
         } else {

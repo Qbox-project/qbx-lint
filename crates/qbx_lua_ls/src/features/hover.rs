@@ -7,13 +7,14 @@ use qbx_lua_syntax::ast::{Expr, ExprKind};
 use qbx_lua_syntax::{CommentKind, SmolStr, Span};
 
 use super::{lua_block, markdown, with_infer};
+use crate::callback_wrappers::{source_skip, target_of, Wrapper};
 use crate::document::Document;
 use crate::index::{ClassDef, EventDef, EventFamily, EventKind, FileId, FileOrigin, SymbolKind};
 use crate::indexer::render_doc;
 use crate::infer::{Decl, Infer, MemberInfo};
 use crate::locate::locate;
 use crate::luacats::{applies_on, type_name_at};
-use crate::types::Type;
+use crate::types::{CallbackRole, Type};
 use crate::workspace::Workspace;
 
 pub enum Target {
@@ -360,9 +361,34 @@ impl EventStringContext {
     }
 }
 
+/// The name argument of a call to a `---@callback` wrapper, which may sit anywhere its annotations say.
+fn wrapper_string_context(infer: &Infer, call: &Expr, arg_index: usize) -> Option<EventStringContext> {
+    let (base, method) = match &call.kind {
+        ExprKind::Call { callee, .. } => (&**callee, None),
+        ExprKind::MethodCall { base, method, .. } => (&**base, Some(method)),
+        _ => return None,
+    };
+    let (fun, _) = infer.callee_fun(base, method)?;
+    let wrapper = Wrapper::of(&fun, method.is_some())?;
+    if wrapper.arg(wrapper.name) != arg_index {
+        return None;
+    }
+    let target_side = match wrapper.tag.role {
+        CallbackRole::Register => None,
+        CallbackRole::Await | CallbackRole::Trigger => target_of(infer.side_at(call.span.start)),
+    };
+    Some(EventStringContext { family: wrapper.family(), target_side, active: true })
+}
+
 /// A literal first argument is the only place framework callback names acquire special meaning.
 pub(super) fn event_string_context(infer: &Infer, call: Option<(&Expr, usize)>) -> Option<EventStringContext> {
-    let (call, 0) = call? else { return None };
+    let (call, arg_index) = call?;
+    if let Some(context) = wrapper_string_context(infer, call, arg_index) {
+        return Some(context);
+    }
+    if arg_index != 0 {
+        return None;
+    }
     let ExprKind::Call { callee, .. } = &call.kind else { return None };
     let own_side = || {
         let side = infer.index.file(infer.ctx.file).and_then(|file| file.side);
@@ -387,9 +413,9 @@ pub(super) fn event_string_context(infer: &Infer, call: Option<(&Expr, usize)>) 
         _ => {
             let framework = crate::framework_callbacks::classify(infer.ctx, infer.index, callee)?;
             return Some(EventStringContext {
+                active: own_side() == Some(framework.required_side()),
                 family: framework.family,
                 target_side: Some(Side::Server),
-                active: own_side() == Some(framework.required_side()),
             });
         }
     };
@@ -398,6 +424,12 @@ pub(super) fn event_string_context(infer: &Infer, call: Option<(&Expr, usize)>) 
 
 pub(super) fn event_handler_signature(event: &EventDef) -> Option<String> {
     let handler = event.handler.as_deref()?;
+    if let EventFamily::Custom(_) = event.family {
+        // What a caller passes, and what `await` returns.
+        let mut payload = handler.clone();
+        payload.params.drain(..source_skip(event, handler));
+        return Some(payload.signature(""));
+    }
     if !matches!(event.family, EventFamily::QbCore | EventFamily::Esx) {
         return Some(handler.signature(""));
     }
@@ -436,9 +468,10 @@ fn string_hover(ws: &Workspace, infer: &Infer, doc: &Document, offset: u32) -> O
     if registrations.is_empty() {
         return None;
     }
-    let label = match context.as_ref().map(|context| context.family) {
+    let label = match context.as_ref().map(|context| &context.family) {
         Some(EventFamily::QbCore) => "QB-Core callback",
         Some(EventFamily::Esx) => "ESX callback",
+        Some(EventFamily::Custom(_)) => "callback",
         _ => "event",
     };
     let mut out = format!("{label} `{value}`");

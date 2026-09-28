@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use lsp_types::{
-    CompletionItem, CompletionItemKind, CompletionItemLabelDetails, CompletionItemTag, CompletionList,
+    Command, CompletionItem, CompletionItemKind, CompletionItemLabelDetails, CompletionItemTag, CompletionList,
     CompletionResponse, Documentation, InsertTextFormat, Position, TextEdit,
 };
 use qbx_fivem_data::{native, native_docs, natives, Side};
@@ -15,11 +15,12 @@ use serde_json::json;
 
 use super::hover::{event_handler_signature, event_string_context};
 use super::{lua_block, markdown, with_infer};
+use crate::callback_wrappers::{families, takes_function, Wrapper};
 use crate::document::Document;
 use crate::index::{EventFamily, EventKind, FileOrigin, SymbolKind};
 use crate::infer::{native_fun_type, Infer, MemberInfo};
 use crate::locate::{locate, string_content_span};
-use crate::types::{FunType, Type};
+use crate::types::{CallbackRole, FunType, Type};
 use crate::workspace::Workspace;
 
 const MAX_NATIVES: usize = 120;
@@ -78,6 +79,7 @@ const DOC_TAGS: &[(&str, &str)] = &[
     ("nodiscard", "nodiscard"),
     ("meta", "meta"),
     ("diagnostic", "diagnostic disable-next-line: ${1:undefined-global}"),
+    ("callback", "callback ${1|register,await,trigger|}"),
     ("see", "see ${1:symbol}"),
 ];
 
@@ -154,28 +156,31 @@ fn snippet_item(label: &str, body: &str, description: &str) -> CompletionItem {
     out
 }
 
-/// Whether a parameter takes a function, which a call snippet writes out as a function literal.
-fn takes_function(ty: &Type) -> bool {
-    ty.as_fun().is_some() || matches!(ty.without_nil(), Type::Function)
-}
-
 /// A call to `name` with its callbacks written out, for functions that take one, such as
 /// `TriggerCallback('${1:event}', function(${2:...})\n\t$0\nend)`. Arguments after the last callback
 /// that may be left out, such as a `...` payload, share one stop after its `end`.
-fn call_snippet(name: &str, fun: &FunType, via_colon: bool) -> Option<String> {
+///
+/// `lookup` is the parameter an `await` or `trigger` wrapper takes a callback name in. Its first
+/// stop is left empty between the quotes, where the registered names can be suggested.
+fn call_snippet(name: &str, fun: &FunType, via_colon: bool, lookup: Option<usize>) -> Option<String> {
     let (skip_params, _) = fun.call_offsets(via_colon);
     let params = fun.params.get(skip_params..)?;
-    let last_callback = params.iter().rposition(|p| p.name != "..." && takes_function(&p.ty))?;
-    let required_after = params[last_callback + 1..].iter().take_while(|p| p.name != "..." && !p.optional).count();
-    let written = &params[..=last_callback + required_after];
-    let mut stop = 0;
+    let last_callback = params.iter().rposition(|p| p.name != "..." && takes_function(&p.ty));
+    let last = last_callback.max(lookup)?;
+    let required_after = params[last + 1..].iter().take_while(|p| p.name != "..." && !p.optional).count();
+    let written = &params[..=last + required_after];
+    let mut stop = usize::from(lookup.is_some());
     let mut next = || {
         stop += 1;
         stop
     };
     let mut args = Vec::new();
     for (i, param) in written.iter().enumerate() {
-        if i > last_callback || !takes_function(&param.ty) {
+        if Some(i) == lookup {
+            args.push("'$1'".to_string());
+            continue;
+        }
+        if last_callback.is_none_or(|last| i > last) || !takes_function(&param.ty) {
             let is_string = matches!(param.ty.without_nil(), Type::String | Type::StringLit(_));
             let quote = if is_string { "'" } else { "" };
             args.push(format!("{quote}${{{}:{}}}{quote}", next(), param.name));
@@ -189,23 +194,37 @@ fn call_snippet(name: &str, fun: &FunType, via_colon: bool) -> Option<String> {
             }
             None => format!("${{{}}}", next()),
         };
-        let body = if i == last_callback { "$0".to_string() } else { format!("${}", next()) };
+        let body = if Some(i) == last_callback { "$0".to_string() } else { format!("${}", next()) };
         args.push(format!("function({callback_params})\n\t{body}\nend"));
     }
     let rest = if params.len() > written.len() { format!("${}", next()) } else { String::new() };
     Some(format!("{name}({}{rest})", args.join(", ")))
 }
 
+/// How call snippets are offered.
+#[derive(Clone, Copy)]
+struct CallSnippets {
+    /// The client runs `editor.action.triggerSuggest` for us, so inserting an `await` or `trigger`
+    /// wrapper call can list the callback names right away.
+    reopen_suggestions: bool,
+}
+
 /// The call snippet of a completed function, beside the item that inserts only its name.
-fn call_snippet_item(name: &str, ty: &Type, via_colon: bool) -> Option<CompletionItem> {
+fn call_snippet_item(name: &str, ty: &Type, via_colon: bool, options: CallSnippets) -> Option<CompletionItem> {
     let fun = ty.as_fun()?;
     // `Shop.price(` has to pass `self` itself; the snippet would leave it out.
     if fun.is_method && !via_colon {
         return None;
     }
-    let body = call_snippet(name, fun, via_colon)?;
+    // A name to register is new, so only `await` and `trigger` wrappers look one up.
+    let wrapper = Wrapper::of(fun, via_colon).filter(|wrapper| wrapper.tag.role != CallbackRole::Register);
+    let lookup = wrapper.map(|wrapper| wrapper.name);
+    let body = call_snippet(name, fun, via_colon, lookup)?;
     let mut out = snippet_item(name, &body, &fun.signature(name));
     out.kind = Some(if via_colon { CompletionItemKind::METHOD } else { CompletionItemKind::FUNCTION });
+    if lookup.is_some() && options.reopen_suggestions {
+        out.command = Some(Command::new("Suggest callback names".into(), "editor.action.triggerSuggest".into(), None));
+    }
     Some(out)
 }
 
@@ -288,7 +307,14 @@ fn identifier_prefix(before: &str) -> &str {
     &before[start..]
 }
 
-pub fn completion(ws: &Workspace, doc: &Document, position: Position, snippets: bool) -> Option<CompletionResponse> {
+/// `reopen_suggestions`: the client runs `editor.action.triggerSuggest` when a completion asks it to.
+pub fn completion(
+    ws: &Workspace,
+    doc: &Document,
+    position: Position,
+    snippets: bool,
+    reopen_suggestions: bool,
+) -> Option<CompletionResponse> {
     let offset = doc.offset(position);
     let line_start = doc.lines.line_start(position.line) as usize;
     let before = doc.text.get(line_start..offset as usize)?;
@@ -319,7 +345,8 @@ pub fn completion(ws: &Workspace, doc: &Document, position: Position, snippets: 
     let after = doc.text[offset as usize..].trim_start_matches(|c: char| c.is_ascii_alphanumeric() || c == '_');
     let statement = head.trim_start();
     let defines = matches!(statement, "function" | "local function") || statement.starts_with("function ");
-    let call_snippets = snippets && !after.starts_with('(') && !defines;
+    let call_snippets =
+        (snippets && !after.starts_with('(') && !defines).then_some(CallSnippets { reopen_suggestions });
 
     if (head.ends_with('.') && !head.ends_with("..")) || (head.ends_with(':') && !head.ends_with("::")) {
         let via_colon = head.ends_with(':');
@@ -374,6 +401,9 @@ fn doc_comment_items(ws: &Workspace, before: &str, snippets: bool) -> Vec<Comple
             })
             .collect();
     }
+    if let Some(rest) = content.strip_prefix("@callback").filter(|rest| rest.starts_with(char::is_whitespace)) {
+        return callback_tag_items(ws, rest);
+    }
     let takes_type = ["@type", "@return", "@param", "@field", "@alias", "@class", "@overload", "@generic", "|"]
         .iter()
         .any(|tag| content.starts_with(tag));
@@ -387,6 +417,39 @@ fn doc_comment_items(ws: &Workspace, before: &str, snippets: bool) -> Vec<Comple
         items.push(item(name, CompletionItemKind::CLASS, 0));
     }
     items
+}
+
+const CALLBACK_ROLES: &[(&str, &str)] = &[
+    ("register", "Registers a handler under a name, like lib.callback.register"),
+    ("await", "Runs the handler of a name and returns its response, like lib.callback.await"),
+    ("trigger", "Runs the handler of a name and passes its response to a function"),
+];
+
+/// After `---@callback`, its role, then a family name that other wrappers already use.
+fn callback_tag_items(ws: &Workspace, rest: &str) -> Vec<CompletionItem> {
+    let words: Vec<&str> = rest.split_whitespace().collect();
+    let typing = if rest.ends_with(char::is_whitespace) { words.len() } else { words.len().saturating_sub(1) };
+    match typing {
+        0 => CALLBACK_ROLES
+            .iter()
+            .map(|(role, description)| {
+                let mut out = item(role, CompletionItemKind::ENUM_MEMBER, 0);
+                out.detail = Some(description.to_string());
+                out
+            })
+            .collect(),
+        // The word being typed is already the family of the wrapper this comment tags.
+        1 if CALLBACK_ROLES.iter().any(|(role, _)| *role == words[0]) => families(&ws.index)
+            .iter()
+            .filter(|family| words.get(1) != Some(&family.as_str()))
+            .map(|family| {
+                let mut out = item(family, CompletionItemKind::MODULE, 0);
+                out.detail = Some("callback family".to_string());
+                out
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
 }
 
 fn string_items(ws: &Workspace, doc: &Document, offset: u32, token_index: usize) -> Vec<CompletionItem> {
@@ -628,7 +691,7 @@ fn member_items(
     head: &str,
     via_colon: bool,
     snippets: bool,
-    call_snippets: bool,
+    call_snippets: Option<CallSnippets>,
 ) -> Vec<CompletionItem> {
     let located = locate(&doc.chunk, offset);
     let base_type = match &located.member {
@@ -648,8 +711,8 @@ fn member_items(
             out.sort_text = Some(format!("1{}", m.name));
         }
         items.push(out);
-        if call_snippets {
-            items.extend(call_snippet_item(&m.name, &m.ty, via_colon));
+        if let Some(options) = call_snippets {
+            items.extend(call_snippet_item(&m.name, &m.ty, via_colon, options));
         }
     }
     if snippets && head == "lib." {
@@ -715,15 +778,15 @@ fn scope_items(
     offset: u32,
     prefix: &str,
     snippets: bool,
-    call_snippets: bool,
+    call_snippets: Option<CallSnippets>,
 ) -> (Vec<CompletionItem>, bool) {
     let matches = |name: &str| name.len() >= prefix.len() && name[..prefix.len()].eq_ignore_ascii_case(prefix);
     let mut items = Vec::new();
     let mut seen: FxHashSet<String> = FxHashSet::default();
     // `CreateThread` and the like have a hand-written snippet already.
     let call_snippet = |name: &str, ty: &Type| {
-        let written = SNIPPETS.iter().any(|(label, ..)| *label == name);
-        (call_snippets && !written).then(|| call_snippet_item(name, ty, false)).flatten()
+        let options = call_snippets.filter(|_| !SNIPPETS.iter().any(|(label, ..)| *label == name))?;
+        call_snippet_item(name, ty, false, options)
     };
 
     let mut locals: Vec<_> = doc.resolution.locals_visible_at(offset).filter(|(_, l)| matches(&l.name)).collect();

@@ -86,12 +86,14 @@ pub enum EventKind {
     Trigger,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum EventFamily {
     Native,
     OxLib,
     QbCore,
     Esx,
+    /// Wrappers tagged `---@callback`, by the family name of their tag.
+    Custom(SmolStr),
 }
 
 #[derive(Clone, Debug)]

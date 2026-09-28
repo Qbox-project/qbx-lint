@@ -55,6 +55,7 @@ Windows. Run the command in a shell that supports input redirection.
 | `qbx_luacats` (workspace crate) | Type representation and LuaCATS annotations, re-exported as `crate::types` and `crate::luacats`. |
 | `src/indexer.rs`, `src/index.rs` | File summaries, symbols and visibility between resources. |
 | `src/infer.rs` | Type inference used by editor features. |
+| `src/framework_callbacks.rs`, `src/callback_wrappers.rs` | QB-Core/ESX callback adapters and `---@callback` wrappers. |
 | `src/workspace.rs` | Resource discovery, manifests, dependencies and index refreshes. |
 | `src/features/` | LSP feature implementations. |
 | `src/server.rs` | Protocol dispatch, settings and diagnostics publication. |

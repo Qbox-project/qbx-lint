@@ -11,9 +11,10 @@ use qbx_lua_syntax::ast::*;
 use qbx_lua_syntax::{NumberValue, SmolStr};
 use rustc_hash::{FxHashMap, FxHashSet};
 
+use crate::callback_wrappers::{self, Wrapper};
 use crate::index::{FileId, Index, SymbolKind};
 use crate::luacats::{applies_on, parse_doc_lines, DocGroup};
-use crate::types::{FunType, Param, Shape, ShapeField, Type};
+use crate::types::{CallbackRole, FunType, Param, Shape, ShapeField, Type};
 
 const MAX_DEPTH: u32 = 24;
 const MAX_SHAPE_FIELDS: usize = 96;
@@ -452,8 +453,10 @@ impl<'a> Infer<'a> {
             }
             Decl::Param { func, index, doc_anchor, expected } => {
                 let name = &func.params[*index].text;
-                if let Some(anchor) = doc_anchor {
-                    let doc = self.ctx.doc_at(*anchor);
+                // A function passed to a call takes the `@param` lines above that call's statement, as
+                // the handler of `RegisterServerCallback('name', function(source, id) end)` does.
+                if let Some(anchor) = doc_anchor.or_else(|| expected.as_ref().map(|e| e.call.span.start)) {
+                    let doc = self.ctx.doc_at(anchor);
                     if let Some(param) = doc.params.iter().find(|p| p.name == *name) {
                         return if param.optional { param.ty.clone().optional() } else { param.ty.clone() };
                     }
@@ -522,6 +525,16 @@ impl<'a> Infer<'a> {
         let fun = self.signature_for(&fun?, &args, via_method, expected.call.span.start);
         let (skip_params, skip_args) = fun.call_offsets(via_method);
         let param_index = (expected.arg_index + skip_params).checked_sub(skip_args)?;
+        // `TriggerCallback('name', function(response) end)` receives what the handler of `name` returns.
+        if let Some(wrapper) = Wrapper::of(&fun, via_method).filter(|w| w.tag.role == CallbackRole::Trigger) {
+            if wrapper.function.map(|param| wrapper.arg(param)) == Some(expected.arg_index) {
+                if let Some(handler) = self.wrapper_handler(&wrapper, args.exprs, expected.call.span.start) {
+                    if !handler.returns.is_empty() {
+                        return Some(handler.returns.get(index).cloned().unwrap_or(Type::Nil));
+                    }
+                }
+            }
+        }
         let callback = fun.params.get(param_index)?.ty.as_fun()?.clone();
         let ty = &callback.params.get(index)?.ty;
         Some(substitute(ty, &self.bind_generics(&fun, &args, via_method, false)))
@@ -881,6 +894,14 @@ impl<'a> Infer<'a> {
         let Some((fun, _)) = self.callee_fun(base, method) else { return Vec::new() };
         let args = CallArgs::new(args);
         let fun = self.signature_for(&fun, &args, method.is_some(), base.span.start);
+        // `AwaitServerCallback('name', ...)` returns what the handler of `name` returns.
+        if let Some(wrapper) = Wrapper::of(&fun, method.is_some()).filter(|w| w.tag.role == CallbackRole::Await) {
+            if let Some(handler) = self.wrapper_handler(&wrapper, args.exprs, base.span.start) {
+                if !handler.returns.is_empty() {
+                    return handler.returns.clone();
+                }
+            }
+        }
         let generics = self.bind_generics(&fun, &args, method.is_some(), true);
         fun.returns.iter().map(|ret| substitute(ret, &generics)).collect()
     }
@@ -1016,6 +1037,14 @@ impl<'a> Infer<'a> {
             }
         }
         best.1
+    }
+
+    /// The handler registered under the name a call at `at` passes to an `await` or `trigger` wrapper.
+    fn wrapper_handler(&self, wrapper: &Wrapper, args: &[Expr], at: u32) -> Option<Arc<FunType>> {
+        let name = args.get(wrapper.arg(wrapper.name))?.as_string()?;
+        let target = callback_wrappers::target_of(self.side_at(at));
+        let (_, event) = callback_wrappers::handler(self.index, &wrapper.family(), name, target)?;
+        event.handler.clone()
     }
 
     fn fit(&self, fun: &FunType, call: &CallArgs, via_method: bool) -> Fit {

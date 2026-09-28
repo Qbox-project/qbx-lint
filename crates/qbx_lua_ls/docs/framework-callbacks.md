@@ -40,9 +40,35 @@ asynchronous response. Conflicting payload definitions disable derived signature
 and inlay hints and are identified in completion details. Navigation and hovers
 can list multiple registrations.
 
-Client-callback/Await variants, filtered `GetCoreObject` calls, custom wrappers,
-computed callback names and response-type inference require a separate scope
+Client-callback/Await variants, filtered `GetCoreObject` calls, computed callback
+names and response-type inference for these frameworks require a separate scope
 decision. Existing native events and ox_lib callbacks keep their own conventions.
+A resource's own wrappers are declared with `---@callback` instead; see below.
+
+## Resource-defined wrappers
+
+A function tagged `---@callback register|await|trigger [family]` joins a callback
+system of its own. Nothing about it is hardcoded: the parts come from the
+wrapper's annotations.
+
+| Part | Taken from |
+|---|---|
+| Name | The first parameter typed `string`, or else the first that takes no function. |
+| Handler (`register`) or response function (`trigger`) | The first parameter typed `fun(...)` or `function`. |
+| Payload (`await`, `trigger`) | The `...` parameter. |
+
+The tag travels with the function's type, so local aliases, table members and
+`:` methods of a wrapper are recognized too. Registrations are indexed like
+`lib.callback.register`: a doc comment directly above the registering statement
+types an inline handler and its parameters, and handlers registered outside the
+client drop their first parameter, `source`, from the payload. A call made on one
+side reaches handlers registered on the other side, as `lib.callback` does.
+
+`await` calls return the handler's `@return` types. `trigger` calls pass them to
+the response function's parameters. Wrappers without a family name share one set
+of names; a family name keeps separate systems apart. A registration is
+recognized once its wrapper has been indexed; the startup scan's second pass
+settles this for files on disk.
 
 ## Maintaining the adapters
 

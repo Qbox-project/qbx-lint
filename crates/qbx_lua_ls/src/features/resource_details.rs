@@ -273,7 +273,7 @@ pub fn details(index: &Index, params: DetailsParams) -> Result<ResourceDetails, 
         }
         dynamic_exports |= file.index.dynamic_exports;
         for event in file.index.events.iter().filter(|event| event.kind != EventKind::Trigger) {
-            let kind = match (event.family, event.kind) {
+            let kind = match (&event.family, event.kind) {
                 (_, EventKind::NetEvent) => "Network event",
                 (_, EventKind::Handler) => "Event handler",
                 (EventFamily::QbCore, _) => "QB-Core callback",

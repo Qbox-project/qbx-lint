@@ -76,6 +76,8 @@ pub struct Server {
     docs: Documents,
     settings: Settings,
     snippet_support: bool,
+    /// The client runs `editor.action.triggerSuggest` when a completion item asks for it.
+    trigger_suggest: bool,
     watched_files_registration: bool,
     dirty: FxHashSet<Url>,
     diagnostics_pending: bool,
@@ -185,6 +187,14 @@ impl Server {
             .and_then(|completion| completion.completion_item.as_ref())
             .and_then(|item| item.snippet_support)
             .unwrap_or(false);
+        // Clients list the commands they run themselves under `experimental.commands.commands`, as
+        // rust-analyzer's clients do.
+        let trigger_suggest = params
+            .capabilities
+            .experimental
+            .as_ref()
+            .and_then(|experimental| experimental.get("commands")?.get("commands")?.as_array())
+            .is_some_and(|commands| commands.iter().any(|command| command == "editor.action.triggerSuggest"));
         let watched_files_registration = params
             .capabilities
             .workspace
@@ -198,6 +208,7 @@ impl Server {
             docs: Documents::default(),
             settings,
             snippet_support,
+            trigger_suggest,
             watched_files_registration,
             dirty: FxHashSet::default(),
             diagnostics_pending: false,
@@ -309,7 +320,10 @@ impl Server {
     fn flush_index(&mut self) {
         self.diagnostics_pending |= !self.dirty.is_empty();
         let mut relink = false;
-        for uri in std::mem::take(&mut self.dirty) {
+        // Calls to a `---@callback` wrapper are only recognized once the wrapper is indexed.
+        let mut dirty: Vec<Url> = std::mem::take(&mut self.dirty).into_iter().collect();
+        dirty.sort_by_key(|uri| !self.docs.get(uri).is_some_and(|doc| doc.text.contains("@callback")));
+        for uri in dirty {
             if let Some(doc) = self.docs.get_mut(&uri) {
                 // A full scan reallocates file IDs, including the reserved slots for manifests.
                 doc.file = self.ws.index.allocate(&doc.path);
@@ -602,7 +616,8 @@ impl Server {
             req::Completion::METHOD => {
                 let p: CompletionParams = params(raw)?;
                 let doc = self.doc(&p.text_document_position.text_document.uri)?;
-                reply(completion::completion(&self.ws, doc, p.text_document_position.position, self.snippet_support))
+                let position = p.text_document_position.position;
+                reply(completion::completion(&self.ws, doc, position, self.snippet_support, self.trigger_suggest))
             }
             req::ResolveCompletionItem::METHOD => reply(completion::resolve(params(raw)?)),
             req::HoverRequest::METHOD => {

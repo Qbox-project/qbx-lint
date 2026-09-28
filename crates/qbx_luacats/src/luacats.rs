@@ -3,7 +3,7 @@ use std::sync::Arc;
 use qbx_fivem_data::Side;
 use smol_str::SmolStr;
 
-use crate::types::{FunType, Param, Type, TypeParser};
+use crate::types::{CallbackTag, FunType, Param, Type, TypeParser};
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct DocParam {
@@ -72,6 +72,7 @@ pub struct DocGroup {
     pub is_async: bool,
     pub nodiscard: bool,
     pub is_meta: bool,
+    pub callback: Option<CallbackTag>,
 }
 
 impl DocGroup {
@@ -110,6 +111,7 @@ impl DocGroup {
             generics: self.generics.clone(),
             overloads,
             side: None,
+            callback: self.callback.clone(),
         }
     }
 
@@ -311,6 +313,7 @@ pub fn parse_doc_lines(lines: &[&str]) -> DocGroup {
             "async" => group.is_async = true,
             "nodiscard" => group.nodiscard = true,
             "meta" => group.is_meta = true,
+            "callback" => group.callback = CallbackTag::parse(rest),
             _ => {}
         }
     }
@@ -534,6 +537,20 @@ mod tests {
         assert_eq!(doc.enum_name.as_deref(), Some("Side"));
         assert!(doc.enum_keys);
         assert!(!parse("---@enum Side").enum_keys);
+    }
+
+    #[test]
+    fn callback_tags() {
+        use crate::types::CallbackRole;
+        let doc = parse("---@callback register\n---@param name string\n---@param handler fun(source: integer, ...)");
+        let fun = doc.fun_type(&["name".into(), "handler".into()], false, false);
+        assert_eq!(fun.callback, Some(CallbackTag { role: CallbackRole::Register, family: "".into() }));
+        let tag = |text: &str| parse(text).callback;
+        assert_eq!(tag("---@callback await shop").unwrap().family, "shop");
+        assert_eq!(tag("---@callback trigger # runs the handler").unwrap().family, "");
+        assert_eq!(tag("---@callback trigger").unwrap().role, CallbackRole::Trigger);
+        assert_eq!(tag("---@callback call"), None);
+        assert_eq!(tag("---@callback"), None);
     }
 
     #[test]
