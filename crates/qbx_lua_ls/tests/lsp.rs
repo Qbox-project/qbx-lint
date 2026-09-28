@@ -1386,6 +1386,25 @@ fn publishes_lint_diagnostics_with_resource_context() {
 }
 
 #[test]
+fn missing_arguments_follow_annotations_in_other_files() {
+    const SHARED: &str = "myresource/shared/config.lua";
+    let mut client = Client::start(fixture_root());
+    let shared = client.open(SHARED);
+    let text = client.open(CLIENT);
+    let notify = "\n---@param message string\n---@param duration integer\nfunction Notify(message, duration) print(message, duration) end\n";
+    client.change(SHARED, 2, &format!("{shared}{notify}"));
+    let calling = format!("{text}\nNotify('saved')\n");
+    client.change(CLIENT, 2, &calling);
+    let line = calling.lines().count() as u64 - 1;
+    let found = client.diagnostics_for(CLIENT);
+    assert!(found.contains(&("missing-parameter".to_string(), line)), "{found:?}");
+
+    client.change(SHARED, 3, &format!("{shared}{}", notify.replace("duration integer", "duration? integer")));
+    let found = client.diagnostics_for(CLIENT);
+    assert!(!found.iter().any(|(code, _)| code == "missing-parameter"), "the parameter became optional: {found:?}");
+}
+
+#[test]
 fn references_rename_and_symbols() {
     let mut client = Client::start(fixture_root());
     let text = client.open(CLIENT);

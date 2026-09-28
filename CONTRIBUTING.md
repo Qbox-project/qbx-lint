@@ -29,6 +29,7 @@ cargo run --locked -p qbx_lint -- fmt --check path/to/resource
 | --- | --- |
 | `qbx_lua_syntax` | Lua and CfxLua lexer, parser, syntax tree, and visitors. |
 | `qbx_lua_fmt` | Formatter and output verification. |
+| `qbx_luacats` | LuaCATS annotation and type parser. |
 | `qbx_fivem_data` | Native data, runtime stubs, and known manifest imports. |
 | `qbx_lua_analysis` | Scopes, resource models, rules, configuration, and suppressions. |
 | `qbx_lint` | Command-line interface and report formats. |

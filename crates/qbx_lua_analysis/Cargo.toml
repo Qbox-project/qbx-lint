@@ -11,6 +11,7 @@ docs = ["qbx_fivem_data/docs"]
 
 [dependencies]
 qbx_lua_syntax.workspace = true
+qbx_luacats.workspace = true
 qbx_fivem_data.workspace = true
 smol_str.workspace = true
 rustc-hash.workspace = true

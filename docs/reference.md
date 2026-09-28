@@ -98,7 +98,7 @@ qbx-lint needs anything beyond it. `--config` also accepts these files.
 | LuaLS / EmmyLua setting | Used as |
 | --- | --- |
 | `diagnostics.globals` | `globals`, without the names qbx-lint already knows: runtime globals, natives, and globals of imports such as `@ox_lib/init.lua`, so the manifest and client/server checks still apply to them |
-| `diagnostics.disable` | `off` for `undefined-global`, `lowercase-global`, `unused-local`, `unused-function`, `unused-label`, `redefined-local`, `unreachable-code`, `empty-block`, `unbalanced-assignments` and `duplicate-index`; EmmyLua's `unused` covers the `unused-*` rules |
+| `diagnostics.disable` | `off` for `undefined-global`, `lowercase-global`, `unused-local`, `unused-function`, `unused-label`, `redefined-local`, `unreachable-code`, `empty-block`, `unbalanced-assignments`, `duplicate-index` and `missing-parameter`; EmmyLua's `unused` covers the `unused-*` rules |
 | `diagnostics.severity` | Levels for the same codes (`Error`, `Warning`, `Information`, `Hint`, with or without a trailing `!`) |
 | `workspace.ignoreDir` | Exclusions. LuaLS entries are gitignore-style patterns; `.emmyrc.json` entries are directories from the root |
 | `workspace.ignoreGlobs` | Exclusions, as glob patterns |
@@ -193,6 +193,32 @@ Recognized runtime guards narrow side checks within a file. Examples include
 An early return such as `if not IsDuplicityVersion() then return end` narrows the following code
 to the server. Event registrations inside these regions use that effective side.
 
+## Function arguments
+
+`missing-parameter` compares calls with the LuaCATS annotations of the function they call. A
+parameter is required when a `@param` documents it with a type that does not allow `nil`: no `?`
+after its name, and a type other than `nil`, `any`, `unknown`, a union with `nil`, or an `@alias`
+that includes one of those. Undocumented parameters are optional, so a function without `@param`
+lines is never reported. Every parameter before the last required one has to be passed as well.
+`@overload` and `---@type fun(...)` signatures count, and the one that needs the fewest arguments
+decides.
+
+Calls are checked when the function is:
+
+- a local function, or a local that is only ever assigned functions;
+- a global function defined by a script on the caller's side, or by one of its imports;
+- a field of a global table, or of a local table in the same file, that a `function Utils.round(x)`
+  or `function Utils:round(x)` statement or an assignment defines.
+
+A method defined with `:` and called with `.` needs `self` as its first argument. When a name has
+several definitions, for example a client and a server `Notify`, a call is compared with those its
+side can reach, and is not checked when any of them is not a function. A `:` call passes its
+receiver as the first argument whatever that parameter is named, so `function Locale.new(_, opts)`
+called as `Locale:new(opts)` receives both. Calls whose last argument
+is another call or `...` pass an unknown number of arguments and are skipped, as are natives,
+runtime functions, exports, and methods of objects returned by calls, such as
+`GetPlayer(source):setJob(job)`.
+
 ## Events, exports, and locales
 
 The CLI first collects event registrations and exports from the resources being analyzed, then
@@ -223,7 +249,8 @@ complete knowledge of its globals or locale usage. Readable scripts are still an
 Unknown-export checks are suppressed for opaque resources and resources with non-Lua scripts.
 An opaque resource may also handle events named with its `resource:` prefix, so a wrong-side
 diagnostic is suppressed when the missing handler could be in that resource. Computed export
-registrations similarly prevent a complete list of exports.
+registrations similarly prevent a complete list of exports. `missing-parameter` does not check
+calls to globals in an opaque resource, since an encrypted script may define them differently.
 
 Read-only linting uses replacement characters for invalid UTF-8 bytes. `--fix`, `fmt`, and
 `fmt --check` report an encoding error for such source, and do not rewrite it. Convert its encoding

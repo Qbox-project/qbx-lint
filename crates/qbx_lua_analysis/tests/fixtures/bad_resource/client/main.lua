@@ -33,3 +33,5 @@ RegisterNetEvent('bad:client', function(a, a)
     goto nowhere
     return t
 end)
+
+Notify('saved')

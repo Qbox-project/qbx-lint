@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/qbx_lua_syntax",
     "crates/qbx_lua_fmt",
+    "crates/qbx_luacats",
     "crates/qbx_lua_analysis",
     "crates/qbx_fivem_data",
     "crates/qbx_lint",
@@ -12,6 +13,7 @@ members = [
 default-members = [
     "crates/qbx_lua_syntax",
     "crates/qbx_lua_fmt",
+    "crates/qbx_luacats",
     "crates/qbx_lua_analysis",
     "crates/qbx_fivem_data",
     "crates/qbx_lint",
@@ -27,6 +29,7 @@ repository = "https://github.com/Qbox-project/qbx-lua"
 [workspace.dependencies]
 qbx_lua_syntax = { version = "=1.0.6", path = "crates/qbx_lua_syntax" }
 qbx_lua_fmt = { version = "=1.0.6", path = "crates/qbx_lua_fmt" }
+qbx_luacats = { version = "=1.0.6", path = "crates/qbx_luacats" }
 qbx_lua_analysis = { version = "=1.0.6", path = "crates/qbx_lua_analysis" }
 qbx_fivem_data = { version = "=1.0.6", path = "crates/qbx_fivem_data" }
 smol_str = "0.3"

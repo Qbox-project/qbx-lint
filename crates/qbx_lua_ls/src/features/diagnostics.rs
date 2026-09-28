@@ -81,7 +81,7 @@ pub(crate) fn diagnostics_with_support(
             has_lua_scripts: !resource.files.is_empty(),
         })
     } else {
-        let summary = summarize(&doc.chunk, &doc.resolution);
+        let summary = summarize(&doc.text, &doc.chunk, &doc.resolution);
         let is_map = resource.is_some_and(|r| {
             r.manifest.is_map_file(&qbx_lua_analysis::project::relative_slash_path(&r.root, &doc.path))
         });
