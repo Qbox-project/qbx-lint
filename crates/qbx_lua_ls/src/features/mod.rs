@@ -10,6 +10,7 @@ pub mod inlay;
 pub mod member_refs;
 mod native_argument;
 pub mod nui_resource;
+pub mod on_type;
 pub mod reference;
 pub mod references;
 pub mod resource_assets;
