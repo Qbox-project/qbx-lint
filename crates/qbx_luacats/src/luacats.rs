@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use qbx_fivem_data::Side;
 use smol_str::SmolStr;
 
 use crate::types::{FunType, Param, Type, TypeParser};
@@ -27,6 +28,8 @@ pub struct DocField {
     pub description: String,
     /// Index of the doc line the field was declared on, used to locate it in the source.
     pub line: usize,
+    /// The side of `@field (server) name type`.
+    pub side: Option<Side>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -38,6 +41,8 @@ pub struct DocClass {
     pub call: Option<Arc<FunType>>,
     pub description: String,
     pub line: usize,
+    /// The side of `@class (server) Name`.
+    pub side: Option<Side>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -46,6 +51,8 @@ pub struct DocAlias {
     pub ty: Type,
     pub description: String,
     pub line: usize,
+    /// The side of `@alias (server) Name`, or of `@enum (server) Name` for the alias an enum becomes.
+    pub side: Option<Side>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -58,6 +65,7 @@ pub struct DocGroup {
     pub ty: Option<Type>,
     pub enum_name: Option<SmolStr>,
     pub enum_keys: bool,
+    pub enum_side: Option<Side>,
     pub generics: Vec<SmolStr>,
     pub overloads: Vec<Arc<FunType>>,
     pub deprecated: Option<String>,
@@ -101,6 +109,7 @@ impl DocGroup {
             is_method,
             generics: self.generics.clone(),
             overloads,
+            side: None,
         }
     }
 
@@ -136,11 +145,49 @@ fn alias_member(line: &str) -> Option<&str> {
     Some(line.trim_start().strip_prefix('|')?.trim_start_matches(['>', '+', ' ']))
 }
 
-/// Splits attributes such as `(exact)`, `(partial)` or `(key)` off the front of a `@class` or `@enum`.
+/// Splits attributes such as `(exact)`, `(key)` or `(server)` off the front of a tag. A parenthesized
+/// type like the `(fun(): string)` of an `@overload` is no list of words and stays.
 fn split_attributes(rest: &str) -> (&str, &str) {
-    match rest.strip_prefix('(').and_then(|inner| inner.split_once(')')) {
-        Some((attributes, rest)) => (attributes, rest.trim_start()),
-        None => ("", rest),
+    let Some((attributes, after)) = rest.strip_prefix('(').and_then(|inner| inner.split_once(')')) else {
+        return ("", rest);
+    };
+    let is_word = |word: &str| !word.trim().is_empty() && word.trim().chars().all(|c| c.is_ascii_alphabetic());
+    if attributes.split(',').all(is_word) {
+        (attributes, after.trim_start())
+    } else {
+        ("", rest)
+    }
+}
+
+/// The side named among the attributes: `(server)`, `(client)`, or `(exact, server)`.
+fn side_attribute(attributes: &str) -> Option<Side> {
+    let named = |side: &str| attributes.split(',').any(|attribute| attribute.trim() == side);
+    match (named("client"), named("server")) {
+        (true, false) => Some(Side::Client),
+        (false, true) => Some(Side::Server),
+        _ => None,
+    }
+}
+
+/// Whether a declaration scoped to `declared` applies to code on `side`. Unscoped declarations
+/// apply everywhere, and shared code or code of an unknown side sees both sides, the way it sees
+/// the globals of both.
+pub fn applies_on(declared: Option<Side>, side: Option<Side>) -> bool {
+    match (declared, side) {
+        (Some(declared), Some(side)) => declared.is_available_on(side),
+        _ => true,
+    }
+}
+
+/// An `@overload` signature, with the side its attributes scope it to.
+fn overload(rest: &str) -> Option<Arc<FunType>> {
+    let (attributes, rest) = split_attributes(rest);
+    match TypeParser::new(rest).parse() {
+        Type::Fun(fun) => match side_attribute(attributes) {
+            None => Some(fun),
+            side => Some(Arc::new(FunType { side, ..(*fun).clone() })),
+        },
+        _ => None,
     }
 }
 
@@ -169,7 +216,7 @@ pub fn parse_doc_lines(lines: &[&str]) -> DocGroup {
         open_alias = false;
         match tag {
             "class" => {
-                let (_, rest) = split_attributes(rest);
+                let (attributes, rest) = split_attributes(rest);
                 let (head, parents) = rest.split_once(':').unwrap_or((rest, ""));
                 let name = head.split_whitespace().next().unwrap_or("").split('<').next().unwrap_or("");
                 if name.is_empty() {
@@ -185,23 +232,19 @@ pub fn parse_doc_lines(lines: &[&str]) -> DocGroup {
                     parents,
                     description: description.join("\n").trim().to_string(),
                     line: index,
+                    side: side_attribute(attributes),
                     ..DocClass::default()
                 });
             }
             "field" => parse_field(rest, index, &mut group),
             "overload" if !group.classes.is_empty() && !group.has_function_tags() => {
-                if let Type::Fun(fun) = TypeParser::new(rest).parse() {
-                    if let Some(class) = group.classes.last_mut() {
-                        class.call = Some(fun);
-                    }
+                if let (Some(fun), Some(class)) = (overload(rest), group.classes.last_mut()) {
+                    class.call = Some(fun);
                 }
             }
-            "overload" => {
-                if let Type::Fun(fun) = TypeParser::new(rest).parse() {
-                    group.overloads.push(fun);
-                }
-            }
+            "overload" => group.overloads.extend(overload(rest)),
             "alias" => {
+                let (attributes, rest) = split_attributes(rest);
                 let mut parser = TypeParser::new(rest);
                 let Some(name) = parser.ident() else { continue };
                 parser.skip_ws();
@@ -211,6 +254,7 @@ pub fn parse_doc_lines(lines: &[&str]) -> DocGroup {
                     ty,
                     description: description.join("\n").trim().to_string(),
                     line: index,
+                    side: side_attribute(attributes),
                 });
                 open_alias = true;
             }
@@ -218,6 +262,7 @@ pub fn parse_doc_lines(lines: &[&str]) -> DocGroup {
                 let (attributes, rest) = split_attributes(rest);
                 group.enum_name = rest.split_whitespace().next().map(SmolStr::new);
                 group.enum_keys = attributes.split(',').any(|attribute| attribute.trim() == "key");
+                group.enum_side = side_attribute(attributes);
             }
             "param" => {
                 let mut parser = TypeParser::new(rest);
@@ -274,16 +319,24 @@ pub fn parse_doc_lines(lines: &[&str]) -> DocGroup {
     group
 }
 
+/// The text of a `@field` after its `(server)` attributes and `private` keyword, in either order,
+/// with the side the attributes name.
+fn field_head(rest: &str) -> (Option<Side>, &str) {
+    let (before, rest) = split_attributes(rest);
+    let (after, rest) = split_attributes(strip_visibility(rest));
+    (side_attribute(before).or(side_attribute(after)), rest)
+}
+
 fn parse_field(rest: &str, line: usize, group: &mut DocGroup) {
     let Some(class) = group.classes.last_mut() else { return };
-    let rest = strip_visibility(rest);
+    let (side, rest) = field_head(rest);
     if let Some(index) = rest.strip_prefix('[') {
         let mut parser = TypeParser::new(index);
         let key = parser.parse();
         let after = parser.rest().trim_start().strip_prefix(']').unwrap_or(parser.rest());
         let value = TypeParser::new(after).parse();
         match key {
-            Type::StringLit(name) => class.fields.push(DocField { name, ty: value, line, ..DocField::default() }),
+            Type::StringLit(name) => class.fields.push(DocField { name, ty: value, line, side, ..DocField::default() }),
             key => class.index = Some((key, value)),
         }
         return;
@@ -299,6 +352,7 @@ fn parse_field(rest: &str, line: usize, group: &mut DocGroup) {
         optional,
         description: clean_description(parser.rest()),
         line,
+        side,
     });
 }
 
@@ -365,7 +419,7 @@ pub fn type_name_at(line: &str, offset: usize) -> Option<(usize, &str)> {
             }
         }
         "alias" => {
-            if let Some(rest) = names.declared(rest) {
+            if let Some(rest) = names.declared(split_attributes(rest).1) {
                 names.types(rest);
             }
         }
@@ -378,7 +432,7 @@ pub fn type_name_at(line: &str, offset: usize) -> Option<(usize, &str)> {
             }
         }
         "field" => {
-            let rest = strip_visibility(rest);
+            let (_, rest) = field_head(rest);
             let value = match rest.strip_prefix('[') {
                 Some(key) => names.ty(key).trim_start().strip_prefix(']'),
                 None => skip_name(rest),
@@ -414,7 +468,8 @@ pub fn type_name_at(line: &str, offset: usize) -> Option<(usize, &str)> {
         "see" => {
             names.ty(rest);
         }
-        "type" | "overload" | "vararg" | "as" | "|" => names.types(rest),
+        "overload" => names.types(split_attributes(rest).1),
+        "type" | "vararg" | "as" | "|" => names.types(rest),
         _ => {}
     }
     names.found.into_iter().find(|(start, name)| (*start..=start + name.len()).contains(&offset))
@@ -482,6 +537,48 @@ mod tests {
     }
 
     #[test]
+    fn side_attributes() {
+        let doc = parse(
+            "---@class (exact, server) Account\n---@field (client) hud table\n---@field private (server) bank number\n---@field name string\n---@field (server) ['license-id'] string\n---@overload (client) fun(id: integer): Account",
+        );
+        let class = &doc.classes[0];
+        assert_eq!((class.name.as_str(), class.side), ("Account", Some(Side::Server)));
+        let fields: Vec<(&str, Option<Side>)> = class.fields.iter().map(|f| (f.name.as_str(), f.side)).collect();
+        assert_eq!(
+            fields,
+            [
+                ("hud", Some(Side::Client)),
+                ("bank", Some(Side::Server)),
+                ("name", None),
+                ("license-id", Some(Side::Server))
+            ]
+        );
+        assert_eq!(class.call.as_ref().unwrap().side, Some(Side::Client));
+
+        let doc = parse("---@alias (client) Key\n---| 'E'\n---| 'F'\n---@alias Id integer");
+        assert_eq!(doc.aliases[0].name, "Key");
+        assert_eq!(doc.aliases[0].side, Some(Side::Client));
+        assert_eq!(doc.aliases[0].ty.to_string(), "\"E\"|\"F\"");
+        assert_eq!(doc.aliases[1].side, None);
+
+        let doc = parse("---@enum (key, server) Jobs");
+        assert_eq!((doc.enum_name.as_deref(), doc.enum_keys, doc.enum_side), (Some("Jobs"), true, Some(Side::Server)));
+
+        let doc = parse("---@param a string\n---@overload (server) fun(a: string, b: number)\n---@overload fun()\n---@overload (fun(): string)");
+        let sides: Vec<Option<Side>> = doc.overloads.iter().map(|o| o.side).collect();
+        assert_eq!(sides, [Some(Side::Server), None, None], "a parenthesized type is no attribute list");
+        let fun = doc.fun_type(&["a".into()], false, false);
+        assert_eq!(fun.overloads[0].side, Some(Side::Server));
+        assert_eq!(fun.side, None);
+
+        assert!(applies_on(None, Some(Side::Client)));
+        assert!(applies_on(Some(Side::Server), None));
+        assert!(applies_on(Some(Side::Server), Some(Side::Shared)));
+        assert!(applies_on(Some(Side::Server), Some(Side::Server)));
+        assert!(!applies_on(Some(Side::Server), Some(Side::Client)));
+    }
+
+    #[test]
     fn bracketed_descriptions_inside_field_types() {
         let doc = parse(
             "---@class Config.Bleeding\n---@field items table<string, {value: number [how much], anim: table {dict: string [dictionary]}}> [items]",
@@ -522,6 +619,11 @@ mod tests {
             "@class (partial) Child: Gar^age",
             "@alias Gar^age string",
             "@alias Value Gar^age",
+            "@alias (server) Gar^age string",
+            "@alias (client) Value Gar^age",
+            "@field (server) value? Gar^age",
+            "@field private (client) value Gar^age",
+            "@overload (server) fun(): Gar^age",
             "| > Gar^age # description",
             "@enum Gar^age",
             "@enum (key) Gar^age",
@@ -566,6 +668,8 @@ mod tests {
             "@class Child<Gar^age>: Parent",
             "@class (Gar^age) Child",
             "@enum (Gar^age) Mode",
+            "@alias (Gar^age) Mode string",
+            "@field (Gar^age) value string",
             "@cast Gar^age string",
             "@operator Gar^age(number): string",
             "@see string, see Gar^age",

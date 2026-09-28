@@ -3,15 +3,16 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use lsp_types::Range;
-use qbx_fivem_data::native;
+use qbx_fivem_data::{native, Side};
 use qbx_lua_analysis::env::leading_doc_lines;
 use qbx_lua_analysis::scope::{LocalId, LocalKind, Resolution, Resolved};
+use qbx_lua_analysis::side_guard::SideRegions;
 use qbx_lua_syntax::ast::*;
 use qbx_lua_syntax::{NumberValue, SmolStr};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::index::{FileId, Index, SymbolKind};
-use crate::luacats::{parse_doc_lines, DocGroup};
+use crate::luacats::{applies_on, parse_doc_lines, DocGroup};
 use crate::types::{FunType, Param, Shape, ShapeField, Type};
 
 const MAX_DEPTH: u32 = 24;
@@ -268,6 +269,11 @@ pub struct MemberInfo {
 pub struct Infer<'a> {
     pub ctx: &'a FileContext<'a>,
     pub index: &'a Index,
+    /// The manifest side of the file, which decides the `(server)` and `(client)` classes, aliases
+    /// and fields it sees.
+    side: Option<Side>,
+    /// Guarded regions, which narrow the side of the calls in them for `(server)` overloads.
+    regions: OnceCell<SideRegions>,
     locals: RefCell<FxHashMap<LocalId, Type>>,
     in_progress: RefCell<FxHashSet<LocalId>>,
     depth: Cell<u32>,
@@ -292,21 +298,35 @@ pub fn native_fun_type(native: &qbx_fivem_data::Native) -> FunType {
             .map(|(name, ty)| Param { name: SmolStr::new(name), ty: native_type(ty), optional: false })
             .collect(),
         returns: native.returns().map(native_type).collect(),
-        is_method: false,
-        generics: Vec::new(),
-        overloads: Vec::new(),
+        ..FunType::default()
     }
 }
 
 impl<'a> Infer<'a> {
     pub fn new(ctx: &'a FileContext<'a>, index: &'a Index) -> Self {
+        Self::with_side(ctx, index, index.file(ctx.file).and_then(|f| f.side))
+    }
+
+    pub fn with_side(ctx: &'a FileContext<'a>, index: &'a Index, side: Option<Side>) -> Self {
         Self {
             ctx,
             index,
+            side,
+            regions: OnceCell::new(),
             locals: RefCell::new(FxHashMap::default()),
             in_progress: RefCell::new(FxHashSet::default()),
             depth: Cell::new(0),
         }
+    }
+
+    /// The manifest side of the file.
+    pub fn side(&self) -> Option<Side> {
+        self.side
+    }
+
+    /// The side of the code at `offset`, narrowed by `IsDuplicityVersion()` and `lib.context` guards.
+    pub fn side_at(&self, offset: u32) -> Option<Side> {
+        self.regions.get_or_init(|| SideRegions::of(self.ctx.source, self.ctx.chunk)).effective(offset, self.side)
     }
 
     fn guarded<T: Default>(&self, f: impl FnOnce() -> T) -> T {
@@ -499,7 +519,7 @@ impl<'a> Infer<'a> {
             _ => return None,
         };
         let args = CallArgs::new(args);
-        let fun = self.signature_for(&fun?, &args, via_method);
+        let fun = self.signature_for(&fun?, &args, via_method, expected.call.span.start);
         let (skip_params, skip_args) = fun.call_offsets(via_method);
         let param_index = (expected.arg_index + skip_params).checked_sub(skip_args)?;
         let callback = fun.params.get(param_index)?.ty.as_fun()?.clone();
@@ -591,7 +611,7 @@ impl<'a> Infer<'a> {
             Type::Named(ref name, _) => {
                 let index = self
                     .index
-                    .class(name)
+                    .class(name, self.side)
                     .and_then(|(_, c)| c.index.clone())
                     .filter(|(key, _)| !array_only || is_integer_key(key));
                 // An instance holds its data; the methods its class provides are not visited.
@@ -669,10 +689,12 @@ impl<'a> Infer<'a> {
         let mut current = ty.clone();
         for _ in 0..8 {
             match &current {
-                Type::Named(name, _) if self.index.class(name).is_none() => match self.index.alias(name) {
-                    Some((_, alias)) => current = alias.ty.clone(),
-                    None => break,
-                },
+                Type::Named(name, _) if self.index.class(name, self.side).is_none() => {
+                    match self.index.alias(name, self.side) {
+                        Some((_, alias)) => current = alias.ty.clone(),
+                        None => break,
+                    }
+                }
                 Type::Require(path) => match self.module_type(path) {
                     Some(ty) => current = ty,
                     None => break,
@@ -720,7 +742,8 @@ impl<'a> Infer<'a> {
             },
             Type::Shape(shape) => Type::union(shape.array.iter().chain(shape.index.as_ref().map(|(_, v)| v)).cloned()),
             Type::Named(name, _) => {
-                self.index.class(&name).and_then(|(_, c)| c.index.as_ref().map(|(_, v)| v.clone())).unwrap_or_default()
+                let class = self.index.class(&name, self.side);
+                class.and_then(|(_, c)| c.index.as_ref().map(|(_, v)| v.clone())).unwrap_or_default()
             }
             // `list[i]` on a table whose array part the index or a top-level local's constructor holds.
             Type::GlobalTable(owner)
@@ -828,7 +851,8 @@ impl<'a> Infer<'a> {
                 }
                 match self.resolve_alias(&ty) {
                     Type::Named(name, _) => {
-                        self.index.class(&name).and_then(|(_, c)| c.call.clone()).map(|f| (f, None))
+                        let call = self.index.class(&name, self.side).and_then(|(_, c)| c.call.clone());
+                        call.filter(|f| applies_on(f.side, self.side)).map(|f| (f, None))
                     }
                     _ => None,
                 }
@@ -856,7 +880,7 @@ impl<'a> Infer<'a> {
         }
         let Some((fun, _)) = self.callee_fun(base, method) else { return Vec::new() };
         let args = CallArgs::new(args);
-        let fun = self.signature_for(&fun, &args, method.is_some());
+        let fun = self.signature_for(&fun, &args, method.is_some(), base.span.start);
         let generics = self.bind_generics(&fun, &args, method.is_some(), true);
         fun.returns.iter().map(|ret| substitute(ret, &generics)).collect()
     }
@@ -947,25 +971,39 @@ impl<'a> Infer<'a> {
     /// `fun(x, y, z): vector3` wins over a `vec(...)` that only takes three values through `...`, and
     /// `fun(action: "keyPressed")` wins over `fun(action: string)` for `"keyPressed"`, as well as over
     /// an `action: Actions` whose alias lists `"keyPressed"` among others. Ties go to the declared
-    /// signature, then to the earliest overload.
-    fn signature_for(&self, fun: &Arc<FunType>, args: &CallArgs, via_method: bool) -> Arc<FunType> {
+    /// signature, then to the earliest overload. An `@overload (server)` only counts for a call at
+    /// `at` that runs on the server.
+    fn signature_for(&self, fun: &Arc<FunType>, args: &CallArgs, via_method: bool, at: u32) -> Arc<FunType> {
         if fun.overloads.is_empty() {
             return fun.clone();
         }
-        let signatures = signatures(fun);
+        let signatures = self.signatures_at(fun, at);
         signatures[self.best_fit(&signatures, args, via_method)].clone()
     }
 
     /// The signature a call picks, as `signature_for` does while inferring it.
-    pub fn call_signature(&self, fun: &Arc<FunType>, args: &[Expr], via_method: bool) -> Arc<FunType> {
-        self.signature_for(fun, &CallArgs::new(args), via_method)
+    pub fn call_signature(&self, fun: &Arc<FunType>, args: &[Expr], via_method: bool, at: u32) -> Arc<FunType> {
+        self.signature_for(fun, &CallArgs::new(args), via_method, at)
     }
 
-    /// The signatures a call can use, and the index of the one its arguments pick.
-    pub fn call_signatures(&self, fun: &Arc<FunType>, args: &[Expr], via_method: bool) -> (Vec<Arc<FunType>>, usize) {
-        let signatures = signatures(fun);
+    /// The signatures a call at `at` can use, and the index of the one its arguments pick.
+    pub fn call_signatures(
+        &self,
+        fun: &Arc<FunType>,
+        args: &[Expr],
+        via_method: bool,
+        at: u32,
+    ) -> (Vec<Arc<FunType>>, usize) {
+        let signatures = self.signatures_at(fun, at);
         let best = if signatures.len() > 1 { self.best_fit(&signatures, &CallArgs::new(args), via_method) } else { 0 };
         (signatures, best)
+    }
+
+    /// The declared signature of `fun`, then the `@overload`s that apply to the code at `at`.
+    fn signatures_at(&self, fun: &Arc<FunType>, at: u32) -> Vec<Arc<FunType>> {
+        let side = self.side_at(at);
+        let overloads = fun.overloads.iter().filter(|overload| applies_on(overload.side, side));
+        std::iter::once(fun).chain(overloads).cloned().collect()
     }
 
     /// The index of the signature a call fits best, the earliest of those that fit equally well.
@@ -1120,7 +1158,7 @@ impl<'a> Infer<'a> {
                 return None
             }
             // Classes describe tables, and also userdata such as `vector3`.
-            Type::Named(name, _) if self.index.class(name).is_some() => kind::TABLE | kind::OTHER,
+            Type::Named(name, _) if self.index.class(name, self.side).is_some() => kind::TABLE | kind::OTHER,
             Type::Named(..) => match self.resolve_alias(ty) {
                 Type::Named(..) => return None,
                 resolved => return self.value_kinds(fun, &resolved, depth + 1),
@@ -1139,7 +1177,9 @@ impl<'a> Infer<'a> {
     /// an alias.
     fn is_generic(&self, fun: &FunType, name: &str) -> bool {
         fun.generics.iter().any(|g| g == name)
-            || (name.len() <= 2 && self.index.class(name).is_none() && self.index.alias(name).is_none())
+            || (name.len() <= 2
+                && self.index.class(name, self.side).is_none()
+                && self.index.alias(name, self.side).is_none())
     }
 
     /// Builds the type of a function literal from its doc comment, inferring returns when undocumented.
@@ -1288,16 +1328,20 @@ impl<'a> Infer<'a> {
         if depth > 8 {
             return;
         }
-        let defs = self.index.class_defs(name);
+        let mut defs = self.index.class_defs(name);
+        defs.retain(|(_, class)| applies_on(class.side, self.side));
         if defs.is_empty() {
-            if let Some((_, alias)) = self.index.alias(name) {
+            if let Some((_, alias)) = self.index.alias(name, self.side) {
                 out.extend(self.guarded(|| self.members_matching(&alias.ty, filter)));
             }
             return;
         }
         for (file, class) in &defs {
-            for field in class.fields.iter().filter(|f| filter.is_none_or(|n| n == f.name)) {
-                out.push(member_from_symbol(*file, field));
+            let sides = class.field_sides.iter().copied().chain(std::iter::repeat(None));
+            for (field, side) in class.fields.iter().zip(sides) {
+                if filter.is_none_or(|n| n == field.name) && applies_on(side, self.side) {
+                    out.push(member_from_symbol(*file, field));
+                }
             }
         }
         self.owner_members(name, filter, out);
@@ -1319,11 +1363,6 @@ fn member_from_symbol(file: FileId, symbol: &crate::index::Symbol) -> MemberInfo
         kind: symbol.kind,
         location: Some((file, symbol.range)),
     }
-}
-
-/// The declared signature of `fun`, then its `@overload`s.
-fn signatures(fun: &Arc<FunType>) -> Vec<Arc<FunType>> {
-    std::iter::once(fun).chain(&fun.overloads).cloned().collect()
 }
 
 fn substitute(ty: &Type, generics: &[(SmolStr, Type)]) -> Type {
@@ -1352,8 +1391,7 @@ fn substitute(ty: &Type, generics: &[(SmolStr, Type)]) -> Type {
             params: fun.params.iter().map(|p| Param { ty: substitute(&p.ty, generics), ..p.clone() }).collect(),
             returns: fun.returns.iter().map(|t| substitute(t, generics)).collect(),
             is_method: fun.is_method,
-            generics: Vec::new(),
-            overloads: Vec::new(),
+            ..FunType::default()
         })),
         Type::Shape(shape) => Type::Shape(Arc::new(Shape {
             fields: shape.fields.iter().map(|f| ShapeField { ty: substitute(&f.ty, generics), ..f.clone() }).collect(),

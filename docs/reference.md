@@ -201,7 +201,9 @@ after its name, and a type other than `nil`, `any`, `unknown`, a union with `nil
 that includes one of those. Undocumented parameters are optional, so a function without `@param`
 lines is never reported. Every parameter before the last required one has to be passed as well.
 `@overload` and `---@type fun(...)` signatures count, and the one that needs the fewest arguments
-decides.
+decides. An `@overload (server) fun(...)` or `@overload (client) fun(...)` only counts for calls
+on that side, as decided by the script's manifest side and any `IsDuplicityVersion()` or
+`lib.context` guard around the call; shared code counts both.
 
 Calls are checked when the function is:
 

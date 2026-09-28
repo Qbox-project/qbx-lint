@@ -1,6 +1,7 @@
 use std::fmt;
 use std::sync::Arc;
 
+use qbx_fivem_data::Side;
 use smol_str::SmolStr;
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -54,6 +55,8 @@ pub struct FunType {
     pub generics: Vec<SmolStr>,
     /// The `@overload` signatures, for calls the declared one does not fit.
     pub overloads: Vec<Arc<FunType>>,
+    /// The side an `@overload (server)` or `(client)` signature applies to.
+    pub side: Option<Side>,
 }
 
 #[derive(Clone, Debug, PartialEq, Default)]
@@ -514,7 +517,7 @@ impl<'a> TypeParser<'a> {
             self.eat(b',');
         }
         let returns = if self.eat(b':') { self.parse_return_list() } else { Vec::new() };
-        Type::Fun(Arc::new(FunType { params, returns, is_method: false, generics: Vec::new(), overloads: Vec::new() }))
+        Type::Fun(Arc::new(FunType { params, returns, ..FunType::default() }))
     }
 
     fn parse_return_list(&mut self) -> Vec<Type> {

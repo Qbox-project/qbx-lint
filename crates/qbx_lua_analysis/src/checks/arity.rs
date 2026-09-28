@@ -3,6 +3,7 @@ use std::sync::Arc;
 use qbx_lua_syntax::ast::*;
 use qbx_lua_syntax::visit::{self, Visitor};
 use qbx_lua_syntax::{SmolStr, Span};
+use qbx_luacats::luacats::applies_on;
 use qbx_luacats::types::FunType;
 use rustc_hash::FxHashMap;
 
@@ -168,6 +169,7 @@ impl Calls<'_, '_, '_> {
         display: &str,
     ) {
         let Some(passed) = passed_count(args, 0) else { return };
+        let side = self.regions.effective(call.span.start, self.input.side);
         let defs: Vec<Option<&Arc<FunType>>> = match self.input.resolution.resolve_at(root.span.start) {
             Some(Resolved::Local(id)) => {
                 // Parameters and loop variables start out with a value this file does not know.
@@ -184,19 +186,20 @@ impl Calls<'_, '_, '_> {
             Some(Resolved::Global(_)) if self.env.opaque => return,
             Some(Resolved::Global(_)) => {
                 let Some(path) = global_key(&root.text, fields) else { return };
-                let side = self.regions.effective(call.span.start, self.input.side);
                 self.env.function_defs(&path, side).collect()
             }
             None => return,
         };
 
-        // Any definition or overload that accepts fewer arguments may be the one that runs.
+        // Any definition or overload that accepts fewer arguments may be the one that runs, unless
+        // the overload is scoped to the other side.
         let env = self.env;
         let alias = |name: &str| env.alias(name);
         let mut least: Option<Requirement> = None;
         for def in defs {
             let Some(fun) = def else { return };
-            for candidate in std::iter::once(fun).chain(&fun.overloads) {
+            let overloads = fun.overloads.iter().filter(|overload| applies_on(overload.side, side));
+            for candidate in std::iter::once(fun).chain(overloads) {
                 let requirement = Requirement::of(candidate, via_colon, &alias);
                 if least.as_ref().is_none_or(|least| requirement.arguments < least.arguments) {
                     least = Some(requirement);

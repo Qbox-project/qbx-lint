@@ -1003,7 +1003,8 @@ fn calls_show_the_overload_they_pick() {
     let text = "---@param action string
 ---@param handler fun(...)
 ---@return number id
----@overload fun(action: 'keyPressed', handler: fun(key: string)): number
+---@overload (client) fun(action: 'keyPressed', handler: fun(key: string)): number
+---@overload (server) fun(action: 'keyPressed', handler: fun(source: integer, key: string)): number
 function OnInput(action, handler) end
 
 ---@param action string
@@ -1050,7 +1051,7 @@ local numbered = findInput(1)
         assert!(hover.contains(expected), "{needle}: expected {expected:?} in {hover}");
     }
 
-    // Signature help lists the declared signature and the overloads.
+    // Signature help lists the declared signature and the overloads for this side.
     let (l, c) = pos(text, "OnInput('keyPressed', f", 22);
     let result = client.request("textDocument/signatureHelp", client.position_params(CLIENT, l, c));
     let labels: Vec<&str> =
@@ -1075,6 +1076,70 @@ local numbered = findInput(1)
     assert_eq!(result["signatures"][1]["activeParameter"], 2);
     // The declared signature passes the same argument to its `...`.
     assert_eq!(result["signatures"][0]["activeParameter"], 1);
+}
+
+#[test]
+fn side_scoped_annotations_follow_the_side_of_the_code() {
+    const SHARED: &str = "myresource/shared/config.lua";
+    let mut client = Client::start(fixture_root());
+    let shared = "\
+---@class Account
+---@field (server) balance number
+---@field (client) balance string
+---@field name string
+
+---@class (server) BankRecord
+---@field id integer
+
+---@alias (client) Key 'E'|'F'
+---@alias (server) Key integer
+
+---@param event string
+---@param handler fun(...)
+---@overload (server) fun(event: 'tick', handler: fun(delta: number))
+---@overload (client) fun(event: 'tick', handler: fun(frame: string))
+function OnTick(event, handler) end
+
+if IsDuplicityVersion() then
+    OnTick('tick', function(guardedDelta) end)
+else
+    OnTick('tick', function(guardedFrame) end)
+end
+";
+    client.open_with(SHARED, shared);
+    let uses = |side: &str| {
+        format!(
+            "---@type Account\nlocal {side}Account\nlocal {side}Balance = {side}Account.balance\nlocal {side}Name = {side}Account.name\nOnTick('tick', function({side}Tick) end)\n---@type BankRecord\nlocal {side}Record\nlocal {side}RecordId = {side}Record.id\n---@type Key\nlocal {side}Key\n"
+        )
+    };
+    let client_text = uses("client");
+    let server_text = uses("server");
+    client.open_with(CLIENT, &client_text);
+    client.open_with(SERVER, &server_text);
+
+    let cases = [
+        (CLIENT, &client_text, "clientBalance", "clientBalance: string"),
+        (CLIENT, &client_text, "clientName", "clientName: string"),
+        (CLIENT, &client_text, "clientTick", "clientTick: string"),
+        // The server-only class does not exist for the client.
+        (CLIENT, &client_text, "clientRecordId", "clientRecordId: unknown"),
+        (SERVER, &server_text, "serverBalance", "serverBalance: number"),
+        (SERVER, &server_text, "serverTick", "serverTick: number"),
+        (SERVER, &server_text, "serverRecordId", "serverRecordId: integer"),
+        // Guards narrow the side of shared code.
+        (SHARED, &shared.to_string(), "guardedDelta", "guardedDelta: number"),
+        (SHARED, &shared.to_string(), "guardedFrame", "guardedFrame: string"),
+    ];
+    for (file, text, needle, expected) in cases {
+        let (l, c) = pos(text, needle, 0);
+        let hover = client.hover_text(file, l, c);
+        assert!(hover.contains(expected), "{needle}: expected {expected:?} in {hover}");
+    }
+    for (file, text, expected) in [(CLIENT, &client_text, "\"E\"|\"F\""), (SERVER, &server_text, "= integer")] {
+        let (l, c) = pos(text, "@type Key", 6);
+        let hover = client.hover_text(file, l, c);
+        assert!(hover.contains(expected), "{file}: expected {expected:?} in {hover}");
+    }
 }
 
 #[test]

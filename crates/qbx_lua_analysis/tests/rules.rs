@@ -627,6 +627,28 @@ fn global_functions_are_checked_on_the_side_that_calls_them() {
 }
 
 #[test]
+fn overloads_scoped_to_the_other_side_do_not_excuse_a_call() {
+    let shared = (
+        Some(Side::Shared),
+        "---@param source integer\n---@param message string\n---@overload (client) fun(message: string)\nfunction Notify(source, message) end",
+    );
+    assert!(missing_parameters("Notify('hi')", Some(Side::Client), &[shared]).is_empty());
+    assert_eq!(
+        missing_parameters("Notify('hi')", Some(Side::Server), &[shared]),
+        ["'Notify' is called with 1 argument, but needs 2; 'message' (string) will be nil"]
+    );
+    assert!(missing_parameters("Notify('hi')", Some(Side::Shared), &[shared]).is_empty());
+    assert_eq!(
+        missing_parameters("if IsDuplicityVersion() then Notify('hi') end", Some(Side::Shared), &[shared]).len(),
+        1,
+        "a guarded server branch cannot use the client overload"
+    );
+    let local = "---@param a string\n---@param b number\n---@overload (server) fun(a: string)\nlocal function f(a, b) end\nf('x')";
+    assert_eq!(missing_parameters(local, Some(Side::Client), &[]).len(), 1);
+    assert!(missing_parameters(local, Some(Side::Server), &[]).is_empty());
+}
+
+#[test]
 fn values_the_linter_cannot_follow_are_not_checked() {
     let missing = |source: &str| missing_parameters(source, Some(Side::Client), &[]);
     for source in [

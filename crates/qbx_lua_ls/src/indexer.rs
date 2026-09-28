@@ -56,7 +56,8 @@ pub fn index_file(
     side: Option<Side>,
 ) -> FileIndex {
     let ctx = FileContext::new(file, source, chunk, resolution);
-    let infer = Infer::new(&ctx, index);
+    // The index may not hold this file yet, so its side is passed along.
+    let infer = Infer::with_side(&ctx, index, side);
     let lines = LineIndex::new(source);
     let mut indexer = Indexer {
         file,
@@ -166,6 +167,7 @@ impl<'a> Indexer<'a> {
         let doc = parse_doc_lines(&lines);
         for class in doc.classes {
             let range = self.range(group[class.line.min(group.len() - 1)].span);
+            let field_sides = class.fields.iter().map(|field| field.side).collect();
             let fields = class
                 .fields
                 .into_iter()
@@ -183,10 +185,12 @@ impl<'a> Indexer<'a> {
                 name: class.name,
                 parents: class.parents,
                 fields,
+                field_sides,
                 index: class.index,
                 call: class.call,
                 doc: (!class.description.is_empty()).then(|| Arc::from(class.description.as_str())),
                 range,
+                side: class.side,
             });
         }
         for alias in doc.aliases {
@@ -196,6 +200,7 @@ impl<'a> Indexer<'a> {
                 ty: alias.ty,
                 doc: (!alias.description.is_empty()).then(|| Arc::from(alias.description.as_str())),
                 range,
+                side: alias.side,
             });
         }
     }
@@ -257,7 +262,7 @@ impl<'a> Indexer<'a> {
                     let fields = table_fields(expr).unwrap_or_default();
                     kind = SymbolKind::Table;
                     if let Some(enum_name) = &doc.enum_name {
-                        self.enum_class(enum_name.clone(), doc.enum_keys, fields, name.span);
+                        self.enum_class(enum_name.clone(), doc.enum_keys, doc.enum_side, fields, name.span);
                     }
                     self.table_members(SmolStr::new(nested_owner), fields, table_depth + 1);
                     Type::GlobalTable(SmolStr::new(nested_owner))
@@ -297,7 +302,7 @@ impl<'a> Indexer<'a> {
         (is_literal && text.len() <= 48 && !text.contains('\n')).then(|| SmolStr::new(text))
     }
 
-    fn enum_class(&mut self, name: SmolStr, keys: bool, fields: &[TableField], span: Span) {
+    fn enum_class(&mut self, name: SmolStr, keys: bool, side: Option<Side>, fields: &[TableField], span: Span) {
         let values: Vec<Type> = fields
             .iter()
             .filter_map(|f| match f {
@@ -308,7 +313,7 @@ impl<'a> Indexer<'a> {
             })
             .collect();
         let range = self.range(span);
-        self.out.aliases.push(AliasDef { name, ty: Type::union(values), doc: None, range });
+        self.out.aliases.push(AliasDef { name, ty: Type::union(values), doc: None, range, side });
     }
 
     fn push_element(&mut self, owner: SmolStr, key: Option<Type>, value: Type) {
@@ -378,7 +383,13 @@ impl<'a> Indexer<'a> {
                                 None => self.ctx.local_owner_key(name.name.span.start),
                             };
                             if let Some(enum_name) = &doc.enum_name {
-                                self.enum_class(enum_name.clone(), doc.enum_keys, fields, name.name.span);
+                                self.enum_class(
+                                    enum_name.clone(),
+                                    doc.enum_keys,
+                                    doc.enum_side,
+                                    fields,
+                                    name.name.span,
+                                );
                             }
                             self.table_members(owner, fields, 1);
                         }

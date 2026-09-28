@@ -128,9 +128,7 @@ pub fn event_call(
             } else {
                 Vec::new()
             },
-            is_method: false,
-            generics: Vec::new(),
-            overloads: Vec::new(),
+            ..FunType::default()
         },
         event: name.to_string(),
         handler_location: format!("{}{file_name}:{}", resource.unwrap_or_default(), event.range.start.line + 1),
