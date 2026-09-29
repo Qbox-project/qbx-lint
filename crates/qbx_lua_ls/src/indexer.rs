@@ -74,8 +74,8 @@ pub fn index_file(
     };
     indexer.doc_comments(&chunk.comments);
     indexer.block(&chunk.block);
-    if let Some(Stmt { kind: StmtKind::Return(exprs), .. }) = chunk.block.stmts.last() {
-        indexer.module_return(exprs);
+    if let Some(stmt @ Stmt { kind: StmtKind::Return(exprs), .. }) = chunk.block.stmts.last() {
+        indexer.module_return(stmt.span.start, exprs);
     }
     let mut out = indexer.out;
     out.summary = summarize(source, chunk, resolution);
@@ -536,10 +536,15 @@ impl<'a> Indexer<'a> {
         }
     }
 
-    fn module_return(&mut self, exprs: &[Expr]) {
+    fn module_return(&mut self, stmt_start: u32, exprs: &[Expr]) {
         let Some(first) = exprs.first() else { return };
         self.out.module_return = Some(match table_fields(first) {
             Some(fields) => {
+                // `---@enum Name` above `return { ... }` declares the enum a module exports.
+                let doc = self.ctx.doc_at(stmt_start);
+                if let Some(enum_name) = &doc.enum_name {
+                    self.enum_class(enum_name.clone(), doc.enum_keys, doc.enum_side, fields, first.span);
+                }
                 let owner = SmolStr::new(format!("%mod{}", self.file));
                 self.table_members(owner.clone(), fields, 1);
                 Type::GlobalTable(owner)
