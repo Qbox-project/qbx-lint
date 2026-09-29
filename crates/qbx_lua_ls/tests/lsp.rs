@@ -3481,6 +3481,74 @@ function PlainGreeting(name) end
 }
 
 #[test]
+fn string_arguments_list_the_literals_their_signatures_take() {
+    let mut client = Client::start(fixture_root());
+    let defs = "\
+---@alias Actions
+---| \"playerLoaded\"
+---| \"playerUnloaded\"
+---| \"keyPressed\"
+---| string
+
+---@param action Actions
+---@param handler fun(...)
+---@return number id
+---@overload fun(action: \"keyPressed\", handler: fun(key: string)): number
+---@overload fun(action: \"jobUpdated\", handler: fun(job: table)): number
+---@overload (server) fun(action: \"serverOnly\", handler: fun(source: number)): number
+function OnAction(action, handler) end
+
+---@class Emitter
+Emitter = {}
+
+---@param event \"open\"|\"close\"
+---@param mode \"once\"|\"always\"
+function Emitter:on(event, mode) end
+
+---@param name string
+function PlainGreeting(name) end
+";
+    client.open_with("myresource/shared/config.lua", defs);
+    // `|` marks the cursor. Items come back in the order their `sortText` lists them.
+    let mut literals = |file: &str, typed: &str| -> Vec<Value> {
+        let (line, column) = pos(typed, "|", 0);
+        client.open_with(file, &typed.replace('|', ""));
+        let result = client.request("textDocument/completion", client.position_params(file, line, column));
+        let mut items = result["items"].as_array().cloned().unwrap_or_default();
+        items.sort_by_key(|item| item["sortText"].as_str().unwrap_or_default().to_string());
+        items
+    };
+    let labels = |items: &[Value]| -> Vec<String> {
+        items.iter().map(|item| item["label"].as_str().unwrap_or_default().to_string()).collect()
+    };
+
+    // The alias lists its values in order, then the overloads for this side add theirs.
+    let items = literals(CLIENT, "OnAction('|')");
+    assert_eq!(labels(&items), ["playerLoaded", "playerUnloaded", "keyPressed", "jobUpdated"]);
+    assert_eq!(items[0]["detail"], "Actions");
+    assert_eq!(items[0]["textEdit"]["range"]["start"]["character"], 10);
+    assert_eq!(items[0]["textEdit"]["range"]["end"]["character"], 10);
+    // A value names the overloads that take it alone.
+    let documentation = items[2]["documentation"]["value"].as_str().unwrap_or_default();
+    assert!(
+        documentation.contains("OnAction(action: \"keyPressed\", handler: fun(key: string)): number"),
+        "{documentation}"
+    );
+    assert!(items[0].get("documentation").is_none(), "{}", items[0]);
+
+    let items = literals(SERVER, "OnAction(\"play|\")");
+    assert_eq!(labels(&items), ["playerLoaded", "playerUnloaded", "keyPressed", "jobUpdated", "serverOnly"]);
+    // The whole content is replaced, so accepting does not keep the typed prefix twice.
+    assert_eq!(items[0]["textEdit"]["range"]["start"]["character"], 10);
+    assert_eq!(items[0]["textEdit"]["range"]["end"]["character"], 14);
+
+    let emitter = "local emitter = Emitter\n";
+    assert_eq!(labels(&literals(CLIENT, &format!("{emitter}emitter:on('|')"))), ["open", "close"]);
+    assert_eq!(labels(&literals(CLIENT, &format!("{emitter}emitter:on('open', '|')"))), ["once", "always"]);
+    assert!(literals(CLIENT, "PlainGreeting('|')").is_empty());
+}
+
+#[test]
 fn arguments_that_take_a_function_offer_it_as_a_snippet() {
     let mut client = Client::start(fixture_root());
     let defs = "\
@@ -3579,6 +3647,155 @@ function Later(ms, cb) end
         let found = snippets(CLIENT, typed, Some(","));
         assert!(found.is_none(), "{typed}: {found:?}");
     }
+}
+
+#[test]
+fn arguments_without_quotes_offer_the_values_their_parameter_lists() {
+    let mut client = Client::start(fixture_root());
+    let defs = "\
+---@alias Actions \"playerLoaded\"|\"playerUnloaded\"|string
+
+---@param action Actions
+---@param handler fun(...)
+---@overload fun(action: \"playerUnloaded\", handler: fun(source: number))
+function OnAction(action, handler) end
+
+---@class Emitter
+Emitter = {}
+
+---@param event \"open\"|\"close\"
+---@param mode \"once\"|\"always\"
+function Emitter:on(event, mode) end
+";
+    client.open_with("myresource/shared/config.lua", defs);
+    // `|` marks the cursor; `trigger` is the character typed to ask for completions. Items come back
+    // in the order their `sortText` lists them, as label and inserted text.
+    let mut values = |typed: &str, trigger: Option<&str>| -> Option<Vec<(String, String)>> {
+        let (line, column) = pos(typed, "|", 0);
+        client.open_with(CLIENT, &typed.replace('|', ""));
+        let mut params = client.position_params(CLIENT, line, column);
+        if let Some(trigger) = trigger {
+            params["context"] = json!({ "triggerKind": 2, "triggerCharacter": trigger });
+        }
+        let result = client.request("textDocument/completion", params);
+        let mut items = result["items"].as_array()?.clone();
+        items.sort_by_key(|item| item["sortText"].as_str().unwrap_or_default().to_string());
+        Some(
+            items
+                .iter()
+                .filter(|item| item["kind"] == 20)
+                .map(|item| {
+                    let label = item["label"].as_str().unwrap().to_string();
+                    (label.clone(), item["insertText"].as_str().map_or(label, str::to_string))
+                })
+                .collect(),
+        )
+    };
+    let pairs = |pairs: &[(&str, &str)]| -> Option<Vec<(String, String)>> {
+        Some(pairs.iter().map(|(label, text)| (label.to_string(), text.to_string())).collect())
+    };
+
+    // Typing the `(` lists the values quoted, as does asking without it.
+    let quoted = pairs(&[("'playerLoaded'", "'playerLoaded'"), ("'playerUnloaded'", "'playerUnloaded'")]);
+    assert_eq!(values("OnAction(|)", Some("(")), quoted);
+    assert_eq!(values("OnAction(|", None), quoted);
+    // Strings take the quote most of the document's strings use.
+    assert_eq!(
+        values("local label = \"x\"\nOnAction(|)", None),
+        pairs(&[("\"playerLoaded\"", "\"playerLoaded\""), ("\"playerUnloaded\"", "\"playerUnloaded\"")])
+    );
+    // After a `,`, the values of the next parameter, with a space.
+    assert_eq!(
+        values("local emitter = Emitter\nemitter:on('open',|)", Some(",")),
+        pairs(&[("'once'", " 'once'"), ("'always'", " 'always'")])
+    );
+    // A handler lists no values.
+    assert_eq!(values("OnAction('playerUnloaded',|)", Some(",")), Some(Vec::new()));
+    // A typed `(` asks for nothing where no call's first argument lists values.
+    for typed in ["if (|", "print(|", "function Handle(|", "local value = (|", "OnAction((|"] {
+        let found = values(typed, Some("("));
+        assert!(found.is_none(), "{typed}: {found:?}");
+    }
+    // A typed word filters them by the value, beside the names in scope.
+    let (line, column) = pos("OnAction(pl|)", "|", 0);
+    client.open_with(CLIENT, "OnAction(pl)");
+    let result = client.request("textDocument/completion", client.position_params(CLIENT, line, column));
+    let loaded = result["items"].as_array().unwrap().iter().find(|item| item["label"] == "'playerLoaded'");
+    assert_eq!(loaded.map(|item| &item["filterText"]), Some(&json!("playerLoaded")), "{result}");
+}
+
+#[test]
+fn call_snippets_leave_listed_values_to_the_list() {
+    let defs = "\
+---@alias Actions \"playerLoaded\"|\"playerUnloaded\"|string
+
+---@param action Actions
+---@param handler fun(...)
+---@overload fun(action: \"playerUnloaded\", handler: fun(source: number))
+function OnAction(action, handler) end
+
+---@param action string
+---@param handler fun(...)
+---@overload (server) fun(action: \"serverOnly\", handler: fun(source: number))
+function OnServer(action, handler) end
+
+---@param topic \"chat\"|\"news\"
+---@param handler fun(message: string)
+function Subscribe(topic, handler) end
+
+---@param id integer
+---@param kind \"a\"|\"b\"
+---@param cb fun()
+function Tagged(id, kind, cb) end
+
+---@class Emitter
+Emitter = {}
+
+---@param event \"open\"|\"close\"
+---@param mode \"once\"|\"always\"
+function Emitter:on(event, mode) end
+";
+    let mut vscode = json!({ "textDocument": { "completion": { "completionItem": { "snippetSupport": true } } } });
+    vscode["experimental"] = json!({ "commands": { "commands": ["editor.action.triggerSuggest"] } });
+    let mut client = Client::start_with_capabilities(fixture_root(), vscode);
+    client.open_with("myresource/shared/config.lua", defs);
+    // `|` marks the cursor. The call snippet of `label`, with its command.
+    let mut snippet = |file: &str, typed: &str, label: &str| -> (String, Value) {
+        let (line, column) = pos(typed, "|", 0);
+        client.open_with(file, &typed.replace('|', ""));
+        let result = client.request("textDocument/completion", client.position_params(file, line, column));
+        let items = result["items"].as_array().cloned().unwrap_or_default();
+        let found =
+            items.iter().find(|item| item["label"] == label && item["labelDetails"]["description"] == "snippet");
+        let found = found.unwrap_or_else(|| panic!("{typed}: no call snippet in {result}"));
+        (found["insertText"].as_str().unwrap().to_string(), found["command"].clone())
+    };
+    let reopen = json!({ "title": "Suggest values", "command": "editor.action.triggerSuggest" });
+
+    // The handler depends on the value an overload takes alone, so the snippet ends after it.
+    assert_eq!(snippet(CLIENT, "OnAct|", "OnAction"), ("OnAction('$1'$0)".into(), reopen.clone()));
+    assert_eq!(
+        snippet(CLIENT, "local label = \"x\"\nOnAct|", "OnAction"),
+        ("OnAction(\"$1\"$0)".into(), reopen.clone())
+    );
+    // Only the overloads of the side count.
+    assert_eq!(
+        snippet(CLIENT, "OnServ|", "OnServer"),
+        ("OnServer('${1:action}', function(${2:...})\n\t$0\nend)".into(), Value::Null)
+    );
+    assert_eq!(snippet(SERVER, "OnServ|", "OnServer"), ("OnServer('$1'$0)".into(), reopen.clone()));
+    // Values that decide nothing leave the handler written out.
+    assert_eq!(
+        snippet(CLIENT, "Subscri|", "Subscribe"),
+        ("Subscribe('$1', function(${2:message})\n\t$0\nend)".into(), reopen.clone())
+    );
+    // Suggestions reopen only when the first stop is a list.
+    assert_eq!(
+        snippet(CLIENT, "Tagg|", "Tagged"),
+        ("Tagged(${1:id}, '$2', function()\n\t$0\nend)".into(), Value::Null)
+    );
+    // Parameters that list values get a snippet without taking a callback.
+    assert_eq!(snippet(CLIENT, "local emitter = Emitter\nemitter:o|", "on"), ("on('$1', '$2')".into(), reopen));
 }
 
 #[test]

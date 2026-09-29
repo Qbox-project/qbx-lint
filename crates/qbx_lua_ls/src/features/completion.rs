@@ -2,14 +2,15 @@ use std::sync::Arc;
 
 use lsp_types::{
     Command, CompletionItem, CompletionItemKind, CompletionItemLabelDetails, CompletionItemTag, CompletionList,
-    CompletionResponse, Documentation, InsertTextFormat, Position, TextEdit,
+    CompletionResponse, Documentation, InsertTextFormat, Position, Range, TextEdit,
 };
 use qbx_fivem_data::{native, native_docs, natives, Side};
 use qbx_lua_analysis::manifest::KNOWN_DIRECTIVES;
 use qbx_lua_analysis::project::relative_slash_path;
 use qbx_lua_analysis::scope::LocalKind;
-use qbx_lua_syntax::ast::ExprKind;
-use qbx_lua_syntax::{CommentKind, Span, TokenKind};
+use qbx_lua_fmt::QuoteStyle;
+use qbx_lua_syntax::ast::{Expr, ExprKind, Name};
+use qbx_lua_syntax::{CommentKind, SmolStr, Span, TokenKind};
 use rustc_hash::{FxHashMap, FxHashSet};
 use serde_json::json;
 
@@ -157,33 +158,83 @@ fn snippet_item(label: &str, body: &str, description: &str) -> CompletionItem {
     out
 }
 
+/// What the string values a parameter lists mean for a call snippet.
+#[derive(Clone, Copy, Default, PartialEq)]
+enum Listed {
+    #[default]
+    Nothing,
+    Values,
+    /// An `@overload` takes one of them alone, so what the rest of the call passes depends on it, as
+    /// the handler of `OnAction("playerUnloaded", handler)` does.
+    Deciding,
+}
+
+/// A call snippet, and whether its first stop is where the values of a list or the registered
+/// callback names can be suggested.
+struct CallSnippet {
+    body: String,
+    lists_first: bool,
+}
+
 /// A call to `name` with its callbacks written out, for functions that take one, such as
 /// `TriggerCallback('${1:event}', function(${2:...})\n\t$0\nend)`. Arguments after the last callback
 /// that may be left out, such as a `...` payload, share one stop after its `end`.
 ///
 /// `lookup` is the parameter an `await` or `trigger` wrapper takes a callback name in. Its first
-/// stop is left empty between the quotes, where the registered names can be suggested.
-fn call_snippet(name: &str, fun: &FunType, via_colon: bool, lookup: Option<usize>) -> Option<String> {
+/// stop is left empty between the quotes, where the registered names can be suggested. So are the
+/// stops of parameters that list string values, which `listed` gives by position. A parameter whose
+/// value decides the rest of the call ends the snippet, with the final stop right after it, since
+/// the arguments that follow can only be written out once it is picked.
+fn call_snippet(
+    name: &str,
+    fun: &FunType,
+    via_colon: bool,
+    lookup: Option<usize>,
+    listed: &[Listed],
+    quote: char,
+) -> Option<CallSnippet> {
     let (skip_params, _) = fun.call_offsets(via_colon);
     let params = fun.params.get(skip_params..)?;
+    let listed_at = |i: usize| listed.get(i).copied().unwrap_or_default();
+    let required = |p: &Param| p.name != "..." && !p.optional;
+    let deciding = match lookup {
+        Some(_) => None,
+        None => (0..params.len()).find(|&i| required(&params[i]) && listed_at(i) == Listed::Deciding),
+    };
     let last_callback = params.iter().rposition(|p| p.name != "..." && takes_function(&p.ty));
-    let last = last_callback.max(lookup)?;
-    let required_after = params[last + 1..].iter().take_while(|p| p.name != "..." && !p.optional).count();
-    let written = &params[..=last + required_after];
+    let written = match deciding {
+        Some(deciding) => &params[..=deciding],
+        None => {
+            let last_listed =
+                (0..params.len()).rev().find(|&i| required(&params[i]) && listed_at(i) != Listed::Nothing);
+            let last = last_callback.max(lookup).max(last_listed)?;
+            let required_after = params[last + 1..].iter().take_while(|p| required(p)).count();
+            &params[..=last + required_after]
+        }
+    };
+    // The callback whose body holds the final stop, unless that comes after a deciding value.
+    let final_callback = last_callback.filter(|_| deciding.is_none());
     let mut stop = usize::from(lookup.is_some());
     let mut next = || {
         stop += 1;
         stop
     };
+    let mut lists_first = lookup.is_some();
     let mut args = Vec::new();
     for (i, param) in written.iter().enumerate() {
         if Some(i) == lookup {
-            args.push("'$1'".to_string());
+            args.push(format!("{quote}$1{quote}"));
+            continue;
+        }
+        if listed_at(i) != Listed::Nothing {
+            let stop = next();
+            lists_first |= stop == 1;
+            args.push(format!("{quote}${stop}{quote}"));
             continue;
         }
         if last_callback.is_none_or(|last| i > last) || !takes_function(&param.ty) {
             let is_string = matches!(param.ty.without_nil(), Type::String | Type::StringLit(_));
-            let quote = if is_string { "'" } else { "" };
+            let quote = if is_string { quote.to_string() } else { String::new() };
             args.push(format!("{quote}${{{}:{}}}{quote}", next(), param.name));
             continue;
         }
@@ -195,23 +246,37 @@ fn call_snippet(name: &str, fun: &FunType, via_colon: bool, lookup: Option<usize
             }
             None => format!("${{{}}}", next()),
         };
-        let body = if Some(i) == last_callback { "$0".to_string() } else { format!("${}", next()) };
+        let body = if Some(i) == final_callback { "$0".to_string() } else { format!("${}", next()) };
         args.push(format!("function({callback_params})\n\t{body}\nend"));
     }
-    let rest = if params.len() > written.len() { format!("${}", next()) } else { String::new() };
-    Some(format!("{name}({}{rest})", args.join(", ")))
+    let rest = match deciding {
+        Some(_) => "$0".to_string(),
+        None if params.len() > written.len() => format!("${}", next()),
+        None => String::new(),
+    };
+    Some(CallSnippet { body: format!("{name}({}{rest})", args.join(", ")), lists_first })
 }
 
 /// How call snippets are offered.
 #[derive(Clone, Copy)]
 struct CallSnippets {
-    /// The client runs `editor.action.triggerSuggest` for us, so inserting an `await` or `trigger`
-    /// wrapper call can list the callback names right away.
+    /// The client runs `editor.action.triggerSuggest` for us, so inserting a call can list the values
+    /// or callback names of its first stop right away.
     reopen_suggestions: bool,
+    /// The quote of the strings the snippets write.
+    quote: char,
+    /// Where the call is written, which decides the `@overload`s that apply.
+    at: u32,
 }
 
 /// The call snippet of a completed function, beside the item that inserts only its name.
-fn call_snippet_item(name: &str, ty: &Type, via_colon: bool, options: CallSnippets) -> Option<CompletionItem> {
+fn call_snippet_item(
+    infer: &Infer,
+    name: &str,
+    ty: &Type,
+    via_colon: bool,
+    options: CallSnippets,
+) -> Option<CompletionItem> {
     let fun = ty.as_fun()?;
     // `Shop.price(` has to pass `self` itself; the snippet would leave it out.
     if fun.is_method && !via_colon {
@@ -220,11 +285,23 @@ fn call_snippet_item(name: &str, ty: &Type, via_colon: bool, options: CallSnippe
     // A name to register is new, so only `await` and `trigger` wrappers look one up.
     let wrapper = Wrapper::of(fun, via_colon).filter(|wrapper| wrapper.tag.role != CallbackRole::Register);
     let lookup = wrapper.map(|wrapper| wrapper.name);
-    let body = call_snippet(name, fun, via_colon, lookup)?;
-    let mut out = snippet_item(name, &body, &fun.signature(name));
+    let signatures = infer.open_call_signatures(fun, &[], via_colon, options.at);
+    let listed: Vec<Listed> = (0..fun.params.len())
+        .map(|i| {
+            let literals = argument_literals(infer, &signatures, i, via_colon, "");
+            match literals.iter().any(|literal| !literal.taken_alone_by.is_empty()) {
+                true => Listed::Deciding,
+                false if literals.is_empty() => Listed::Nothing,
+                false => Listed::Values,
+            }
+        })
+        .collect();
+    let snippet = call_snippet(name, fun, via_colon, lookup, &listed, options.quote)?;
+    let mut out = snippet_item(name, &snippet.body, &fun.signature(name));
     out.kind = Some(if via_colon { CompletionItemKind::METHOD } else { CompletionItemKind::FUNCTION });
-    if lookup.is_some() && options.reopen_suggestions {
-        out.command = Some(Command::new("Suggest callback names".into(), "editor.action.triggerSuggest".into(), None));
+    if snippet.lists_first && options.reopen_suggestions {
+        let title = if lookup.is_some() { "Suggest callback names" } else { "Suggest values" };
+        out.command = Some(Command::new(title.into(), "editor.action.triggerSuggest".into(), None));
     }
     Some(out)
 }
@@ -331,13 +408,14 @@ pub fn completion(
             && (offset < t.span.end || (unterminated && offset == t.span.end))
     });
 
-    // A typed `(` or `,` only asks for the function the argument after it takes, so that Enter after
-    // the `,` of a table or any other list still inserts a newline.
+    let quote = quote_of(ws, doc);
+    // A typed `(` or `,` only asks for what the argument after it takes, so that Enter after the `,`
+    // of a table or any other list still inserts a newline.
     if matches!(trigger_character, Some("(" | ",")) {
-        if comment.is_some() || in_string.is_some() || !snippets {
+        if comment.is_some() || in_string.is_some() {
             return None;
         }
-        let items = with_infer(ws, doc, |infer| callback_items(infer, doc, offset, before));
+        let items = with_infer(ws, doc, |infer| argument_items(infer, doc, offset, before, snippets, quote));
         return (!items.is_empty()).then(|| respond(items, false));
     }
 
@@ -360,8 +438,11 @@ pub fn completion(
     let after = doc.text[offset as usize..].trim_start_matches(|c: char| c.is_ascii_alphanumeric() || c == '_');
     let statement = head.trim_start();
     let defines = matches!(statement, "function" | "local function") || statement.starts_with("function ");
-    let call_snippets =
-        (snippets && !after.starts_with('(') && !defines).then_some(CallSnippets { reopen_suggestions });
+    let call_snippets = (snippets && !after.starts_with('(') && !defines).then_some(CallSnippets {
+        reopen_suggestions,
+        quote,
+        at: offset,
+    });
 
     if (head.ends_with('.') && !head.ends_with("..")) || (head.ends_with(':') && !head.ends_with("::")) {
         let via_colon = head.ends_with(':');
@@ -384,8 +465,7 @@ pub fn completion(
             return Some(respond(fields, false));
         }
     }
-    let mut items =
-        if snippets { with_infer(ws, doc, |infer| callback_items(infer, doc, offset, before)) } else { Vec::new() };
+    let mut items = with_infer(ws, doc, |infer| argument_items(infer, doc, offset, before, snippets, quote));
     if prefix.is_empty() {
         return (!items.is_empty()).then(|| respond(items, false));
     }
@@ -395,15 +475,23 @@ pub fn completion(
     Some(respond(items, incomplete))
 }
 
-/// A function literal for the argument that the cursor starts, right after the `(` or `,` in front of
-/// it, when its parameter takes one, such as `function(${1:source})\n\t$0\nend` after
-/// `OnAction("playerUnloaded", `. The parameter comes from the signatures that best fit the
-/// arguments before it, with one item for each list of parameters they give the function.
-fn callback_items(infer: &Infer, doc: &Document, offset: u32, before: &str) -> Vec<CompletionItem> {
+/// What the argument that the cursor starts can be, right after the `(` or `,` in front of it: the
+/// string values its parameter lists, quoted, and a function literal when it takes one, such as
+/// `function(${1:source})\n\t$0\nend` after `OnAction("playerUnloaded", `. Both come from the
+/// signatures that fit the arguments before it, the function from those that fit them best, with one
+/// item for each list of parameters they give it. Function literals are snippets.
+fn argument_items(
+    infer: &Infer,
+    doc: &Document,
+    offset: u32,
+    before: &str,
+    snippets: bool,
+    quote: char,
+) -> Vec<CompletionItem> {
     let prefix = identifier_prefix(before);
     let head = before[..before.len() - prefix.len()].trim_end();
     let Some(punctuation) = head.chars().last().filter(|c| matches!(c, '(' | ',')) else { return Vec::new() };
-    // Text after the argument would end up behind the inserted `end`.
+    // Text after the argument would end up behind the inserted value.
     let line_end = doc.text[offset as usize..].find('\n').map_or(doc.text.len(), |i| offset as usize + i);
     let rest = doc.text[offset as usize..line_end].trim_start_matches(|c: char| c.is_ascii_alphanumeric() || c == '_');
     if !(rest.trim().is_empty() || rest.trim_start().starts_with([')', ','])) {
@@ -425,9 +513,24 @@ fn callback_items(infer: &Infer, doc: &Document, offset: u32, before: &str) -> V
     let argument = site.active_argument(&doc.text, offset);
     let args = &site.args[..argument.min(site.args.len())];
     let space = if before[..before.len() - prefix.len()].ends_with(',') { " " } else { "" };
+    let signatures = infer.open_call_signatures(&fun, args, via_method, site.base.span.start);
+    let name = callee_name(site.base, site.method);
+    let mut items: Vec<CompletionItem> = argument_literals(infer, &signatures, argument, via_method, &name)
+        .into_iter()
+        .enumerate()
+        .map(|(i, literal)| {
+            let quoted = format!("{quote}{}{quote}", literal.value);
+            let mut out = literal.item(i, &quoted);
+            out.filter_text = Some(literal.value.to_string());
+            out.insert_text = Some(format!("{space}{quoted}"));
+            out
+        })
+        .collect();
+    if !snippets {
+        return items;
+    }
     let mut seen = FxHashSet::default();
-    let mut items = Vec::new();
-    for (signature, best) in infer.open_call_signatures(&fun, args, via_method, site.base.span.start) {
+    for (signature, best) in signatures {
         let Some(param) = best.then(|| param_for_argument(&signature, argument, via_method)).flatten() else {
             continue;
         };
@@ -456,6 +559,37 @@ fn callback_items(infer: &Infer, doc: &Document, offset: u32, before: &str) -> V
         items.push(out);
     }
     items
+}
+
+/// The quote that inserted strings use: the formatter's `quote_style`, or else the one that most
+/// strings of the document use, and `'` when it has none.
+fn quote_of(ws: &Workspace, doc: &Document) -> char {
+    match ws.lint_config.format.quote_style {
+        QuoteStyle::Single => return '\'',
+        QuoteStyle::Double => return '"',
+        QuoteStyle::Preserve => {}
+    }
+    let (mut single, mut double) = (0, 0);
+    for token in doc.chunk.tokens.iter().filter(|t| t.kind == TokenKind::String) {
+        match doc.text.as_bytes().get(token.span.start as usize) {
+            Some(b'\'') => single += 1,
+            Some(b'"') => double += 1,
+            _ => {}
+        }
+    }
+    if double > single {
+        '"'
+    } else {
+        '\''
+    }
+}
+
+/// The name a call's signatures are shown under: `OnAction`, or the `on` of `emitter:on`.
+fn callee_name(base: &Expr, method: Option<&Name>) -> String {
+    match method {
+        Some(method) => method.text.to_string(),
+        None => base.dotted_path().map(|path| path.to_string()).unwrap_or_default(),
+    }
 }
 
 /// The parameter an argument at `arg_index` of a call is passed to.
@@ -557,17 +691,17 @@ fn string_items(ws: &Workspace, doc: &Document, offset: u32, token_index: usize)
         ExprKind::Call { callee, .. } => callee.dotted_path(),
         _ => None,
     };
+    // Event names and literal values contain punctuation. Give clients the whole string content so a
+    // `:` retrigger keeps filtering from the opening quote and accepting does not duplicate it.
+    let token = &tokens[token_index];
+    let content =
+        string_content_span(token.span, &doc.text).unwrap_or_else(|| Span::new(token.span.start + 1, token.span.end));
+    let range = doc.range(content);
     let context = with_infer(ws, doc, |infer| event_string_context(infer, Some((call, arg_index))));
     if let Some(context) = context {
         if !context.active {
             return Vec::new();
         }
-        // Event names contain punctuation. Give clients the whole string content so a `:`
-        // retrigger keeps filtering from the opening quote and accepting does not duplicate it.
-        let token = &tokens[token_index];
-        let content = string_content_span(token.span, &doc.text)
-            .unwrap_or_else(|| Span::new(token.span.start + 1, token.span.end));
-        let range = doc.range(content);
         let wants_callbacks = context.family != EventFamily::Native;
         let target_side = context.target_side;
         let handled_on_target = |side: Option<Side>| !matches!((target_side, side), (Some(target), Some(side)) if !side.is_available_on(target));
@@ -618,7 +752,8 @@ fn string_items(ws: &Workspace, doc: &Document, offset: u32, token_index: usize)
         };
         return candidates(target_side.is_some());
     }
-    let Some(path) = path else { return Vec::new() };
+    let literals = || with_infer(ws, doc, |infer| literal_items(infer, call, arg_index, range));
+    let Some(path) = path else { return literals() };
     let path = path.as_str();
     if arg_index == 0 && matches!(path, "lib.onCache") {
         return cache_key_items(ws, doc);
@@ -655,7 +790,87 @@ fn string_items(ws: &Workspace, doc: &Document, offset: u32, token_index: usize)
     if arg_index == 0 && RESOURCE_NAME_CALLS.contains(&path) {
         return resource_items(ws);
     }
-    Vec::new()
+    literals()
+}
+
+/// A string value that an argument can take.
+struct ArgumentLiteral {
+    value: SmolStr,
+    /// The type of the first parameter that lists it, such as the alias `Actions`.
+    ty: Type,
+    /// The signatures that take it alone, which a call passing it picks.
+    taken_alone_by: Vec<String>,
+}
+
+impl ArgumentLiteral {
+    /// The item for the `index`th value, in the order the values are declared.
+    fn item(&self, index: usize, label: &str) -> CompletionItem {
+        let mut out = item(label, CompletionItemKind::ENUM_MEMBER, 0);
+        out.sort_text = Some(format!("{index:04}"));
+        if !matches!(self.ty, Type::StringLit(_)) {
+            out.detail = Some(self.ty.to_string());
+        }
+        if !self.taken_alone_by.is_empty() {
+            let signatures = self.taken_alone_by.join("\n");
+            out.documentation = Some(Documentation::MarkupContent(markdown(lua_block(&signatures))));
+        }
+        out
+    }
+}
+
+/// The string values that the parameter of the argument at `arg_index` lists in `signatures`, in the
+/// order they are declared: the `"playerLoaded"` of `action: "playerLoaded"|"playerUnloaded"|string`
+/// or of an alias, and the `"keyPressed"` of an `@overload` that takes `action: "keyPressed"`. The
+/// signatures that take a value alone are shown under `name`.
+fn argument_literals(
+    infer: &Infer,
+    signatures: &[(Arc<FunType>, bool)],
+    arg_index: usize,
+    via_method: bool,
+    name: &str,
+) -> Vec<ArgumentLiteral> {
+    let mut literals: Vec<ArgumentLiteral> = Vec::new();
+    for (signature, _) in signatures {
+        let Some(param) = param_for_argument(signature, arg_index, via_method) else { continue };
+        let pinned = infer.pinned_literal(&param.ty);
+        for value in infer.string_literals(&param.ty) {
+            let index = match literals.iter().position(|known| known.value == value) {
+                Some(index) => index,
+                None => {
+                    let ty = param.ty.clone();
+                    literals.push(ArgumentLiteral { value: value.clone(), ty, taken_alone_by: Vec::new() });
+                    literals.len() - 1
+                }
+            };
+            if pinned.as_ref().is_some_and(|pinned| *pinned == Type::StringLit(value.clone())) {
+                literals[index].taken_alone_by.push(signature.signature(name));
+            }
+        }
+    }
+    literals
+}
+
+/// The string values that the parameter of a string argument lists, each replacing its contents.
+fn literal_items(infer: &Infer, call: &Expr, arg_index: usize, range: Range) -> Vec<CompletionItem> {
+    let (base, method, args) = match &call.kind {
+        ExprKind::Call { callee, args, .. } => (callee.as_ref(), None, args),
+        ExprKind::MethodCall { base, method, args, .. } => (base.as_ref(), Some(method), args),
+        _ => return Vec::new(),
+    };
+    let Some((fun, _)) = infer.callee_fun(base, method) else { return Vec::new() };
+    let via_method = method.is_some();
+    let signatures = infer.open_call_signatures(&fun, &args[..arg_index.min(args.len())], via_method, base.span.start);
+    argument_literals(infer, &signatures, arg_index, via_method, &callee_name(base, method))
+        .into_iter()
+        .enumerate()
+        .map(|(i, literal)| {
+            let mut out = literal.item(i, &literal.value);
+            if range.start.line == range.end.line {
+                out.text_edit = Some(TextEdit { range, new_text: literal.value.to_string() }.into());
+            }
+            out
+        })
+        .collect()
 }
 
 /// State bag keys are plain strings that both sides must agree on, so every key seen anywhere is offered.
@@ -799,7 +1014,7 @@ fn member_items(
         }
         items.push(out);
         if let Some(options) = call_snippets {
-            items.extend(call_snippet_item(&m.name, &m.ty, via_colon, options));
+            items.extend(call_snippet_item(infer, &m.name, &m.ty, via_colon, options));
         }
     }
     if snippets && head == "lib." {
@@ -890,7 +1105,7 @@ fn scope_items(
     // `CreateThread` and the like have a hand-written snippet already.
     let call_snippet = |name: &str, ty: &Type| {
         let options = call_snippets.filter(|_| !SNIPPETS.iter().any(|(label, ..)| *label == name))?;
-        call_snippet_item(name, ty, false, options)
+        call_snippet_item(infer, name, ty, false, options)
     };
 
     let mut locals: Vec<_> = doc.resolution.locals_visible_at(offset).filter(|(_, l)| matches(&l.name)).collect();

@@ -20,8 +20,10 @@ Available features depend on the editor's LSP client.
 
 - Completion and hover for Lua symbols, FiveM natives, exports, events and callbacks.
 - Call snippets for functions that take a callback, with the function literal written out.
-- A function literal with the matching parameters where an argument that takes one starts, from the
-  `@overload` that the arguments before it pick.
+- The string values a parameter lists, through aliases and `@overload`s, as soon as its argument
+  starts or inside its string, and a function literal with the matching parameters where an
+  argument takes one. Call snippets stop in the quotes of those values, and end after a value
+  that picks an overload, so the handler written next matches it.
 - `---@` continuation on Enter inside LuaCATS annotation blocks, through on-type formatting.
 - Reference hovers for literal control IDs in PAD natives and ped configuration flags
   in `SetPedConfigFlag` / `GetPedConfigFlag`, using bundled Cfx documentation.

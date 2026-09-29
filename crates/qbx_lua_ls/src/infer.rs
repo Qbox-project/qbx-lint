@@ -1077,6 +1077,37 @@ impl<'a> Infer<'a> {
         fits.into_iter().filter(|(_, fit)| *fit != Fit::No).map(|(signature, fit)| (signature, fit == best)).collect()
     }
 
+    /// The string literals a type lists, through aliases and unions: `"a"` and `"b"` of `"a"|"b"|string`.
+    pub fn string_literals(&self, ty: &Type) -> Vec<SmolStr> {
+        let mut out = Vec::new();
+        self.collect_string_literals(ty, 0, &mut out);
+        out
+    }
+
+    fn collect_string_literals(&self, ty: &Type, depth: u32, out: &mut Vec<SmolStr>) {
+        if depth > 8 {
+            return;
+        }
+        match ty {
+            Type::StringLit(value) if !out.contains(value) => out.push(value.clone()),
+            Type::Named(..) => match self.resolve_alias(ty) {
+                Type::Named(..) => {}
+                resolved => self.collect_string_literals(&resolved, depth + 1, out),
+            },
+            Type::Union(types) => {
+                for part in types {
+                    self.collect_string_literals(part, depth + 1, out);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// The one literal a parameter takes besides `nil`, as `"keyPressed"` for `action: "keyPressed"`.
+    pub fn pinned_literal(&self, param: &Type) -> Option<Type> {
+        self.sole_literal(param, 0)
+    }
+
     /// The declared signature of `fun`, then the `@overload`s that apply to the code at `at`.
     fn signatures_at(&self, fun: &Arc<FunType>, at: u32) -> Vec<Arc<FunType>> {
         let side = self.side_at(at);
