@@ -4,7 +4,8 @@ use lsp_types::{Diagnostic, DiagnosticSeverity, DiagnosticTag, NumberOrString};
 use qbx_lua_analysis::directives::Suppressions;
 use qbx_lua_analysis::lint::all_files;
 use qbx_lua_analysis::rules::{
-    ASSIGN_TYPE_MISMATCH, MISSING_FIELDS, MISSING_RETURN, RETURN_TYPE_MISMATCH, UNDECLARED_FIELD, UNDEFINED_DOC_NAME,
+    ASSIGN_TYPE_MISMATCH, MISSING_FIELDS, MISSING_PARAMETER, MISSING_RETURN, RETURN_TYPE_MISMATCH, UNDECLARED_FIELD,
+    UNDEFINED_DOC_NAME,
 };
 use qbx_lua_analysis::summary::summarize;
 use qbx_lua_analysis::{
@@ -13,6 +14,7 @@ use qbx_lua_analysis::{
 use qbx_lua_syntax::Span;
 use serde::{Deserialize, Serialize};
 
+use super::callback_payloads::missing_payloads;
 use super::class_tables::{mismatched_fields, missing_fields};
 use super::doc_names::undefined_doc_names;
 use super::returns::{mismatched_returns, missing_returns};
@@ -44,10 +46,12 @@ fn strict_by_default(ws: &Workspace, file: FileId) -> bool {
 }
 
 /// Findings for rules qbx-lint registers but cannot check, because they need the LuaCATS types only
-/// the server indexes. Inline suppression comments apply to them as they do to the linter's own.
+/// the server indexes, and the part of `missing-parameter` that depends on the handler a
+/// `@callback` wrapper call reaches. Inline suppression comments apply to them as they do to the
+/// linter's own.
 fn type_diagnostics(ws: &Workspace, doc: &Document, config: &FileConfig) -> Vec<qbx_lua_analysis::Diagnostic> {
     type Check = fn(&Workspace, &Document) -> Vec<(Span, String)>;
-    let checks: [(&'static str, Check); 6] = [
+    let checks: [(&'static str, Check); 7] = [
         (UNDEFINED_DOC_NAME, |ws, doc| {
             let side = ws.index.file(doc.file).and_then(|f| f.side);
             undefined_doc_names(&ws.index, &doc.text, &doc.chunk, side)
@@ -63,6 +67,7 @@ fn type_diagnostics(ws: &Workspace, doc: &Document, config: &FileConfig) -> Vec<
         }),
         (RETURN_TYPE_MISMATCH, |ws, doc| with_infer(ws, doc, |infer| mismatched_returns(infer, &doc.chunk))),
         (MISSING_RETURN, |ws, doc| with_infer(ws, doc, |infer| missing_returns(infer, &doc.chunk))),
+        (MISSING_PARAMETER, |ws, doc| with_infer(ws, doc, |infer| missing_payloads(infer, &doc.chunk))),
     ];
     let suppressions = Suppressions::parse(&doc.text, &doc.chunk.comments, &doc.lines);
     let mut out = Vec::new();

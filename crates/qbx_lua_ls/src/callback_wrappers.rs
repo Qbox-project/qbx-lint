@@ -90,11 +90,21 @@ pub fn handler<'i>(
 ) -> Option<(FileId, &'i EventDef)> {
     let reaches =
         |side: Option<Side>| matches!((target, side), (Some(target), Some(side)) if side.is_available_on(target));
+    handlers(index, family, name, target).into_iter().max_by_key(|(_, e)| reaches(e.side))
+}
+
+/// Every registration of `name` in `family` whose handler a call aimed at `target` may run.
+pub fn handlers<'i>(
+    index: &'i Index,
+    family: &EventFamily,
+    name: &str,
+    target: Option<Side>,
+) -> Vec<(FileId, &'i EventDef)> {
     index
         .events()
         .filter(|(_, e)| e.name == name && e.family == *family && e.kind == EventKind::Callback && e.handler.is_some())
         .filter(|(_, e)| !matches!((target, e.side), (Some(target), Some(side)) if !side.is_available_on(target)))
-        .max_by_key(|(_, e)| reaches(e.side))
+        .collect()
 }
 
 /// Handlers registered outside the client receive the calling player before the payload.

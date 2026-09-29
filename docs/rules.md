@@ -28,7 +28,7 @@ set any rule to `off`, `hint`, `info`, `warning`, or `error`.
 | `unbalanced-assignments` | warning | An assignment has mismatched target and value counts. |
 | `duplicate-index` | warning | A table constructor assigns the same key twice. |
 | `duplicate-argument` | error | Function parameters share a name. |
-| `missing-parameter` | warning | A call leaves out an argument that the function's LuaCATS annotations require. |
+| `missing-parameter` | warning | A call leaves out an argument that the function's LuaCATS annotations require. qbx-lua-ls also reports `---@callback` wrapper calls whose payload leaves out a value the registered handler requires. |
 | `undefined-doc-name` | warning | A LuaCATS annotation names a type that no `@class`, `@alias` or `@enum` declares, or that only `(server)` or `(client)` declarations of the other side declare. Reported by qbx-lua-ls only. |
 | `missing-fields` | warning | A table constructor typed as a `---@class`, including one returned for an `@return` type, leaves out required fields. Reported by qbx-lua-ls only. |
 | `assign-type-mismatch` | warning | A table constructor or an assignment stores a value that the `@field` type, or the value type of an index such as `[string] number`, does not take, such as a number for a `string` field. Clearing a field with `nil` needs a type that allows it, such as `string?` or `string|nil`. Reported by qbx-lua-ls only. |
