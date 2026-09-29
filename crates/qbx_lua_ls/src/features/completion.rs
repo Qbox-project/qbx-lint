@@ -21,7 +21,7 @@ use crate::document::Document;
 use crate::index::{EventFamily, EventKind, FileOrigin, SymbolKind};
 use crate::infer::{native_fun_type, Infer, MemberInfo};
 use crate::locate::{locate, string_content_span};
-use crate::types::{CallbackRole, FunType, Type};
+use crate::types::{CallbackRole, FunType, Param, Type};
 use crate::workspace::Workspace;
 
 const MAX_NATIVES: usize = 120;
@@ -309,22 +309,20 @@ fn identifier_prefix(before: &str) -> &str {
 }
 
 /// `reopen_suggestions`: the client runs `editor.action.triggerSuggest` when a completion asks it to.
+/// `trigger_character`: the character whose typing asked for these completions, if any.
 pub fn completion(
     ws: &Workspace,
     doc: &Document,
     position: Position,
     snippets: bool,
     reopen_suggestions: bool,
+    trigger_character: Option<&str>,
 ) -> Option<CompletionResponse> {
     let offset = doc.offset(position);
     let line_start = doc.lines.line_start(position.line) as usize;
     let before = doc.text.get(line_start..offset as usize)?;
 
-    if let Some(comment) = doc.chunk.comments.iter().find(|c| c.span.start < offset && offset <= c.span.end) {
-        let is_doc = comment.kind == CommentKind::Line && comment.span.text(&doc.text).starts_with("---");
-        return is_doc.then(|| respond(doc_comment_items(ws, before, snippets), false));
-    }
-
+    let comment = doc.chunk.comments.iter().find(|c| c.span.start < offset && offset <= c.span.end);
     let in_string = doc.chunk.tokens.iter().position(|t| {
         let text = t.span.text(&doc.text);
         let unterminated = text.len() < 2 || text.as_bytes()[0] != text.as_bytes()[text.len() - 1];
@@ -332,6 +330,22 @@ pub fn completion(
             && t.span.start < offset
             && (offset < t.span.end || (unterminated && offset == t.span.end))
     });
+
+    // A typed `(` or `,` only asks for the function the argument after it takes, so that Enter after
+    // the `,` of a table or any other list still inserts a newline.
+    if matches!(trigger_character, Some("(" | ",")) {
+        if comment.is_some() || in_string.is_some() || !snippets {
+            return None;
+        }
+        let items = with_infer(ws, doc, |infer| callback_items(infer, doc, offset, before));
+        return (!items.is_empty()).then(|| respond(items, false));
+    }
+
+    if let Some(comment) = comment {
+        let is_doc = comment.kind == CommentKind::Line && comment.span.text(&doc.text).starts_with("---");
+        return is_doc.then(|| respond(doc_comment_items(ws, before, snippets), false));
+    }
+
     if let Some(token_index) = in_string {
         return Some(respond(string_items(ws, doc, offset, token_index), false));
     }
@@ -370,12 +384,84 @@ pub fn completion(
             return Some(respond(fields, false));
         }
     }
+    let mut items =
+        if snippets { with_infer(ws, doc, |infer| callback_items(infer, doc, offset, before)) } else { Vec::new() };
     if prefix.is_empty() {
-        return None;
+        return (!items.is_empty()).then(|| respond(items, false));
     }
-    let (items, incomplete) =
+    let (scope, incomplete) =
         with_infer(ws, doc, |infer| scope_items(ws, infer, doc, offset, prefix, snippets, call_snippets));
+    items.extend(scope);
     Some(respond(items, incomplete))
+}
+
+/// A function literal for the argument that the cursor starts, right after the `(` or `,` in front of
+/// it, when its parameter takes one, such as `function(${1:source})\n\t$0\nend` after
+/// `OnAction("playerUnloaded", `. The parameter comes from the signatures that best fit the
+/// arguments before it, with one item for each list of parameters they give the function.
+fn callback_items(infer: &Infer, doc: &Document, offset: u32, before: &str) -> Vec<CompletionItem> {
+    let prefix = identifier_prefix(before);
+    let head = before[..before.len() - prefix.len()].trim_end();
+    let Some(punctuation) = head.chars().last().filter(|c| matches!(c, '(' | ',')) else { return Vec::new() };
+    // Text after the argument would end up behind the inserted `end`.
+    let line_end = doc.text[offset as usize..].find('\n').map_or(doc.text.len(), |i| offset as usize + i);
+    let rest = doc.text[offset as usize..line_end].trim_start_matches(|c: char| c.is_ascii_alphanumeric() || c == '_');
+    if !(rest.trim().is_empty() || rest.trim_start().starts_with([')', ','])) {
+        return Vec::new();
+    }
+    let Some(site) = locate(&doc.chunk, offset).call else { return Vec::new() };
+    // The `(` or `,` has to separate the arguments of the call, not those of a table or a
+    // parenthesized expression inside one.
+    let at = offset - (before.len() - head.len()) as u32 - 1;
+    let separates_arguments = match punctuation {
+        '(' => site.args_span.start == at,
+        _ => site.args_span.start < at && !site.args.iter().any(|arg| arg.span.start <= at && at < arg.span.end),
+    };
+    if !separates_arguments {
+        return Vec::new();
+    }
+    let Some((fun, _)) = infer.callee_fun(site.base, site.method) else { return Vec::new() };
+    let via_method = site.method.is_some();
+    let argument = site.active_argument(&doc.text, offset);
+    let args = &site.args[..argument.min(site.args.len())];
+    let space = if before[..before.len() - prefix.len()].ends_with(',') { " " } else { "" };
+    let mut seen = FxHashSet::default();
+    let mut items = Vec::new();
+    for (signature, best) in infer.open_call_signatures(&fun, args, via_method, site.base.span.start) {
+        let Some(param) = best.then(|| param_for_argument(&signature, argument, via_method)).flatten() else {
+            continue;
+        };
+        if !takes_function(&param.ty) {
+            continue;
+        }
+        let names = param.ty.as_fun().map(|callback| {
+            let names: Vec<&str> = callback.params.iter().map(|p| p.name.as_str()).collect();
+            names.join(", ")
+        });
+        let stop = match names.as_deref() {
+            Some("") => String::new(),
+            Some(names) => format!("${{1:{names}}}"),
+            None => "$1".to_string(),
+        };
+        let body = format!("{space}function({stop})\n\t$0\nend");
+        if !seen.insert(body.clone()) {
+            continue;
+        }
+        let label = format!("function({})", names.unwrap_or_default());
+        let mut out = snippet_item(&label, &body, &param.to_string());
+        out.kind = Some(CompletionItemKind::FUNCTION);
+        // Ahead of the `function name()` declaration snippet too.
+        out.sort_text = Some(format!(".{label}"));
+        out.filter_text = Some("function".to_string());
+        items.push(out);
+    }
+    items
+}
+
+/// The parameter an argument at `arg_index` of a call is passed to.
+fn param_for_argument(fun: &FunType, arg_index: usize, via_method: bool) -> Option<&Param> {
+    let (skip_params, skip_args) = fun.call_offsets(via_method);
+    (arg_index + skip_params).checked_sub(skip_args).and_then(|i| fun.params.get(i))
 }
 
 fn respond(mut items: Vec<CompletionItem>, incomplete: bool) -> CompletionResponse {
@@ -766,8 +852,7 @@ fn expected_field_items(infer: &Infer, doc: &Document, offset: u32) -> Vec<Compl
         _ => None,
     };
     let Some((fun, _)) = fun else { return Vec::new() };
-    let (skip_params, skip_args) = fun.call_offsets(matches!(call.kind, ExprKind::MethodCall { .. }));
-    let Some(param) = (arg_index + skip_params).checked_sub(skip_args).and_then(|i| fun.params.get(i)) else {
+    let Some(param) = param_for_argument(&fun, arg_index, matches!(call.kind, ExprKind::MethodCall { .. })) else {
         return Vec::new();
     };
     let present: FxHashSet<&str> = existing
