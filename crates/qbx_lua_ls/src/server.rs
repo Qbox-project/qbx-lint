@@ -844,6 +844,11 @@ impl Server {
                     .collect();
                 Ok(json!(snippets))
             }
+            "qbx/quote" => {
+                let doc =
+                    serde_json::from_value::<TextDocumentIdentifier>(raw).ok().and_then(|p| self.docs.get(&p.uri));
+                Ok(json!(completion::quote_of(&self.ws, doc).to_string()))
+            }
             other => Err(format!("unsupported request: {other}")),
         }
     }

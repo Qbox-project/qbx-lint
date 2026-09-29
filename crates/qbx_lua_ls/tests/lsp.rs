@@ -3407,6 +3407,67 @@ fn snippets_outrank_the_plain_name() {
 }
 
 #[test]
+fn snippets_write_strings_in_the_configured_or_prevailing_quote() {
+    struct Fixture(PathBuf);
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            if let (Ok(root), Ok(temp)) = (self.0.canonicalize(), std::env::temp_dir().canonicalize()) {
+                if root.parent() == Some(temp.as_path()) {
+                    let _ = std::fs::remove_dir_all(root);
+                }
+            }
+        }
+    }
+    let fixture = Fixture(std::env::temp_dir().join(format!(
+        "qbx-quotes-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos(),
+    )));
+    std::fs::create_dir(&fixture.0).unwrap();
+    std::fs::write(fixture.0.join("fxmanifest.lua"), "fx_version 'cerulean'\ngame 'gta5'\nclient_script 'main.lua'\n")
+        .unwrap();
+    std::fs::write(fixture.0.join("main.lua"), "").unwrap();
+    // The snippet labelled `label` when completing at the end of `text`.
+    let snippet = |client: &mut Client, relative: &str, text: &str, label: &str| -> String {
+        client.open_with(relative, text);
+        let line = text.lines().count() as u32 - 1;
+        let column = text.lines().last().unwrap().len() as u32;
+        let result = client.request("textDocument/completion", client.position_params(relative, line, column));
+        client.notify("textDocument/didClose", json!({ "textDocument": { "uri": client.uri(relative) } }));
+        let items = result["items"].as_array().unwrap();
+        let found = items.iter().find(|item| item["label"] == label && item["insertTextFormat"] == 2);
+        found.and_then(|item| item["insertText"].as_str()).unwrap_or_else(|| panic!("{label}: {result}")).to_string()
+    };
+
+    // Without a `quote_style`, strings take the quote most of the document's strings use.
+    let mut client = Client::start(fixture.0.clone());
+    let body = snippet(&mut client, "main.lua", "local label = \"x\"\nRegisterNetEv", "RegisterNetEvent");
+    assert!(body.starts_with("RegisterNetEvent(\"${1:resource}:${2:event}\""), "{body}");
+    let body = snippet(&mut client, "main.lua", "local label = \"x\"\noncache", "onCache");
+    assert!(body.starts_with("lib.onCache(\"${1|"), "{body}");
+    assert!(snippet(&mut client, "main.lua", "RegisterNetEv", "RegisterNetEvent").starts_with("RegisterNetEvent('"));
+    client.open_with("main.lua", "local label = \"x\"\n");
+    let quote = client.request("qbx/quote", json!({ "uri": client.uri("main.lua") }));
+    assert_eq!(quote, "\"");
+    assert_eq!(client.request("qbx/quote", Value::Null), "'", "no document and no quote_style");
+    drop(client);
+
+    // `quote_style` decides over the strings of the document.
+    std::fs::write(fixture.0.join("qbxlint.toml"), "[format]\nquote_style = \"double\"\n").unwrap();
+    let mut client = Client::start(fixture.0.clone());
+    let body = snippet(&mut client, "main.lua", "local label = 'x'\nlib.onCa", "onCache");
+    assert!(body.starts_with("onCache(\"${1|"), "{body}");
+    let body = snippet(&mut client, "fxmanifest.lua", "fx_v", "fx_version");
+    assert_eq!(body, "fx_version \"${1|cerulean,bodacious,adamant|}\"");
+    assert_eq!(snippet(&mut client, "fxmanifest.lua", "lua5", "lua54"), "lua54 \"yes\"");
+    assert_eq!(client.request("qbx/quote", Value::Null), "\"");
+    let snippets = client.request("qbx/snippets", Value::Null);
+    let bodies: Vec<&str> = snippets.as_array().unwrap().iter().map(|s| s["body"].as_str().unwrap()).collect();
+    assert!(bodies.iter().any(|body| body.starts_with("AddEventHandler(\"")), "{bodies:?}");
+    assert!(bodies.iter().all(|body| !body.contains('\'')), "{bodies:?}");
+}
+
+#[test]
 fn call_snippets_write_out_the_callbacks_a_function_takes() {
     let mut client = Client::start(fixture_root());
     let defs = "\

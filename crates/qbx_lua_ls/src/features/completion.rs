@@ -35,6 +35,7 @@ const KEYWORDS: &[&str] = &[
 
 const THREAD_LOOP: &str = "CreateThread(function()\n\twhile true do\n\t\t$0\n\t\tWait(${1:0})\n\tend\nend)";
 
+/// Strings are written with `'`, which [`quoted`] swaps for the quote of the document.
 const SNIPPETS: &[(&str, &str, &str)] = &[
     ("CreateThread", THREAD_LOOP, "Thread with a loop that yields every iteration"),
     ("thread", THREAD_LOOP, "Thread with a loop that yields every iteration"),
@@ -306,6 +307,11 @@ fn call_snippet_item(
     Some(out)
 }
 
+/// A snippet written with `'` around its strings, with `quote` around them instead.
+fn quoted(body: &str, quote: char) -> String {
+    body.replace('\'', quote.encode_utf8(&mut [0; 4]))
+}
+
 /// The snippet as it looks right after insertion: `${1:0}` becomes `0`, `${1|a,b|}` becomes `a`.
 pub fn snippet_preview(body: &str) -> String {
     let mut out = String::new();
@@ -338,17 +344,18 @@ pub struct SnippetInfo {
 
 /// Every snippet the server offers, for the editor's "show snippets" picker.
 pub fn all_snippets(ws: &Workspace, doc: Option<&Document>) -> Vec<SnippetInfo> {
+    let quote = quote_of(ws, doc);
     let mut out: Vec<SnippetInfo> = SNIPPETS
         .iter()
         .map(|(label, body, description)| SnippetInfo {
             label: label.to_string(),
             description: description.to_string(),
-            body: body.to_string(),
+            body: quoted(body, quote),
         })
         .collect();
     let on_cache = match doc {
-        Some(doc) => with_infer(ws, doc, |infer| on_cache_snippet(infer, "lib.")),
-        None => on_cache_item(Vec::new(), "lib."),
+        Some(doc) => with_infer(ws, doc, |infer| on_cache_snippet(infer, "lib.", quote)),
+        None => on_cache_item(Vec::new(), "lib.", quote),
     };
     out.push(SnippetInfo {
         label: on_cache.label,
@@ -408,7 +415,8 @@ pub fn completion(
             && (offset < t.span.end || (unterminated && offset == t.span.end))
     });
 
-    let quote = quote_of(ws, doc);
+    let quote = quote_of(ws, Some(doc));
+    let snippet_quote = snippets.then_some(quote);
     // A typed `(` or `,` only asks for what the argument after it takes, so that Enter after the `,`
     // of a table or any other list still inserts a newline.
     if matches!(trigger_character, Some("(" | ",")) {
@@ -446,8 +454,9 @@ pub fn completion(
 
     if (head.ends_with('.') && !head.ends_with("..")) || (head.ends_with(':') && !head.ends_with("::")) {
         let via_colon = head.ends_with(':');
-        let mut items =
-            with_infer(ws, doc, |infer| member_items(infer, doc, offset, head, via_colon, snippets, call_snippets));
+        let mut items = with_infer(ws, doc, |infer| {
+            member_items(infer, doc, offset, head, via_colon, snippet_quote, call_snippets)
+        });
         let base = head[..head.len() - 1].trim_end();
         if !via_colon && (base.ends_with(".state") || base.ends_with("GlobalState")) {
             items.extend(state_key_items(ws));
@@ -456,7 +465,7 @@ pub fn completion(
     }
 
     if doc.is_manifest() {
-        return Some(respond(manifest_items(before, prefix, snippets), false));
+        return Some(respond(manifest_items(before, prefix, snippet_quote), false));
     }
 
     if head.ends_with('{') || head.ends_with(',') || head.is_empty() {
@@ -470,7 +479,7 @@ pub fn completion(
         return (!items.is_empty()).then(|| respond(items, false));
     }
     let (scope, incomplete) =
-        with_infer(ws, doc, |infer| scope_items(ws, infer, doc, offset, prefix, snippets, call_snippets));
+        with_infer(ws, doc, |infer| scope_items(ws, infer, doc, offset, prefix, snippet_quote, call_snippets));
     items.extend(scope);
     Some(respond(items, incomplete))
 }
@@ -562,13 +571,14 @@ fn argument_items(
 }
 
 /// The quote that inserted strings use: the formatter's `quote_style`, or else the one that most
-/// strings of the document use, and `'` when it has none.
-fn quote_of(ws: &Workspace, doc: &Document) -> char {
+/// strings of the document use, and `'` when it has none or there is no document.
+pub fn quote_of(ws: &Workspace, doc: Option<&Document>) -> char {
     match ws.lint_config.format.quote_style {
         QuoteStyle::Single => return '\'',
         QuoteStyle::Double => return '"',
         QuoteStyle::Preserve => {}
     }
+    let Some(doc) = doc else { return '\'' };
     let (mut single, mut double) = (0, 0);
     for token in doc.chunk.tokens.iter().filter(|t| t.kind == TokenKind::String) {
         match doc.text.as_bytes().get(token.span.start as usize) {
@@ -912,16 +922,18 @@ fn cache_key_items(ws: &Workspace, doc: &Document) -> Vec<CompletionItem> {
 /// What ox_lib caches on the client, for workspaces that do not contain ox_lib itself.
 const DEFAULT_CACHE_KEYS: &[&str] = &["ped", "vehicle", "seat", "weapon", "playerId", "serverId", "coords"];
 
-fn on_cache_snippet(infer: &Infer, prefix: &str) -> CompletionItem {
-    on_cache_item(cache_keys(infer).iter().map(|k| k.name.to_string()).collect(), prefix)
+fn on_cache_snippet(infer: &Infer, prefix: &str, quote: char) -> CompletionItem {
+    on_cache_item(cache_keys(infer).iter().map(|k| k.name.to_string()).collect(), prefix, quote)
 }
 
-fn on_cache_item(mut keys: Vec<String>, prefix: &str) -> CompletionItem {
+fn on_cache_item(mut keys: Vec<String>, prefix: &str, quote: char) -> CompletionItem {
     if keys.is_empty() {
         keys = DEFAULT_CACHE_KEYS.iter().map(|k| k.to_string()).collect();
     }
-    let body =
-        format!("{prefix}onCache('${{1|{}|}}', function(${{2:value}}, ${{3:oldValue}})\n\t$0\nend)", keys.join(","));
+    let body = format!(
+        "{prefix}onCache({quote}${{1|{}|}}{quote}, function(${{2:value}}, ${{3:oldValue}})\n\t$0\nend)",
+        keys.join(",")
+    );
     snippet_item("onCache", &body, &format!("React to an ox_lib cache change ({})", keys.join(", ")))
 }
 
@@ -961,7 +973,8 @@ fn manifest_path_items(ws: &Workspace, doc: &Document) -> Vec<CompletionItem> {
     items
 }
 
-fn manifest_items(before: &str, prefix: &str, snippets: bool) -> Vec<CompletionItem> {
+/// `snippet_quote`: the quote that snippet strings use, when the client takes snippets.
+fn manifest_items(before: &str, prefix: &str, snippet_quote: Option<char>) -> Vec<CompletionItem> {
     if before.trim_start().len() != prefix.len() {
         return Vec::new();
     }
@@ -969,9 +982,7 @@ fn manifest_items(before: &str, prefix: &str, snippets: bool) -> Vec<CompletionI
         .iter()
         .map(|directive| {
             let mut out = item(directive, CompletionItemKind::PROPERTY, 0);
-            if !snippets {
-                return out;
-            }
+            let Some(quote) = snippet_quote else { return out };
             let snippet = match *directive {
                 "fx_version" => "fx_version '${1|cerulean,bodacious,adamant|}'".to_string(),
                 "game" => "game '${1|gta5,rdr3|}'".to_string(),
@@ -979,20 +990,21 @@ fn manifest_items(before: &str, prefix: &str, snippets: bool) -> Vec<CompletionI
                 d if d.ends_with('s') && !matches!(d, "this_is_a_map") => format!("{d} {{\n\t'$0',\n}}"),
                 d => format!("{d} '$0'"),
             };
-            out.insert_text = Some(snippet);
+            out.insert_text = Some(quoted(&snippet, quote));
             out.insert_text_format = Some(InsertTextFormat::SNIPPET);
             out
         })
         .collect()
 }
 
+/// `snippet_quote`: the quote that snippet strings use, when the client takes snippets.
 fn member_items(
     infer: &Infer,
     doc: &Document,
     offset: u32,
     head: &str,
     via_colon: bool,
-    snippets: bool,
+    snippet_quote: Option<char>,
     call_snippets: Option<CallSnippets>,
 ) -> Vec<CompletionItem> {
     let located = locate(&doc.chunk, offset);
@@ -1017,8 +1029,8 @@ fn member_items(
             items.extend(call_snippet_item(infer, &m.name, &m.ty, via_colon, options));
         }
     }
-    if snippets && head == "lib." {
-        items.push(on_cache_snippet(infer, ""));
+    if let Some(quote) = snippet_quote.filter(|_| head == "lib.") {
+        items.push(on_cache_snippet(infer, "", quote));
     }
     items
 }
@@ -1090,13 +1102,14 @@ fn expected_field_items(infer: &Infer, doc: &Document, offset: u32) -> Vec<Compl
         .collect()
 }
 
+/// `snippet_quote`: the quote that snippet strings use, when the client takes snippets.
 fn scope_items(
     ws: &Workspace,
     infer: &Infer,
     doc: &Document,
     offset: u32,
     prefix: &str,
-    snippets: bool,
+    snippet_quote: Option<char>,
     call_snippets: Option<CallSnippets>,
 ) -> (Vec<CompletionItem>, bool) {
     let matches = |name: &str| name.len() >= prefix.len() && name[..prefix.len()].eq_ignore_ascii_case(prefix);
@@ -1144,12 +1157,12 @@ fn scope_items(
     for keyword in KEYWORDS.iter().filter(|k| matches(k)) {
         items.push(item(keyword, CompletionItemKind::KEYWORD, 3));
     }
-    if snippets {
+    if let Some(quote) = snippet_quote {
         for (label, body, description) in SNIPPETS.iter().filter(|(label, ..)| matches(label)) {
-            items.push(snippet_item(label, body, description));
+            items.push(snippet_item(label, &quoted(body, quote), description));
         }
         if matches("onCache") {
-            items.push(on_cache_snippet(infer, "lib."));
+            items.push(on_cache_snippet(infer, "lib.", quote));
         }
     }
 
