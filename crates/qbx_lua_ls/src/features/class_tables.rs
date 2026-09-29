@@ -1,7 +1,8 @@
 //! Table constructors typed as a LuaCATS class, found where their type is known: `---@type` locals
 //! and assignments, arguments to class-typed parameters, the tables such fields hold and, for
-//! completion, `return` in a function documented with `@return`. They drive `missing-fields`,
-//! `assign-type-mismatch` and the completion of field names. Only the language server knows the
+//! completion, `return` in a function documented with `@return`. With the fields that code sets on
+//! and reads from values of a class, they drive `missing-fields`, `assign-type-mismatch`,
+//! `undeclared-field` and the completion of field names. Only the language server knows the
 //! classes, so qbx-lint registers the rules and this module reports them.
 //!
 //! Type names are global, and resources may declare the same one differently: ox_fuel's
@@ -198,6 +199,50 @@ impl<'a, 'b> Classes<'a, 'b> {
                 self.collect_fields(parent, *file, out, depth + 1);
             }
         }
+    }
+
+    /// Whether `class` is strict as `from` sees it: a declaration says `(strict)` or `(exact)`, or
+    /// none says `(loose)` and `by_default` holds for the file of each.
+    pub fn is_strict(&self, class: &str, from: FileId, by_default: impl Fn(FileId) -> bool) -> bool {
+        let defs = self.class_defs(class, from);
+        defs.iter().any(|(_, def)| def.strict == Some(true))
+            || (!defs.is_empty() && defs.iter().all(|(file, def)| def.strict.is_none() && by_default(*file)))
+    }
+
+    /// Whether `class` or a parent takes `key`. A name is taken by an `@field` for this side, by a
+    /// field set on the table a `---@class` declares, like `function Test:greet()`, or by an index
+    /// such as `[string]`; another key by an index of its type. A parent that is no class, like the
+    /// `table` of `Name : table<string, any>`, takes anything, and so does a key whose type is not
+    /// known well enough to rule out a field name.
+    pub fn declares(&self, class: &str, from: FileId, key: &Key) -> bool {
+        let named = match key {
+            Key::Name(name) => {
+                self.fields(class, from).iter().any(|field| field.name == *name)
+                    || self.members_declare(class, from, name, 0)
+            }
+            Key::Typed(ty) => self.kinds(ty, self.file(), 0).is_none_or(|kinds| kinds & kind::STRING != 0),
+        };
+        named || self.index_for(class, from, &key.ty(), 0).is_some() || self.has_open_parent(class, from, 0)
+    }
+
+    /// Whether the table that the `---@class` annotation of `class` or a parent declares sets `name`.
+    fn members_declare(&self, class: &str, from: FileId, name: &str, depth: u32) -> bool {
+        if depth > MAX_DEPTH {
+            return false;
+        }
+        let parents_declare = |(file, def): &(FileId, &ClassDef)| {
+            def.parents.iter().any(|parent| self.members_declare(parent, *file, name, depth + 1))
+        };
+        self.infer.index.declared_members_of(class, self.file()).iter().any(|member| member.name == name)
+            || self.class_defs(class, from).iter().any(parents_declare)
+    }
+
+    /// Whether `class` or one of its ancestors names a parent that is no class.
+    fn has_open_parent(&self, class: &str, from: FileId, depth: u32) -> bool {
+        let defs = self.class_defs(class, from);
+        defs.is_empty()
+            || depth > MAX_DEPTH
+            || defs.iter().any(|(file, def)| def.parents.iter().any(|p| self.has_open_parent(p, *file, depth + 1)))
     }
 
     /// The type that `key` of a `class` table holds, with the file whose view of the type names it

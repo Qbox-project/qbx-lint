@@ -19,6 +19,7 @@ pub mod resource_assets;
 pub mod resource_details;
 pub mod semantic_tokens;
 pub mod signature;
+pub mod strict_classes;
 pub mod symbols;
 pub mod workspace_health;
 

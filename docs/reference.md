@@ -25,6 +25,7 @@ exclude = ["web/**", "**/vendor/**"]
 ignore_diagnostics = ['\[standalone\]/', 'third_party/']
 globals = ["SomeRuntimeGlobal"]
 ignore_unused_prefix = "_"
+strict_classes = false
 
 [rules]
 "unused-argument" = "off"
@@ -53,6 +54,7 @@ quote_style = "preserve"
 | `globals` | Names supplied at runtime that the linter cannot discover. |
 | `imports` | Files every resource runs without an fxmanifest.lua entry, grouped as `shared`, `client` and `server`. See [Runtime imports](#runtime-imports). |
 | `ignore_unused_prefix` | Locals and arguments with this prefix are exempt from unused checks; defaults to `_`. |
+| `strict_classes` | Makes every `---@class` without `(loose)` strict, as if it said `(strict)`. Only classes declared in files whose diagnostics are reported follow it. See [Strict classes](#strict-classes). Defaults to `false`. |
 | `rules` | Per-rule levels: `off`, `hint`, `info`, `warning` (or `warn`), and `error`. |
 | `overrides` | Per-file globals and rule levels, selected by the `files` patterns, and imports for the resources whose `fxmanifest.lua` the patterns match. Later matching overrides take precedence for rule levels. |
 | `format` | Formatting options, shown with their defaults above. |
@@ -220,6 +222,50 @@ called as `Locale:new(opts)` receives both. Calls whose last argument
 is another call or `...` pass an unknown number of arguments and are skipped, as are natives,
 runtime functions, exports, and methods of objects returned by calls, such as
 `GetPlayer(source):setJob(job)`.
+
+## Strict classes
+
+A strict class takes only the fields it declares. Mark one with `(strict)`, or LuaLS's `(exact)`,
+which means the same here:
+
+```lua
+---@class (strict) Test
+---@field test string
+local Test = {}
+
+function Test:greet() end
+
+---@type Test
+local abc = {
+    test = "2543",
+    other = true, -- undeclared-field
+}
+abc.more = 1 -- undeclared-field
+```
+
+qbx-lua-ls reports `undeclared-field` for a name that a table constructor typed as the class sets,
+for fields that assignments and `function value:name()` statements set on values of the class,
+such as a `---@type` local, a parameter or `self`, and for fields that code reads from them, like
+`abc.nope` or `abc:nope()`. A field counts as declared when an `@field` of the class or one of its
+parents names it, or when it is set on the table the `---@class` annotation declares, like `greet`
+above; fields set through values of the class do not count. A `[string]` index, such as
+`---@field [string] any`, takes any name, and so does a parent that is no class, like the `table`
+of `Name : table<string, any>`.
+
+Other keys need an index of their type. With only `---@field [string] number`, `abc[1]`,
+`abc[1] = x` and array entries such as `{ 'a' }` are reported, since the class has no `integer`
+keys. A key held in a string variable, as in `abc[key]`, may name a field and is not reported.
+
+Index types also decide what a field without its own `@field` holds, for every class and not only
+strict ones: with `---@field [string] number`, `{ other = true }` and `abc.other = true` are an
+`assign-type-mismatch`. Fields marked like `---@field [1] number` are left unchecked, since only the
+last of them is kept.
+
+With `strict_classes = true`, every class is strict unless it is marked `(loose)`. That default
+only covers classes declared in workspace files outside `exclude` and `ignore_diagnostics`, so the
+classes of third-party resources stay as they are unless they say `(strict)` themselves. When one
+class is declared in several places, one `(strict)` makes it strict, and otherwise one `(loose)`
+keeps it loose.
 
 ## Events, exports, and locales
 

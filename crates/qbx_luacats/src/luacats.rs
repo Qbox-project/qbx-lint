@@ -43,6 +43,9 @@ pub struct DocClass {
     pub line: usize,
     /// The side of `@class (server) Name`.
     pub side: Option<Side>,
+    /// `Some(true)` for `@class (strict) Name` or LuaLS's `(exact)`, `Some(false)` for `(loose)`, and
+    /// `None` when the configured default decides.
+    pub strict: Option<bool>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -171,6 +174,18 @@ fn side_attribute(attributes: &str) -> Option<Side> {
     }
 }
 
+/// Whether the attributes make a class strict: `(strict)` or `(exact)`, or `(loose)` to opt out.
+fn strict_attribute(attributes: &str) -> Option<bool> {
+    let named = |names: &[&str]| attributes.split(',').any(|attribute| names.contains(&attribute.trim()));
+    if named(&["strict", "exact"]) {
+        Some(true)
+    } else if named(&["loose"]) {
+        Some(false)
+    } else {
+        None
+    }
+}
+
 /// Whether a declaration scoped to `declared` applies to code on `side`. Unscoped declarations
 /// apply everywhere, and shared code or code of an unknown side sees both sides, the way it sees
 /// the globals of both.
@@ -235,6 +250,7 @@ pub fn parse_doc_lines(lines: &[&str]) -> DocGroup {
                     description: description.join("\n").trim().to_string(),
                     line: index,
                     side: side_attribute(attributes),
+                    strict: strict_attribute(attributes),
                     ..DocClass::default()
                 });
             }
@@ -581,6 +597,12 @@ mod tests {
         let doc = parse("---@class (partial) Player : Entity");
         assert_eq!(doc.classes[0].name, "Player");
         assert_eq!(doc.classes[0].parents, ["Entity"]);
+        assert_eq!(doc.classes[0].strict, None);
+        let strict = |text: &str| parse(text).classes[0].strict;
+        assert_eq!(strict("---@class (strict) Test"), Some(true));
+        assert_eq!(strict("---@class (server, exact) Test"), Some(true));
+        assert_eq!(strict("---@class (loose) Test : Base"), Some(false));
+        assert_eq!(strict("---@class Test"), None);
         let doc = parse("---@enum (key) Side");
         assert_eq!(doc.enum_name.as_deref(), Some("Side"));
         assert!(doc.enum_keys);

@@ -12,6 +12,10 @@ globals = []
 # Locals and arguments starting with this prefix are never reported as unused.
 ignore_unused_prefix = "_"
 
+# Treat every ---@class as (strict) unless it is marked (loose): setting a field it does not declare
+# is reported as undeclared-field. Classes in ignore_diagnostics paths are not affected.
+strict_classes = false
+
 # Files resources run without an fxmanifest.lua entry, for example through load(LoadResourceFile(...)).
 # Put them in an [[overrides]] entry instead to limit them to some resources.
 [imports]

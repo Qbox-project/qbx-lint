@@ -30,7 +30,8 @@ Available features depend on the editor's LSP client.
 - Hover and definitions for the classes, aliases and enums named in LuaCATS annotations.
 - Diagnostics and quick fixes with resource and client/server context, plus `missing-fields` and
   `assign-type-mismatch` for tables and assignments that leave out required fields of their
-  LuaCATS class or store a value of the wrong type.
+  LuaCATS class or store a value of the wrong type, and `undeclared-field` for fields and keys a
+  `---@class (strict)` does not declare.
 - Signature help, parameter hints, semantic tokens, folding and document/workspace symbols.
 - QB-Core and ESX server callback completion, navigation and payload hints from local handlers.
 - Callback systems a resource wraps itself, declared with `---@callback`, with name completion,

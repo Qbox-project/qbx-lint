@@ -74,6 +74,8 @@ pub const UNDEFINED_DOC_NAME: &str = "undefined-doc-name";
 pub const MISSING_FIELDS: &str = "missing-fields";
 /// Reported by qbx-lua-ls, which reads the LuaCATS classes; the linter itself has no type information.
 pub const ASSIGN_TYPE_MISMATCH: &str = "assign-type-mismatch";
+/// Reported by qbx-lua-ls, which reads the LuaCATS classes; the linter itself has no type information.
+pub const UNDECLARED_FIELD: &str = "undeclared-field";
 pub const CONST_REASSIGN: &str = "const-reassign";
 pub const SELF_ASSIGNMENT: &str = "self-assignment";
 pub const SELF_COMPARISON: &str = "self-comparison";
@@ -130,6 +132,7 @@ pub static RULES: &[Rule] = &[
     rule(UNDEFINED_DOC_NAME, Correctness, WARN, false, "A LuaCATS annotation names a type that no @class, @alias or @enum declares for the file's side (language server only)."),
     rule(MISSING_FIELDS, Correctness, WARN, false, "A table constructor typed as a LuaCATS class leaves out required fields (language server only)."),
     rule(ASSIGN_TYPE_MISMATCH, Correctness, WARN, false, "A table constructor or assignment sets a field of a LuaCATS class to a value of the wrong type (language server only)."),
+    rule(UNDECLARED_FIELD, Correctness, WARN, false, "A field or key that a strict LuaCATS class does not declare is set or read (language server only)."),
     rule(CONST_REASSIGN, Correctness, ERROR, false, "A <const> or <close> local is assigned to."),
     rule(SELF_ASSIGNMENT, Suspicious, WARN, false, "A variable is assigned to itself."),
     rule(SELF_COMPARISON, Suspicious, WARN, false, "Both sides of a comparison are the same expression."),

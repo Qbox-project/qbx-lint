@@ -50,6 +50,9 @@ impl Symbol {
 pub struct Member {
     pub owner: SmolStr,
     pub symbol: Symbol,
+    /// Set through a value typed as the class rather than on the table its `---@class` declares,
+    /// like `abc.x = 1` below `---@type Test` `local abc`. Strict classes do not count it as declared.
+    pub injected: bool,
 }
 
 /// The entries of a table constructor that have no name: its array part (`key` is `None`), or its
@@ -74,6 +77,9 @@ pub struct ClassDef {
     pub range: Range,
     /// The side of `@class (server) Name`.
     pub side: Option<Side>,
+    /// `Some(true)` for `@class (strict) Name` or `(exact)`, `Some(false)` for `(loose)`, and `None`
+    /// when `strict_classes` in qbxlint.toml decides.
+    pub strict: Option<bool>,
 }
 
 #[derive(Clone, Debug)]
@@ -378,6 +384,17 @@ impl Index {
             .collect()
     }
 
+    /// The members of the class `owner` set on the table its `---@class` declares, like
+    /// `function Test:greet()`, leaving out those set through values typed as the class.
+    pub fn declared_members_of(&self, owner: &str, from: FileId) -> Vec<&Symbol> {
+        self.owner_slots(self.members.get(owner), owner, from)
+            .into_iter()
+            .filter_map(|(file, i)| self.file(file)?.index.members.get(i as usize))
+            .filter(|member| !member.injected)
+            .map(|member| &member.symbol)
+            .collect()
+    }
+
     /// The array parts and `[key]` entries of the tables `owner` names, visible like its members.
     pub fn elements_of(&self, owner: &str, from: FileId) -> Vec<&Element> {
         self.owner_slots(self.elements.get(owner), owner, from)
@@ -448,6 +465,11 @@ impl Index {
     /// The first declaration of the class `name` that applies to code on `side`.
     pub fn class(&self, name: &str, side: Option<Side>) -> Option<(FileId, &ClassDef)> {
         self.class_slots(name).find(|(_, class)| applies_on(class.side, side))
+    }
+
+    /// Whether any class is declared `(strict)` or `(exact)`.
+    pub fn has_strict_class(&self) -> bool {
+        self.files().any(|(_, f)| f.index.classes.iter().any(|class| class.strict == Some(true)))
     }
 
     /// Every declaration of the class `name`, whatever side it is scoped to.
