@@ -81,6 +81,7 @@ fn bad_resource_reports_every_rule() {
                 | "fivem/resource-not-found"
                 // Reported by qbx-lua-ls, which has the LuaCATS types the linter does not.
                 | "undefined-doc-name"
+                | "missing-fields"
         );
         assert!(exercised || covered_elsewhere, "rule {} is not exercised by the bad_resource fixture", rule.code);
     }

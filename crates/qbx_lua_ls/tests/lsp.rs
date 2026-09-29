@@ -1597,6 +1597,85 @@ local function check(kind, expected) end
 }
 
 #[test]
+fn reports_missing_fields_of_class_typed_tables() {
+    let mut client = Client::start(fixture_root());
+    let text = "\
+---@class Test.Identity
+---@field sex 'male'|'female'
+---@field name string
+---@field age? integer
+---@field owner? Test.Identity
+
+---@type Test.Identity
+local empty = {}
+
+---@type Test.Identity
+local partial = { name = 'Ann' }
+
+---@type Test.Identity
+local complete = { sex = 'female', name = 'Ann', owner = { name = 'Bob' } }
+
+---@param identity Test.Identity
+local function register(identity) end
+register({ sex = 'male' })
+
+---@type Test.Identity
+---@diagnostic disable-next-line: missing-fields
+local skipped = {}
+
+---@class Test.Declared : Test.Identity
+local declared = {}
+";
+    client.open_with(CLIENT, text);
+    let lines: Vec<u64> = client
+        .diagnostics_for(CLIENT)
+        .into_iter()
+        .filter(|(code, _)| code == "missing-fields")
+        .map(|(_, line)| line)
+        .collect();
+    // The constructor for `owner` on line 13 lacks `sex`; the outer table there is complete.
+    assert_eq!(lines, [7, 10, 13, 17]);
+
+    let uri = client.uri(CLIENT).to_string();
+    let messages: Vec<&str> = client.diagnostics[&uri]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|d| d["code"] == "missing-fields")
+        .map(|d| d["message"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        messages,
+        [
+            "Missing required fields in type `Test.Identity`: `sex`, `name`",
+            "Missing required fields in type `Test.Identity`: `sex`",
+            "Missing required fields in type `Test.Identity`: `sex`",
+            "Missing required fields in type `Test.Identity`: `name`",
+        ]
+    );
+}
+
+#[test]
+fn missing_fields_leave_out_fields_of_the_other_side() {
+    let mut client = Client::start(fixture_root());
+    let text = "\
+---@class Test.Account
+---@field name string
+---@field (server) license string
+
+---@type Test.Account
+local account = { name = 'Ann' }
+";
+    let missing = |client: &mut Client, file: &str| -> Vec<u64> {
+        client.open_with(file, text);
+        let found = client.diagnostics_for(file);
+        found.into_iter().filter(|(code, _)| code == "missing-fields").map(|(_, line)| line).collect()
+    };
+    assert!(missing(&mut client, CLIENT).is_empty(), "clients never see `license`");
+    assert_eq!(missing(&mut client, SERVER), [5]);
+}
+
+#[test]
 fn hover_binds_generics_from_arguments_and_callbacks() {
     let mut client = Client::start(fixture_root());
     let text = "\

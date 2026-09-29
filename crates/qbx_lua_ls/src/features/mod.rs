@@ -9,6 +9,7 @@ pub mod folding;
 pub mod hover;
 pub mod inlay;
 pub mod member_refs;
+pub mod missing_fields;
 mod native_argument;
 pub mod nui_resource;
 pub mod on_type;

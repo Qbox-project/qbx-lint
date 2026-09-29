@@ -70,6 +70,8 @@ pub const DUPLICATE_ARGUMENT: &str = "duplicate-argument";
 pub const MISSING_PARAMETER: &str = "missing-parameter";
 /// Reported by qbx-lua-ls, which indexes the LuaCATS types; the linter itself has no type information.
 pub const UNDEFINED_DOC_NAME: &str = "undefined-doc-name";
+/// Reported by qbx-lua-ls, which reads the LuaCATS classes; the linter itself has no type information.
+pub const MISSING_FIELDS: &str = "missing-fields";
 pub const CONST_REASSIGN: &str = "const-reassign";
 pub const SELF_ASSIGNMENT: &str = "self-assignment";
 pub const SELF_COMPARISON: &str = "self-comparison";
@@ -124,6 +126,7 @@ pub static RULES: &[Rule] = &[
     rule(DUPLICATE_ARGUMENT, Correctness, ERROR, false, "Two parameters of one function share a name."),
     rule(MISSING_PARAMETER, Correctness, WARN, false, "A function is called without an argument for a parameter its LuaCATS annotations require."),
     rule(UNDEFINED_DOC_NAME, Correctness, WARN, false, "A LuaCATS annotation names a type that no @class, @alias or @enum declares for the file's side (language server only)."),
+    rule(MISSING_FIELDS, Correctness, WARN, false, "A table constructor typed as a LuaCATS class leaves out required fields (language server only)."),
     rule(CONST_REASSIGN, Correctness, ERROR, false, "A <const> or <close> local is assigned to."),
     rule(SELF_ASSIGNMENT, Suspicious, WARN, false, "A variable is assigned to itself."),
     rule(SELF_COMPARISON, Suspicious, WARN, false, "Both sides of a comparison are the same expression."),
