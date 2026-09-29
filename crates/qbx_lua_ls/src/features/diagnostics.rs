@@ -3,7 +3,7 @@ use std::path::Path;
 use lsp_types::{Diagnostic, DiagnosticSeverity, DiagnosticTag, NumberOrString};
 use qbx_lua_analysis::directives::Suppressions;
 use qbx_lua_analysis::lint::all_files;
-use qbx_lua_analysis::rules::{MISSING_FIELDS, UNDEFINED_DOC_NAME};
+use qbx_lua_analysis::rules::{ASSIGN_TYPE_MISMATCH, MISSING_FIELDS, UNDEFINED_DOC_NAME};
 use qbx_lua_analysis::summary::summarize;
 use qbx_lua_analysis::{
     check_file, check_manifest, FileConfig, FileInput, Level, ManifestInput, ResourceInput, Severity, Tag,
@@ -11,7 +11,7 @@ use qbx_lua_analysis::{
 use qbx_lua_syntax::Span;
 use serde::{Deserialize, Serialize};
 
-use super::class_tables::missing_fields;
+use super::class_tables::{mismatched_fields, missing_fields};
 use super::doc_names::undefined_doc_names;
 use super::with_infer;
 use crate::document::Document;
@@ -34,12 +34,13 @@ pub fn is_silenced(ws: &Workspace, path: &Path) -> bool {
 /// the server indexes. Inline suppression comments apply to them as they do to the linter's own.
 fn type_diagnostics(ws: &Workspace, doc: &Document, config: &FileConfig) -> Vec<qbx_lua_analysis::Diagnostic> {
     type Check = fn(&Workspace, &Document) -> Vec<(Span, String)>;
-    let checks: [(&'static str, Check); 2] = [
+    let checks: [(&'static str, Check); 3] = [
         (UNDEFINED_DOC_NAME, |ws, doc| {
             let side = ws.index.file(doc.file).and_then(|f| f.side);
             undefined_doc_names(&ws.index, &doc.text, &doc.chunk, side)
         }),
         (MISSING_FIELDS, |ws, doc| with_infer(ws, doc, |infer| missing_fields(infer, &doc.chunk))),
+        (ASSIGN_TYPE_MISMATCH, |ws, doc| with_infer(ws, doc, |infer| mismatched_fields(infer, &doc.chunk))),
     ];
     let suppressions = Suppressions::parse(&doc.text, &doc.chunk.comments, &doc.lines);
     let mut out = Vec::new();

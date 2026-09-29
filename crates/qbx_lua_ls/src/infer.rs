@@ -540,6 +540,18 @@ impl<'a> Infer<'a> {
         Some(substitute(ty, &self.bind_generics(&fun, &args, via_method, false)))
     }
 
+    /// Whether `name` is the table a `---@class` annotation declares, like `Test` in `---@class Test`
+    /// `local Test = {}`, rather than a value typed as that class.
+    pub fn is_class_table(&self, name: &Name) -> bool {
+        match self.ctx.resolution.resolve_at(name.span.start) {
+            Some(Resolved::Local(id)) => match self.ctx.decl(self.ctx.resolution.local(id).decl.start) {
+                Some(Decl::Local { stmt, .. }) => !self.ctx.doc_at(stmt.span.start).classes.is_empty(),
+                _ => false,
+            },
+            _ => self.index.globals_named(&name.text, self.ctx.file).iter().any(|(_, symbol)| symbol.is_class_table()),
+        }
+    }
+
     /// The type `self` has inside `function a.b:c()`, which is also the owner of `c`.
     pub fn func_name_owner_type(&self, name: &FuncName) -> Type {
         let mut ty = self.name(&name.base);

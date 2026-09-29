@@ -38,6 +38,14 @@ pub struct Symbol {
     pub range: Range,
 }
 
+impl Symbol {
+    /// A global that a `---@class` annotation declares, like `Test` in `---@class Test` `Test = {}`,
+    /// rather than one typed as the class with `---@type`.
+    pub fn is_class_table(&self) -> bool {
+        self.kind == SymbolKind::Table && matches!(self.ty, Type::Named(..))
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Member {
     pub owner: SmolStr,

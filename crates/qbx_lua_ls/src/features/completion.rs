@@ -745,7 +745,7 @@ fn expected_field_items(infer: &Infer, doc: &Document, offset: u32) -> Vec<Compl
         let ExprKind::Table(existing) = &found.table.kind else { return Vec::new() };
         let present: FxHashSet<&str> = existing.iter().filter_map(named_field).map(|(name, _)| name).collect();
         return Classes::new(infer)
-            .fields(&found.class)
+            .fields(&found.class, found.from)
             .into_iter()
             .filter(|field| !present.contains(field.name.as_str()) && is_identifier(&field.name))
             .map(|field| {

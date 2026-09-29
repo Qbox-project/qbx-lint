@@ -1720,6 +1720,91 @@ print(abc, make, nested, untyped)
 }
 
 #[test]
+fn class_typed_tables_report_fields_of_the_wrong_type() {
+    let mut client = Client::start(fixture_root());
+    let text = "\
+---@class Test.Typed
+---@field test string
+---@field count? integer
+---@field sex 'male'|'female'
+---@field position vector3
+---@field cb fun()
+---@field inner Test.TypedInner
+
+---@class Test.TypedInner
+---@field label string
+
+---@type Test.Typed
+local fine = {
+    test = 'x',
+    count = nil,
+    sex = 'male',
+    position = vector3(0, 0, 0),
+    cb = function() end,
+    inner = { label = 'a' },
+}
+
+---@type Test.Typed
+local wrong = {
+    test = 1,
+    count = 'many',
+    sex = 'other',
+    position = {},
+    cb = 5,
+    inner = { label = true },
+}
+print(fine, wrong)
+";
+    client.open_with(CLIENT, text);
+    client.diagnostics_for(CLIENT);
+    let uri = client.uri(CLIENT).to_string();
+    let found: Vec<(u64, String)> = client.diagnostics[&uri]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|d| d["code"] == "assign-type-mismatch")
+        .map(|d| (d["range"]["start"]["line"].as_u64().unwrap(), d["message"].as_str().unwrap().into()))
+        .collect();
+    let line = |needle: &str| pos(text, needle, 0).0 as u64;
+    assert_eq!(
+        found,
+        [
+            (line("test = 1"), "Cannot assign `integer` to field `test` of type `string`".into()),
+            (line("count = 'many'"), "Cannot assign `string` to field `count` of type `integer?`".into()),
+            (line("sex = 'other'"), "Cannot assign `\"other\"` to field `sex` of type `\"male\"|\"female\"`".into()),
+            (line("cb = 5"), "Cannot assign `integer` to field `cb` of type `fun()`".into()),
+            // A table for a class-typed field is checked as a table of that class.
+            (line("label = true"), "Cannot assign `boolean` to field `label` of type `string`".into()),
+        ],
+        "a table for `vector3` passes, since classes also describe userdata"
+    );
+}
+
+#[test]
+fn field_types_use_the_declarations_their_resource_sees() {
+    let mut client = Client::start(fixture_root());
+    // Another resource declares a class under the enum's name, like ox_fuel's `State` next to
+    // qbx_vehicles' `State` enum.
+    client.open_with(
+        "shop/client.lua",
+        "---@class Probe.Status\n---@field fuel number\nlocal status = {}\nprint(status)\n",
+    );
+    client.open_with(
+        "myresource/shared/config.lua",
+        "---@enum Probe.Status\nProbeStatus = {\n    OUT = 0,\n    GARAGED = 1,\n}\n\n---@class Probe.Save\n---@field state Probe.Status\n",
+    );
+    let text = "---@type Probe.Save\nlocal save = { state = ProbeStatus.GARAGED }\n---@type Probe.Save\nlocal wrong = { state = 'garaged' }\nprint(save, wrong)\n";
+    client.open_with(CLIENT, text);
+    let found: Vec<u64> = client
+        .diagnostics_for(CLIENT)
+        .into_iter()
+        .filter(|(code, _)| code == "assign-type-mismatch")
+        .map(|(_, line)| line)
+        .collect();
+    assert_eq!(found, [3], "only the string is wrong for the enum this resource sees");
+}
+
+#[test]
 fn missing_fields_leave_out_fields_of_the_other_side() {
     let mut client = Client::start(fixture_root());
     let text = "\
@@ -1737,6 +1822,97 @@ local account = { name = 'Ann' }
     };
     assert!(missing(&mut client, CLIENT).is_empty(), "clients never see `license`");
     assert_eq!(missing(&mut client, SERVER), [5]);
+}
+
+/// The findings of `file` for the given codes as (code, line, message), sorted by line.
+fn findings(client: &mut Client, file: &str, codes: &[&str]) -> Vec<(String, u64, String)> {
+    client.diagnostics_for(file);
+    let uri = client.uri(file).to_string();
+    let mut found: Vec<(String, u64, String)> = client.diagnostics[&uri]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|d| codes.contains(&d["code"].as_str().unwrap()))
+        .map(|d| {
+            let code = d["code"].as_str().unwrap().to_string();
+            (code, d["range"]["start"]["line"].as_u64().unwrap(), d["message"].as_str().unwrap().to_string())
+        })
+        .collect();
+    found.sort_by_key(|(_, line, _)| *line);
+    found
+}
+
+#[test]
+fn index_fields_type_their_keys() {
+    let mut client = Client::start(fixture_root());
+    let text = "\
+---@class (strict) Test.Indexed
+---@field test string
+---@field [string] number
+
+---@type Test.Indexed
+local abc = {
+    test = '2543',
+    other = true,
+    fine = 1,
+    [1] = 2,
+}
+
+print(abc[1], abc.anything)
+abc.more = 'x'
+abc.test = 5
+abc[2] = 1
+
+---@class (strict) Test.Closed
+---@field name string
+---@field note? string
+---@field label string|nil
+local Closed = {}
+function Closed:greet() end
+
+---@type Test.Closed
+local closed = { name = 'a', 'positional' }
+print(closed.name, closed.nope)
+closed:greet()
+closed:missing()
+closed.note = nil
+closed.label = nil
+closed.name = nil
+local key = 'name'
+print(closed[key])
+
+---@class Test.LooseMap
+---@field [string] integer
+
+---@type Test.LooseMap
+local map = { a = 'x' }
+print(map[true], map.b)
+abc.test = nil
+
+---@class (strict) Test.Tuple
+---@field [1] number
+---@field [2] string
+
+---@type Test.Tuple
+local tuple = { 1, 'a' }
+print(tuple[2]:upper())
+";
+    client.open_with(CLIENT, text);
+    let line = |needle: &str| pos(text, needle, 0).0 as u64;
+    let finding = |code: &str, needle: &str, message: &str| (code.to_string(), line(needle), message.to_string());
+    let mismatch = "assign-type-mismatch";
+    assert_eq!(
+        findings(&mut client, CLIENT, &[mismatch]),
+        [
+            finding(mismatch, "other = true", "Cannot assign `boolean` to field `other` of type `number`"),
+            finding(mismatch, "abc.more", "Cannot assign `string` to field `more` of type `number`"),
+            finding(mismatch, "abc.test = 5", "Cannot assign `integer` to field `test` of type `string`"),
+            finding(mismatch, "closed.name = nil", "Cannot assign `nil` to field `name` of type `string`"),
+            finding(mismatch, "a = 'x'", "Cannot assign `string` to field `a` of type `integer`"),
+            finding(mismatch, "abc.test = nil", "Cannot assign `nil` to field `test` of type `string`"),
+        ],
+        "`= nil` only clears fields whose type allows `nil`, and tuple fields like `[1]` are not checked"
+    );
 }
 
 #[test]
