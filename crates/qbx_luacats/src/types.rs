@@ -147,6 +147,10 @@ impl Type {
         matches!(self, Type::Unknown)
     }
 
+    pub fn is_literal(&self) -> bool {
+        matches!(self, Type::StringLit(_) | Type::IntLit(_) | Type::BooleanLit(_))
+    }
+
     pub fn union(types: impl IntoIterator<Item = Type>) -> Type {
         let mut flat: Vec<Type> = Vec::new();
         for ty in types {

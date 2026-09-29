@@ -1,17 +1,22 @@
 //! Table constructors typed as a LuaCATS class, found where their type is known: `---@type` locals
 //! and assignments, arguments to class-typed parameters, the tables such fields hold and, for
-//! completion, `return` in a function documented with `@return`. They drive `missing-fields` and the
-//! completion of field names. Only the language server knows the classes, so qbx-lint registers
-//! the rules and this module reports them.
+//! completion, `return` in a function documented with `@return`. They drive `missing-fields`,
+//! `assign-type-mismatch` and the completion of field names. Only the language server knows the
+//! classes, so qbx-lint registers the rules and this module reports them.
+//!
+//! Type names are global, and resources may declare the same one differently: ox_fuel's
+//! `@class State` is not qbx_vehicles' `@enum State`. A name is looked up the way the file that
+//! uses it sees it, and a name that file cannot tell apart is not checked.
 
 use std::sync::Arc;
 
+use qbx_lua_analysis::scope::Resolved;
 use qbx_lua_syntax::ast::*;
 use qbx_lua_syntax::visit::{self, Visitor};
 use qbx_lua_syntax::{SmolStr, Span};
 use rustc_hash::FxHashSet;
 
-use crate::index::{ClassDef, ResourceId};
+use crate::index::{AliasDef, ClassDef, FileId, ResourceId};
 use crate::infer::Infer;
 use crate::luacats::applies_on;
 use crate::types::Type;
@@ -22,6 +27,8 @@ const MAX_DEPTH: u32 = 8;
 pub struct ClassTable<'c> {
     pub class: SmolStr,
     pub table: &'c Expr,
+    /// The file whose view of the type names decided the class.
+    pub from: FileId,
 }
 
 /// A `@field` of a class, or of one of its parents.
@@ -29,6 +36,8 @@ pub struct ClassField {
     pub name: SmolStr,
     pub ty: Type,
     pub doc: Option<Arc<str>>,
+    /// The file that declares the field, whose view of the type names its type is read with.
+    pub file: FileId,
 }
 
 /// A field a constructor sets by name, `name = v`, `['name'] = v` or `.name`, with its value.
@@ -41,11 +50,54 @@ pub fn named_field(field: &TableField) -> Option<(&str, Option<&Expr>)> {
     }
 }
 
+/// What a table is indexed with: a field name, or the type of any other key.
+pub enum Key<'k> {
+    Name(&'k str),
+    Typed(Type),
+}
+
+impl Key<'_> {
+    fn ty(&self) -> Type {
+        match self {
+            Key::Name(name) => Type::StringLit(SmolStr::new(name)),
+            Key::Typed(ty) => ty.clone(),
+        }
+    }
+}
+
+/// Each entry of a table constructor: its key, where the entry is written, and its value. Array
+/// entries have `integer` keys, and `.name` sets `name` to `true` without a value to check.
+pub fn entries<'c>(infer: &Infer, fields: &'c [TableField]) -> Vec<(Key<'c>, Span, Option<&'c Expr>)> {
+    fields
+        .iter()
+        .map(|field| match field {
+            TableField::Named { name, value } => (Key::Name(name.text.as_str()), name.span, Some(value)),
+            TableField::SetMember(name) => (Key::Name(name.text.as_str()), name.span, None),
+            TableField::Keyed { key, value } => match key.as_string() {
+                Some(name) => (Key::Name(name.as_str()), key.span, Some(value)),
+                None => (Key::Typed(infer.expr(key).widen()), key.span, Some(value)),
+            },
+            TableField::Positional(value) => (Key::Typed(Type::Integer), value.span, Some(value)),
+        })
+        .collect()
+}
+
 fn is_table(expr: &Expr) -> bool {
     matches!(expr.unparen().kind, ExprKind::Table(_))
 }
 
-/// Looks up the classes a file can see.
+/// Bits for the kinds of Lua value a type allows.
+mod kind {
+    pub const NIL: u8 = 1;
+    pub const BOOLEAN: u8 = 2;
+    pub const NUMBER: u8 = 4;
+    pub const STRING: u8 = 8;
+    pub const TABLE: u8 = 16;
+    pub const FUNCTION: u8 = 32;
+    pub const OTHER: u8 = 64;
+}
+
+/// Looks up the classes and aliases that a file sees.
 pub struct Classes<'a, 'b> {
     infer: &'a Infer<'b>,
 }
@@ -55,74 +107,247 @@ impl<'a, 'b> Classes<'a, 'b> {
         Self { infer }
     }
 
-    /// The class a value of type `ty` must be, looking through `?` and aliases.
-    pub fn class_of(&self, ty: &Type) -> Option<SmolStr> {
-        match self.infer.resolve_alias(&ty.without_nil()).without_nil() {
-            Type::Named(name, _) if !self.class_defs(&name).is_empty() => Some(name),
-            _ => None,
+    /// The file being analyzed.
+    pub fn file(&self) -> FileId {
+        self.infer.ctx.file
+    }
+
+    /// The classes and aliases called `name` that code in `from` sees. When it sees none, those of
+    /// the one resource that declares the name count; several resources make it ambiguous.
+    #[allow(clippy::type_complexity)]
+    fn declarations(&self, name: &str, from: FileId) -> (Vec<(FileId, &'b ClassDef)>, Vec<(FileId, &'b AliasDef)>) {
+        let index = self.infer.index;
+        let side = self.infer.side();
+        let mut classes = index.class_defs(name);
+        classes.retain(|(_, class)| applies_on(class.side, side));
+        let mut aliases = index.alias_defs(name);
+        aliases.retain(|(_, alias)| applies_on(alias.side, side));
+        let visible_classes: Vec<_> =
+            classes.iter().copied().filter(|(file, _)| index.is_visible(from, *file)).collect();
+        let visible_aliases: Vec<_> =
+            aliases.iter().copied().filter(|(file, _)| index.is_visible(from, *file)).collect();
+        if !visible_classes.is_empty() || !visible_aliases.is_empty() {
+            return (visible_classes, visible_aliases);
+        }
+        let files = classes.iter().map(|(file, _)| *file).chain(aliases.iter().map(|(file, _)| *file));
+        let resources: FxHashSet<Option<ResourceId>> =
+            files.map(|file| index.file(file).and_then(|f| f.resource)).collect();
+        if resources.len() == 1 {
+            (classes, aliases)
+        } else {
+            (Vec::new(), Vec::new())
         }
     }
 
-    /// The declarations of class `name` this file can see. When it sees none, a class that several
-    /// resources declare under one name is ambiguous and is not checked.
-    fn class_defs(&self, name: &str) -> Vec<&'b ClassDef> {
-        let index = self.infer.index;
-        let from = self.infer.ctx.file;
-        let mut defs = index.class_defs(name);
-        defs.retain(|(_, class)| applies_on(class.side, self.infer.side()));
-        let visible: Vec<&ClassDef> =
-            defs.iter().filter(|(file, _)| index.is_visible(from, *file)).map(|(_, class)| *class).collect();
-        if !visible.is_empty() {
-            return visible;
+    fn class_defs(&self, name: &str, from: FileId) -> Vec<(FileId, &'b ClassDef)> {
+        self.declarations(name, from).0
+    }
+
+    fn alias_defs(&self, name: &str, from: FileId) -> Vec<(FileId, &'b AliasDef)> {
+        self.declarations(name, from).1
+    }
+
+    /// `ty`, or the type of the one alias it names as `from` sees it.
+    fn resolve(&self, ty: &Type, from: FileId, depth: u32) -> Type {
+        match ty {
+            Type::Named(name, args)
+                if args.is_empty() && depth < MAX_DEPTH && self.class_defs(name, from).is_empty() =>
+            {
+                match self.alias_defs(name, from).as_slice() {
+                    [(file, alias)] => self.resolve(&alias.ty, *file, depth + 1),
+                    _ => ty.clone(),
+                }
+            }
+            _ => ty.clone(),
         }
-        let resources: FxHashSet<Option<ResourceId>> =
-            defs.iter().map(|(file, _)| index.file(*file).and_then(|f| f.resource)).collect();
-        if resources.len() == 1 {
-            defs.into_iter().map(|(_, class)| class).collect()
-        } else {
-            Vec::new()
+    }
+
+    /// The class a value of type `ty` must be, as `from` sees the names, looking through `?` and
+    /// aliases.
+    pub fn class_of(&self, ty: &Type, from: FileId) -> Option<SmolStr> {
+        match self.resolve(&ty.without_nil(), from, 0).without_nil() {
+            Type::Named(name, _) if !self.class_defs(&name, from).is_empty() => Some(name),
+            _ => None,
         }
     }
 
     /// The `@field`s of `class` and its parents, leaving out those scoped to the other side. The
     /// first declaration of a name wins, so a class can narrow a field of its parent.
-    pub fn fields(&self, class: &str) -> Vec<ClassField> {
+    pub fn fields(&self, class: &str, from: FileId) -> Vec<ClassField> {
         let mut out = Vec::new();
-        self.collect_fields(class, &mut out, 0);
+        self.collect_fields(class, from, &mut out, 0);
         out
     }
 
-    fn collect_fields(&self, class: &str, out: &mut Vec<ClassField>, depth: u32) {
+    fn collect_fields(&self, class: &str, from: FileId, out: &mut Vec<ClassField>, depth: u32) {
         if depth > MAX_DEPTH {
             return;
         }
-        let defs = self.class_defs(class);
-        for def in &defs {
+        let defs = self.class_defs(class, from);
+        for (file, def) in &defs {
             let sides = def.field_sides.iter().copied().chain(std::iter::repeat(None));
             for (field, side) in def.fields.iter().zip(sides) {
                 if applies_on(side, self.infer.side()) && !out.iter().any(|seen| seen.name == field.name) {
-                    out.push(ClassField { name: field.name.clone(), ty: field.ty.clone(), doc: field.doc.clone() });
+                    let (name, ty, doc) = (field.name.clone(), field.ty.clone(), field.doc.clone());
+                    out.push(ClassField { name, ty, doc, file: *file });
                 }
             }
         }
-        for parent in defs.iter().flat_map(|def| &def.parents) {
-            self.collect_fields(parent, out, depth + 1);
+        for (file, def) in &defs {
+            for parent in &def.parents {
+                self.collect_fields(parent, *file, out, depth + 1);
+            }
         }
+    }
+
+    /// The type that `key` of a `class` table holds, with the file whose view of the type names it
+    /// is read with: the `@field` of a name, or else the value of an index that takes the key.
+    pub fn field_type(&self, class: &str, from: FileId, key: &Key) -> Option<(Type, FileId)> {
+        let field = match key {
+            Key::Name(name) => self.fields(class, from).into_iter().find(|field| field.name == *name),
+            Key::Typed(_) => None,
+        };
+        match field {
+            Some(field) => Some((field.ty, field.file)),
+            None => self.index_for(class, from, &key.ty(), 0),
+        }
+    }
+
+    /// The value type of the first index of `class` or a parent that takes keys of type `key`,
+    /// inferred in this file, with the file that declares it.
+    fn index_for(&self, class: &str, from: FileId, key: &Type, depth: u32) -> Option<(Type, FileId)> {
+        if depth > MAX_DEPTH {
+            return None;
+        }
+        let defs = self.class_defs(class, from);
+        let own = defs.iter().find_map(|(file, def)| match &def.index {
+            // Of several `---@field [1] number` lines only the last is kept, so its value may belong
+            // to another key.
+            Some((index_key, _)) if index_key.is_literal() && self.takes(index_key, *file, key) => {
+                Some((Type::Unknown, *file))
+            }
+            Some((index_key, value)) if self.takes(index_key, *file, key) => Some((value.clone(), *file)),
+            _ => None,
+        });
+        own.or_else(|| {
+            let mut parents = defs.iter().flat_map(|(file, def)| def.parents.iter().map(move |p| (p, *file)));
+            parents.find_map(|(parent, file)| self.index_for(parent, file, key, depth + 1))
+        })
+    }
+
+    /// Whether an index keyed by `index_key`, as `from` sees it, takes keys of type `key`.
+    fn takes(&self, index_key: &Type, from: FileId, key: &Type) -> bool {
+        match (self.kinds(index_key, from, 0), self.kinds(key, self.file(), 0)) {
+            (Some(wanted), Some(got)) => wanted & got != 0,
+            _ => true,
+        }
+    }
+
+    /// The type of `expr` for checking the value it stores or returns. A local that is assigned
+    /// again after its declaration is `unknown`, since its declared type may not be what it holds.
+    pub fn value_type(&self, expr: &Expr) -> Type {
+        if let ExprKind::Name(name) = &expr.unparen().kind {
+            let resolution = self.infer.ctx.resolution;
+            if let Some(Resolved::Local(id)) = resolution.resolve_at(name.span.start) {
+                if resolution.local(id).refs.iter().any(|r| r.write) {
+                    return Type::Unknown;
+                }
+            }
+        }
+        self.infer.expr(expr)
     }
 
     /// Whether a field of type `ty` may be left out: `string?`, `string|nil`, `any` or no type.
-    pub fn admits_nil(&self, ty: &Type) -> bool {
-        self.admits_nil_at(ty, 0)
+    pub fn admits_nil(&self, ty: &Type, from: FileId) -> bool {
+        self.admits_nil_at(ty, from, 0)
     }
 
-    fn admits_nil_at(&self, ty: &Type, depth: u32) -> bool {
+    fn admits_nil_at(&self, ty: &Type, from: FileId, depth: u32) -> bool {
         if depth > MAX_DEPTH {
             return true;
         }
-        match self.infer.resolve_alias(ty) {
+        match self.resolve(ty, from, depth) {
             Type::Nil | Type::Any | Type::Unknown => true,
-            Type::Union(types) => types.iter().any(|t| self.admits_nil_at(t, depth + 1)),
+            Type::Union(types) => types.iter().any(|t| self.admits_nil_at(t, from, depth + 1)),
             _ => false,
+        }
+    }
+
+    /// Whether a value of type `given`, inferred in this file, can clearly not be stored where
+    /// `expected` is declared in `from`.
+    fn rejects(&self, expected: &Type, from: FileId, given: &Type) -> bool {
+        match (self.kinds(expected, from, 0), self.kinds(given, self.file(), 0)) {
+            (Some(wanted), Some(got)) if wanted & got == 0 => true,
+            _ => self.literal_mismatch(expected, from, given),
+        }
+    }
+
+    /// The kinds of Lua value `ty` allows, as `kind` bits, or `None` when it may be anything.
+    fn kinds(&self, ty: &Type, from: FileId, depth: u32) -> Option<u8> {
+        if depth > MAX_DEPTH {
+            return None;
+        }
+        Some(match ty {
+            Type::Unknown | Type::Any => return None,
+            Type::Nil => kind::NIL,
+            Type::Boolean | Type::BooleanLit(_) => kind::BOOLEAN,
+            Type::Number | Type::Integer | Type::IntLit(_) | Type::Handle(_) => kind::NUMBER,
+            Type::String | Type::StringLit(_) => kind::STRING,
+            Type::Table
+            | Type::Array(_)
+            | Type::Map(..)
+            | Type::Tuple(_)
+            | Type::Shape(_)
+            | Type::GlobalTable(_)
+            | Type::Exports(_)
+            | Type::Require(_) => kind::TABLE,
+            Type::Function | Type::Fun(_) => kind::FUNCTION,
+            Type::Thread | Type::Userdata => kind::OTHER,
+            Type::Variadic(inner) => return self.kinds(inner, from, depth + 1),
+            Type::Named(name, _) => {
+                let classes = self.class_defs(name, from);
+                let aliases = self.alias_defs(name, from);
+                match (classes.is_empty(), aliases.as_slice()) {
+                    // Classes describe tables, and also userdata such as `vector3`.
+                    (false, []) => kind::TABLE | kind::OTHER,
+                    (true, [(file, alias)]) => return self.kinds(&alias.ty, *file, depth + 1),
+                    // Unknown, a generic, or declared as more than one thing.
+                    _ => return None,
+                }
+            }
+            Type::Union(types) => {
+                let mut kinds = 0;
+                for part in types {
+                    kinds |= self.kinds(part, from, depth + 1)?;
+                }
+                kinds
+            }
+        })
+    }
+
+    /// Whether `given` is a literal that `expected` lists only other literals for, like `'other'`
+    /// for `'male'|'female'`.
+    fn literal_mismatch(&self, expected: &Type, from: FileId, given: &Type) -> bool {
+        if !matches!(given, Type::StringLit(_) | Type::IntLit(_) | Type::BooleanLit(_)) {
+            return false;
+        }
+        let mut parts = Vec::new();
+        self.flatten(expected, from, &mut parts, 0);
+        let listed: Vec<&Type> = parts.iter().filter(|part| !matches!(part, Type::Nil)).collect();
+        !listed.is_empty()
+            && listed.iter().all(|part| matches!(part, Type::StringLit(_) | Type::IntLit(_) | Type::BooleanLit(_)))
+            && !listed.contains(&given)
+    }
+
+    /// The parts of a union, with the aliases it names resolved.
+    fn flatten(&self, ty: &Type, from: FileId, out: &mut Vec<Type>, depth: u32) {
+        if depth > MAX_DEPTH {
+            out.push(Type::Unknown);
+            return;
+        }
+        match self.resolve(ty, from, depth) {
+            Type::Union(types) => types.iter().for_each(|part| self.flatten(part, from, out, depth + 1)),
+            other => out.push(other),
         }
     }
 }
@@ -139,6 +364,110 @@ pub fn class_tables<'c>(infer: &Infer, chunk: &'c Chunk, returns: bool) -> Vec<C
     };
     finder.visit_block(&chunk.block);
     finder.out
+}
+
+/// A field set or read outside a table constructor.
+pub struct Access<'c> {
+    /// The type of the value whose field it is.
+    pub owner: Type,
+    pub key: Key<'c>,
+    /// Where the name or key is written.
+    pub span: Span,
+    /// What an assignment stores; `None` for reads and `function value:name()`.
+    pub value: Option<&'c Expr>,
+    /// Set on the table a `---@class` annotation declares, which may take new fields.
+    pub on_class_table: bool,
+}
+
+/// The fields that assignments and `function value:name()` statements set and, with `reads`, the
+/// fields and keys that expressions read, such as `value.name`, `value[1]` and `value:name()`.
+pub fn accesses<'c>(infer: &Infer, chunk: &'c Chunk, reads: bool) -> Vec<Access<'c>> {
+    let mut walker = Accesses { infer, reads, out: Vec::new() };
+    walker.visit_block(&chunk.block);
+    walker.out
+}
+
+struct Accesses<'a, 'b, 'c> {
+    infer: &'a Infer<'b>,
+    reads: bool,
+    out: Vec<Access<'c>>,
+}
+
+impl<'c> Accesses<'_, '_, 'c> {
+    /// The value an access goes through, and its key and where that is written.
+    fn target(&self, expr: &'c Expr) -> Option<(&'c Expr, Key<'c>, Span)> {
+        match &expr.kind {
+            ExprKind::Field { base, name, .. } if !name.is_missing() => Some((base, Key::Name(&name.text), name.span)),
+            ExprKind::Index { base, index, .. } => {
+                let key = match index.as_string() {
+                    Some(name) => Key::Name(name.as_str()),
+                    None => Key::Typed(self.infer.expr(index).widen()),
+                };
+                Some((base, key, index.span))
+            }
+            _ => None,
+        }
+    }
+
+    fn is_class_table(&self, expr: &Expr) -> bool {
+        matches!(&expr.kind, ExprKind::Name(name) if self.infer.is_class_table(name))
+    }
+}
+
+impl<'c> Visitor<'c> for Accesses<'_, '_, 'c> {
+    fn visit_stmt(&mut self, stmt: &'c Stmt) {
+        match &stmt.kind {
+            StmtKind::Assign { targets, exprs } => {
+                for (i, target) in targets.iter().enumerate() {
+                    match self.target(target) {
+                        Some((base, key, span)) => {
+                            let on_class_table = self.is_class_table(base);
+                            let owner = self.infer.expr(base);
+                            let value = exprs.get(i);
+                            self.out.push(Access { owner, key, span, value, on_class_table });
+                            // The target's value and key are read.
+                            visit::walk_expr(self, target);
+                        }
+                        None => self.visit_expr(target),
+                    }
+                }
+                exprs.iter().for_each(|expr| self.visit_expr(expr));
+                return;
+            }
+            StmtKind::Function { name, .. } => {
+                // `function value:name()` sets `name` on `value`, and `function a.b.c()` sets `c` on `a.b`.
+                let (path, field) = match (&name.method, name.path.split_last()) {
+                    (Some(method), _) => (&name.path[..], Some(method)),
+                    (None, Some((last, path))) => (path, Some(last)),
+                    (None, None) => (&name.path[..], None),
+                };
+                if let Some(field) = field {
+                    let on_class_table = path.is_empty() && self.infer.is_class_table(&name.base);
+                    let owner =
+                        FuncName { base: name.base.clone(), path: path.to_vec(), method: None, span: name.base.span };
+                    let owner = self.infer.func_name_owner_type(&owner);
+                    let key = Key::Name(&field.text);
+                    self.out.push(Access { owner, key, span: field.span, value: None, on_class_table });
+                }
+            }
+            _ => {}
+        }
+        visit::walk_stmt(self, stmt);
+    }
+
+    fn visit_expr(&mut self, expr: &'c Expr) {
+        if self.reads {
+            let read = match &expr.kind {
+                ExprKind::MethodCall { base, method, .. } => Some((&**base, Key::Name(&method.text), method.span)),
+                _ => self.target(expr),
+            };
+            if let Some((base, key, span)) = read {
+                let owner = self.infer.expr(base);
+                self.out.push(Access { owner, key, span, value: None, on_class_table: false });
+            }
+        }
+        visit::walk_expr(self, expr);
+    }
 }
 
 /// The class-typed table constructor directly around `offset`, for completing its field names. A
@@ -177,15 +506,51 @@ pub fn missing_fields(infer: &Infer, chunk: &Chunk) -> Vec<(Span, String)> {
             let ExprKind::Table(fields) = &found.table.kind else { return None };
             let given: Vec<&str> = fields.iter().filter_map(named_field).map(|(name, _)| name).collect();
             let missing: Vec<String> = classes
-                .fields(&found.class)
+                .fields(&found.class, found.from)
                 .iter()
-                .filter(|field| !classes.admits_nil(&field.ty) && !given.contains(&field.name.as_str()))
+                .filter(|field| !classes.admits_nil(&field.ty, field.file) && !given.contains(&field.name.as_str()))
                 .map(|field| format!("`{}`", field.name))
                 .collect();
             let message = format!("Missing required fields in type `{}`: {}", found.class, missing.join(", "));
             (!missing.is_empty()).then_some((found.table.span, message))
         })
         .collect()
+}
+
+/// Each value that a class-typed table constructor or an assignment stores in a field of a class
+/// that does not take it, such as `test = 1` for `---@field test string` or `other = true` for
+/// `---@field [string] number`, with the message naming both types. Only clear cases count: a
+/// different kind of value, or a literal the field does not list.
+pub fn mismatched_fields(infer: &Infer, chunk: &Chunk) -> Vec<(Span, String)> {
+    let classes = Classes::new(infer);
+    let mut out = Vec::new();
+    let mut check = |class: &str, from: FileId, key: &Key, value: &Expr| {
+        let Some((ty, file)) = classes.field_type(class, from, key) else { return };
+        let given = classes.value_type(value);
+        if classes.rejects(&ty, file, &given) {
+            let shown = if classes.literal_mismatch(&ty, file, &given) { given } else { given.widen() };
+            let target = match key {
+                Key::Name(name) => format!("field `{name}`"),
+                Key::Typed(key) => format!("`[{key}]`"),
+            };
+            out.push((value.span, format!("Cannot assign `{shown}` to {target} of type `{ty}`")));
+        }
+    };
+    for found in class_tables(infer, chunk, false) {
+        let ExprKind::Table(fields) = &found.table.kind else { continue };
+        for (key, _, value) in entries(infer, fields) {
+            if let Some(value) = value {
+                check(&found.class, found.from, &key, value);
+            }
+        }
+    }
+    for access in accesses(infer, chunk, false) {
+        // `value.field = nil` clears a field only when its type allows `nil`, as `string?` does.
+        if let (Some(value), Some(class)) = (access.value, classes.class_of(&access.owner, classes.file())) {
+            check(&class, classes.file(), &access.key, value);
+        }
+    }
+    out
 }
 
 struct Finder<'a, 'b, 'c> {
@@ -199,21 +564,26 @@ struct Finder<'a, 'b, 'c> {
 }
 
 impl<'c> Finder<'_, '_, 'c> {
-    /// Records `expr` when it is a table constructor and `expected` is a class, then the
-    /// constructors it holds for fields that are classes too.
-    fn table(&mut self, expected: &Type, expr: &'c Expr, depth: u32) {
+    /// Records `expr` when it is a table constructor and `expected`, named as `from` sees it, is a
+    /// class, then the constructors it holds for fields that are classes too.
+    fn table(&mut self, expected: &Type, expr: &'c Expr, from: FileId, depth: u32) {
         let table = expr.unparen();
         let ExprKind::Table(fields) = &table.kind else { return };
-        let Some(class) = self.classes.class_of(expected) else { return };
-        let declared = self.classes.fields(&class);
-        self.out.push(ClassTable { class, table });
+        let Some(class) = self.classes.class_of(expected, from) else { return };
+        self.out.push(ClassTable { class: class.clone(), table, from });
         if depth < MAX_DEPTH {
-            for (name, value) in fields.iter().filter_map(named_field) {
-                if let (Some(field), Some(value)) = (declared.iter().find(|field| field.name == name), value) {
-                    self.table(&field.ty, value, depth + 1);
+            for (key, _, value) in entries(self.classes.infer, fields) {
+                let Some(value) = value.filter(|value| is_table(value)) else { continue };
+                if let Some((ty, file)) = self.classes.field_type(&class, from, &key) {
+                    self.table(&ty, value, file, depth + 1);
                 }
             }
         }
+    }
+
+    /// A table this file's code builds, typed by a name this file sees.
+    fn top_table(&mut self, expected: &Type, expr: &'c Expr) {
+        self.table(expected, expr, self.classes.file(), 0);
     }
 
     fn doc_returns(&self, stmt: &Stmt) -> Vec<Type> {
@@ -229,7 +599,7 @@ impl<'c> Visitor<'c> for Finder<'_, '_, 'c> {
                 // `---@class Name` above a table declares the class rather than an instance of it.
                 if let (true, Some(ty)) = (doc.classes.is_empty(), &doc.ty) {
                     for expr in exprs {
-                        self.table(ty, expr, 0);
+                        self.top_table(ty, expr);
                     }
                 }
             }
@@ -238,14 +608,14 @@ impl<'c> Visitor<'c> for Finder<'_, '_, 'c> {
                 if doc.classes.is_empty() {
                     for (target, expr) in targets.iter().zip(exprs).filter(|(_, expr)| is_table(expr)) {
                         let expected = doc.ty.clone().unwrap_or_else(|| self.classes.infer.expr(target));
-                        self.table(&expected, expr, 0);
+                        self.top_table(&expected, expr);
                     }
                 }
             }
             StmtKind::Return(exprs) if self.returns && exprs.iter().any(is_table) => {
                 let expected = self.function_returns.last().cloned().unwrap_or_default();
                 for (ty, expr) in expected.iter().zip(exprs) {
-                    self.table(ty, expr, 0);
+                    self.top_table(ty, expr);
                 }
             }
             StmtKind::Function { .. } | StmtKind::LocalFunction { .. } => {
@@ -277,7 +647,7 @@ impl<'c> Visitor<'c> for Finder<'_, '_, 'c> {
             if let Some((fun, _)) = self.classes.infer.callee_fun(base, method) {
                 let (skip_params, skip_args) = fun.call_offsets(method.is_some());
                 for (param, arg) in fun.params.iter().skip(skip_params).zip(args.iter().skip(skip_args)) {
-                    self.table(&param.ty, arg, 0);
+                    self.top_table(&param.ty, arg);
                 }
             }
         }
