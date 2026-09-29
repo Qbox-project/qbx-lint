@@ -33,6 +33,12 @@ server = []
 files = ["**/tests/**", "**/*.spec.lua"]
 rules = { "undefined-global" = "off" }
 
+# The side of files a loader runs without an fxmanifest.lua entry: "client", "server" or "shared".
+# A manifest entry always wins, and sides are never guessed from folder names.
+[[overrides]]
+files = ["client/**"]
+side = "client"
+
 [format]
 indent_width = 4
 use_tabs = false

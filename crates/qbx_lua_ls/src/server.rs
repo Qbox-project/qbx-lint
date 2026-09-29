@@ -582,6 +582,7 @@ impl Server {
             if let Some(root) = self.ws.roots.first() {
                 self.ws.lint_config = qbx_lua_analysis::Config::discover(root).ok().flatten().unwrap_or_default();
             }
+            self.ws.resync_sides();
             self.log_config_notes();
         }
         if relink || config_changed {

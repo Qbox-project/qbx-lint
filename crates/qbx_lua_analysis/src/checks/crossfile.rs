@@ -6,6 +6,7 @@ use rustc_hash::FxHashSet;
 
 use super::{FileInput, Sink};
 use crate::crossref::{trigger_target, Arity, CrossRefs, EventRegistration};
+use crate::project::side_of;
 use crate::rules;
 use crate::scope::Resolved;
 use crate::side_guard::SideRegions;
@@ -29,7 +30,8 @@ const BRIDGE_FOLDERS: &[&str] = &["bridge", "bridges", "framework", "frameworks"
 /// Per-framework files such as `bridge/esx/server.lua` are picked by a loader at runtime: either
 /// the manifest does not run them as scripts at all, or they sit in a folder named for the purpose.
 fn is_bridge_file(input: &FileInput) -> bool {
-    let loaded_on_demand = input.resource.is_some() && input.side.is_none();
+    // A side from the configuration does not make the manifest run the file.
+    let loaded_on_demand = input.resource.is_some_and(|r| side_of(r.manifest, input.relative_path).is_none());
     let in_bridge_folder = input
         .relative_path
         .split('/')

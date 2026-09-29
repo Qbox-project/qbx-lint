@@ -116,7 +116,8 @@ pub fn lua_files_under(root: &Path, config: &Config) -> Vec<PathBuf> {
 }
 
 /// The side a script runs on according to the manifest; `None` when it is not listed as a script
-/// (for example modules loaded through `require` or `lib.load`).
+/// (for example modules loaded through `require` or `lib.load`). `Config::side_for` may still give
+/// such a file a side.
 pub fn side_of(manifest: &Manifest, relative_path: &str) -> Option<Side> {
     let mut side: Option<Side> = None;
     for entry in manifest.scripts.iter().filter(|s| !s.is_import()) {
@@ -394,7 +395,7 @@ impl Resource {
                 continue;
             };
             let relative = relative_slash_path(root, &path);
-            let side = side_of(&manifest, &relative);
+            let side = side_of(&manifest, &relative).or_else(|| config.side_for(&path));
             let file = ParsedFile::new(path, relative, source, side);
             env.add_summary(&file.summary, side);
             files.push(file);

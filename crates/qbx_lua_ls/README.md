@@ -71,8 +71,9 @@ A `(server)` or `(client)` attribute scopes a LuaCATS declaration to one side:
 
 Overloads follow the side of the call, including `IsDuplicityVersion()` and `lib.context`
 guards. Classes, fields, aliases and enums follow the manifest side of the file. Shared files
-and files of an unknown side see both sides. Naming a type in a script of a side that only the
-other side declares is reported as `undefined-doc-name`.
+and files of an unknown side see both sides. A `side` in a `qbxlint.toml` override gives a side
+to files a loader runs without a manifest entry. Naming a type in a script of a side that only
+the other side declares is reported as `undefined-doc-name`.
 
 ## Framework callbacks
 

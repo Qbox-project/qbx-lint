@@ -56,7 +56,7 @@ quote_style = "preserve"
 | `ignore_unused_prefix` | Locals and arguments with this prefix are exempt from unused checks; defaults to `_`. |
 | `strict_classes` | Makes every `---@class` without `(loose)` strict, as if it said `(strict)`. Only classes declared in files whose diagnostics are reported follow it. See [Strict classes](#strict-classes). Defaults to `false`. |
 | `rules` | Per-rule levels: `off`, `hint`, `info`, `warning` (or `warn`), and `error`. |
-| `overrides` | Per-file globals and rule levels, selected by the `files` patterns, and imports for the resources whose `fxmanifest.lua` the patterns match. Later matching overrides take precedence for rule levels. |
+| `overrides` | Per-file globals, rule levels and `side`, selected by the `files` patterns, and imports for the resources whose `fxmanifest.lua` the patterns match. Later matching overrides take precedence for rule levels and sides. See [Sides of unlisted scripts](#sides-of-unlisted-scripts). |
 | `format` | Formatting options, shown with their defaults above. |
 
 The default exclusions include `node_modules`, `.git`, and `[builders]` directory contents.
@@ -188,7 +188,28 @@ class. Server scripts do not see the globals of `client` imports, and client scr
 those of `server` imports. Excluded files add nothing.
 
 Files not listed as manifest scripts, including modules loaded through `require` or `lib.load`,
-use globals from both sides. Files outside a resource are checked without a manifest environment.
+use globals from both sides unless an override gives them a side. Files outside a resource are
+checked without a manifest environment.
+
+### Sides of unlisted scripts
+
+A resource whose loader runs its own files at runtime, listing them only under `files`, leaves
+their side unknown. An override's `side` (`client`, `server` or `shared`) supplies it:
+
+```toml
+[[overrides]]
+files = ["client/**"]
+side = "client"
+
+[[overrides]]
+files = ["server/**"]
+side = "server"
+```
+
+The side only applies to Lua files inside a resource that its manifest does not list as scripts;
+a manifest entry always wins. Such a file is then checked like a script of that side: it sees the
+globals, natives and `(server)` or `(client)` annotations of that side, and its own globals only
+reach scripts of that side. The side is never guessed from folder names.
 
 Recognized runtime guards narrow side checks within a file. Examples include
 `IsDuplicityVersion()`, a local flag initialized from it, and `lib.context == 'server'`.

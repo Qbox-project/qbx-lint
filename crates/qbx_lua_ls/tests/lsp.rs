@@ -3288,6 +3288,67 @@ fn excluded_files_stay_out_and_ignored_files_stay_quiet() {
 }
 
 #[test]
+fn overrides_give_scripts_a_loader_runs_a_side() {
+    struct Fixture(PathBuf);
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            if let (Ok(root), Ok(temp)) = (self.0.canonicalize(), std::env::temp_dir().canonicalize()) {
+                if root.parent() == Some(temp.as_path()) {
+                    let _ = std::fs::remove_dir_all(root);
+                }
+            }
+        }
+    }
+    let fixture = Fixture(std::env::temp_dir().join(format!(
+        "qbx-side-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos(),
+    )));
+    let write = |relative: &str, text: &str| {
+        let path = fixture.0.join(relative);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    };
+    // Like loaf_wrapper: the manifest only ships the files, and load.lua runs them.
+    write(
+        "fxmanifest.lua",
+        "fx_version 'cerulean'\ngame 'gta5'\nfiles { 'client/**.lua', 'server/**.lua' }\nshared_script 'load.lua'\n",
+    );
+    write("load.lua", "print('loader')\n");
+    write("server/job.lua", "---@class (server) QBJob\n---@field label string\n");
+    write("client/api.lua", "function ClientApi() end\n");
+    write("client/main.lua", "---@type QBJob\nlocal job = { label = 1 }\nprint(job)\n");
+    write("server/main.lua", "ClientApi()\n");
+    let mut client = Client::start(fixture.0.clone());
+    client.open("client/main.lua");
+    client.open("server/main.lua");
+    let codes = |client: &mut Client, file: &str| -> Vec<String> {
+        client.diagnostics_for(file).into_iter().map(|(code, _)| code).collect()
+    };
+    assert_eq!(codes(&mut client, "client/main.lua"), ["assign-type-mismatch"], "an unknown side sees both");
+    assert_eq!(codes(&mut client, "server/main.lua"), Vec::<String>::new());
+
+    write(
+        "qbxlint.toml",
+        "[[overrides]]\nfiles = ['client/**']\nside = 'client'\n[[overrides]]\nfiles = ['server/**']\nside = 'server'\n",
+    );
+    client.notify(
+        "workspace/didChangeWatchedFiles",
+        json!({ "changes": [{ "uri": client.uri("qbxlint.toml"), "type": 1 }] }),
+    );
+    assert_eq!(codes(&mut client, "client/main.lua"), ["undefined-doc-name"]);
+    let uri = client.uri("client/main.lua").to_string();
+    assert_eq!(
+        client.diagnostics[&uri][0]["message"],
+        "Type `QBJob` only exists on the server, but this is a client script"
+    );
+    // client/api.lua is closed, so the changed configuration has to move it to the client too.
+    assert_eq!(codes(&mut client, "server/main.lua"), ["undefined-global"]);
+    let info = client.request("qbx/fileInfo", json!({ "uri": client.uri("client/api.lua") }));
+    assert_eq!(info["side"], "client");
+}
+
+#[test]
 fn server_cfg_start_order_settles_dependencies() {
     let mut client = Client::start(fixture_root());
     let late = client.diagnostics_for("late/server.lua");
