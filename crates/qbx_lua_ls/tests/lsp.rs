@@ -1656,6 +1656,70 @@ local declared = {}
 }
 
 #[test]
+fn class_typed_tables_complete_the_fields_they_lack() {
+    let mut client = Client::start(fixture_root());
+    // `|` marks where completion is asked for.
+    let marked = "\
+---@class Test
+---@field test string
+---@field count? integer
+---@field inner Test.Inner
+
+---@class Test.Inner
+---@field label string the text shown
+
+---@type Test
+local abc = {
+    |
+}
+
+---@return Test
+local function make()
+    return { test = 'x', | }
+end
+
+---@type Test
+local nested = { inner = { | } }
+
+---@type Test
+local untyped = { extra = { | } }
+print(abc, make, nested, untyped)
+";
+    let text = marked.replace('|', "");
+    client.open_with(CLIENT, &text);
+    let mut cursors = Vec::new();
+    for (i, _) in marked.match_indices('|') {
+        let offset = i - cursors.len();
+        let line = text[..offset].matches('\n').count() as u32;
+        let column = (offset - text[..offset].rfind('\n').map_or(0, |n| n + 1)) as u32;
+        cursors.push((line, column));
+    }
+    let mut fields = |(line, column): (u32, u32)| -> Vec<(String, String)> {
+        let result = client.request("textDocument/completion", client.position_params(CLIENT, line, column));
+        // No completion at all is `null`.
+        let mut items: Vec<(String, String)> = result["items"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .iter()
+            .filter(|item| item["kind"] == 10)
+            .map(|item| (item["label"].as_str().unwrap().into(), item["detail"].as_str().unwrap_or_default().into()))
+            .collect();
+        items.sort();
+        items
+    };
+    let field = |name: &str, ty: &str| (name.to_string(), ty.to_string());
+    assert_eq!(
+        fields(cursors[0]),
+        [field("count", "integer?"), field("inner", "Test.Inner"), field("test", "string")],
+        "your example"
+    );
+    assert_eq!(fields(cursors[1]), [field("count", "integer?"), field("inner", "Test.Inner")], "`test` is set already");
+    assert_eq!(fields(cursors[2]), [field("label", "string")], "a field typed as a class");
+    assert!(fields(cursors[3]).is_empty(), "`extra` is no field of Test, so its table is not typed");
+}
+
+#[test]
 fn missing_fields_leave_out_fields_of_the_other_side() {
     let mut client = Client::start(fixture_root());
     let text = "\
