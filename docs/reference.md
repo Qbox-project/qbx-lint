@@ -100,7 +100,7 @@ qbx-lint needs anything beyond it. `--config` also accepts these files.
 | LuaLS / EmmyLua setting | Used as |
 | --- | --- |
 | `diagnostics.globals` | `globals`, without the names qbx-lint already knows: runtime globals, natives, and globals of imports such as `@ox_lib/init.lua`, so the manifest and client/server checks still apply to them |
-| `diagnostics.disable` | `off` for `undefined-global`, `lowercase-global`, `unused-local`, `unused-function`, `unused-label`, `redefined-local`, `unreachable-code`, `empty-block`, `unbalanced-assignments`, `duplicate-index` and `missing-parameter`; EmmyLua's `unused` covers the `unused-*` rules |
+| `diagnostics.disable` | `off` for `undefined-global`, `lowercase-global`, `unused-local`, `unused-function`, `unused-label`, `redefined-local`, `unreachable-code`, `empty-block`, `unbalanced-assignments`, `duplicate-index`, `missing-parameter`, `undefined-doc-name`, `missing-fields`, `assign-type-mismatch`, `return-type-mismatch` and `missing-return`; EmmyLua's `unused` covers the `unused-*` rules |
 | `diagnostics.severity` | Levels for the same codes (`Error`, `Warning`, `Information`, `Hint`, with or without a trailing `!`) |
 | `workspace.ignoreDir` | Exclusions. LuaLS entries are gitignore-style patterns; `.emmyrc.json` entries are directories from the root |
 | `workspace.ignoreGlobs` | Exclusions, as glob patterns |
@@ -266,6 +266,30 @@ only covers classes declared in workspace files outside `exclude` and `ignore_di
 classes of third-party resources stay as they are unless they say `(strict)` themselves. When one
 class is declared in several places, one `(strict)` makes it strict, and otherwise one `(loose)`
 keeps it loose.
+
+## Return values
+
+A function documented with `@return` has to return values of those types. That includes a
+function passed to the call below the doc comment, such as the handler of
+`RegisterServerCallback('name', function(source) ... end)`. qbx-lua-ls reports:
+
+- `return-type-mismatch` for a returned value that clearly is not of its `@return` type: a
+  different kind of value, such as `return 5` for `---@return string`, or a literal the type does
+  not list. A trailing `---@return ...string` covers every further value.
+- `missing-return` for a `return` with fewer values than the function requires, and at the `end`
+  of a function whose body can run past it without returning. A value is required unless its type
+  allows `nil`, as `string?`, `string|nil` or `any` do.
+
+A body finishes without running past its end when it ends in `return`, `error(...)`, an
+`if`/`else` whose branches all finish, or a loop such as `while true do` that only a `return`
+leaves. An empty body runs past its end too, except in a definition file marked `---@meta`, whose
+functions only declare their signatures. Returned tables typed as a class get the same checks as
+`---@type` tables: `missing-fields`, `assign-type-mismatch` and `undeclared-field`.
+
+Only clear cases count. Values whose type is not known are skipped, and so is a local that is
+assigned again after its declaration, since its declared type may not be what it holds. The same
+applies to the values `assign-type-mismatch` checks, where `nil` is a value like any other:
+`abc.field = nil` needs a field type that allows it, such as `string?` or `string|nil`.
 
 ## Events, exports, and locales
 

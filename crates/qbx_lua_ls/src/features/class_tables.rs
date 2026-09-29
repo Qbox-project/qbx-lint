@@ -1,9 +1,9 @@
 //! Table constructors typed as a LuaCATS class, found where their type is known: `---@type` locals
-//! and assignments, arguments to class-typed parameters, the tables such fields hold and, for
-//! completion, `return` in a function documented with `@return`. With the fields that code sets on
-//! and reads from values of a class, they drive `missing-fields`, `assign-type-mismatch`,
-//! `undeclared-field` and the completion of field names. Only the language server knows the
-//! classes, so qbx-lint registers the rules and this module reports them.
+//! and assignments, arguments to class-typed parameters, `return` in a function documented with
+//! `@return`, and the tables such fields hold. With the fields that code sets on and reads from
+//! values of a class, they drive `missing-fields`, `assign-type-mismatch`, `undeclared-field` and
+//! the completion of field names. Only the language server knows the classes, so qbx-lint
+//! registers the rules and this module reports them.
 //!
 //! Type names are global, and resources may declare the same one differently: ox_fuel's
 //! `@class State` is not qbx_vehicles' `@enum State`. A name is looked up the way the file that
@@ -15,10 +15,10 @@ use qbx_lua_analysis::scope::Resolved;
 use qbx_lua_syntax::ast::*;
 use qbx_lua_syntax::visit::{self, Visitor};
 use qbx_lua_syntax::{SmolStr, Span};
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::index::{AliasDef, ClassDef, FileId, ResourceId};
-use crate::infer::Infer;
+use crate::infer::{documented_functions, Infer};
 use crate::luacats::applies_on;
 use crate::types::Type;
 
@@ -320,7 +320,7 @@ impl<'a, 'b> Classes<'a, 'b> {
 
     /// Whether a value of type `given`, inferred in this file, can clearly not be stored where
     /// `expected` is declared in `from`.
-    fn rejects(&self, expected: &Type, from: FileId, given: &Type) -> bool {
+    pub fn rejects(&self, expected: &Type, from: FileId, given: &Type) -> bool {
         match (self.kinds(expected, from, 0), self.kinds(given, self.file(), 0)) {
             (Some(wanted), Some(got)) if wanted & got == 0 => true,
             _ => self.literal_mismatch(expected, from, given),
@@ -372,7 +372,7 @@ impl<'a, 'b> Classes<'a, 'b> {
 
     /// Whether `given` is a literal that `expected` lists only other literals for, like `'other'`
     /// for `'male'|'female'`.
-    fn literal_mismatch(&self, expected: &Type, from: FileId, given: &Type) -> bool {
+    pub fn literal_mismatch(&self, expected: &Type, from: FileId, given: &Type) -> bool {
         if !matches!(given, Type::StringLit(_) | Type::IntLit(_) | Type::BooleanLit(_)) {
             return false;
         }
@@ -397,14 +397,12 @@ impl<'a, 'b> Classes<'a, 'b> {
     }
 }
 
-/// Every class-typed table constructor of `chunk`, outer tables before the ones they hold. `returns`
-/// also takes `return { ... }` in functions documented with `@return`.
-pub fn class_tables<'c>(infer: &Infer, chunk: &'c Chunk, returns: bool) -> Vec<ClassTable<'c>> {
+/// Every class-typed table constructor of `chunk`, outer tables before the ones they hold.
+pub fn class_tables<'c>(infer: &Infer, chunk: &'c Chunk) -> Vec<ClassTable<'c>> {
     let mut finder = Finder {
         classes: Classes::new(infer),
-        returns,
         function_returns: Vec::new(),
-        next_returns: None,
+        documented: FxHashMap::default(),
         out: Vec::new(),
     };
     finder.visit_block(&chunk.block);
@@ -521,7 +519,7 @@ pub fn class_table_at<'c>(infer: &Infer, chunk: &'c Chunk, offset: u32) -> Optio
     let mut innermost = Innermost { offset, found: None };
     innermost.visit_block(&chunk.block);
     let span = innermost.found?;
-    class_tables(infer, chunk, true).into_iter().find(|found| found.table.span == span)
+    class_tables(infer, chunk).into_iter().find(|found| found.table.span == span)
 }
 
 /// The innermost table constructor whose braces hold `offset`.
@@ -545,7 +543,7 @@ impl<'c> Visitor<'c> for Innermost {
 /// Each class-typed table constructor that leaves out required fields, with the message naming them.
 pub fn missing_fields(infer: &Infer, chunk: &Chunk) -> Vec<(Span, String)> {
     let classes = Classes::new(infer);
-    class_tables(infer, chunk, false)
+    class_tables(infer, chunk)
         .into_iter()
         .filter_map(|found| {
             let ExprKind::Table(fields) = &found.table.kind else { return None };
@@ -581,7 +579,7 @@ pub fn mismatched_fields(infer: &Infer, chunk: &Chunk) -> Vec<(Span, String)> {
             out.push((value.span, format!("Cannot assign `{shown}` to {target} of type `{ty}`")));
         }
     };
-    for found in class_tables(infer, chunk, false) {
+    for found in class_tables(infer, chunk) {
         let ExprKind::Table(fields) = &found.table.kind else { continue };
         for (key, _, value) in entries(infer, fields) {
             if let Some(value) = value {
@@ -600,11 +598,11 @@ pub fn mismatched_fields(infer: &Infer, chunk: &Chunk) -> Vec<(Span, String)> {
 
 struct Finder<'a, 'b, 'c> {
     classes: Classes<'a, 'b>,
-    returns: bool,
     /// The `@return` types of the functions around the statement being visited, innermost last.
     function_returns: Vec<Vec<Type>>,
-    /// The `@return` types of the function whose body is visited next.
-    next_returns: Option<Vec<Type>>,
+    /// The `@return` types of the functions whose doc comment was visited, by the start of their
+    /// parameter list.
+    documented: FxHashMap<u32, Vec<Type>>,
     out: Vec<ClassTable<'c>>,
 }
 
@@ -630,14 +628,18 @@ impl<'c> Finder<'_, '_, 'c> {
     fn top_table(&mut self, expected: &Type, expr: &'c Expr) {
         self.table(expected, expr, self.classes.file(), 0);
     }
-
-    fn doc_returns(&self, stmt: &Stmt) -> Vec<Type> {
-        self.classes.infer.ctx.doc_at(stmt.span.start).returns.iter().map(|r| r.ty.clone()).collect()
-    }
 }
 
 impl<'c> Visitor<'c> for Finder<'_, '_, 'c> {
     fn visit_stmt(&mut self, stmt: &'c Stmt) {
+        let functions = documented_functions(stmt);
+        if !functions.is_empty() {
+            let doc = self.classes.infer.ctx.doc_at(stmt.span.start);
+            let returns: Vec<Type> = doc.returns.iter().map(|r| r.ty.clone()).collect();
+            for func in functions {
+                self.documented.insert(func.params_span.start, returns.clone());
+            }
+        }
         match &stmt.kind {
             StmtKind::Local { exprs, .. } if exprs.iter().any(is_table) => {
                 let doc = self.classes.infer.ctx.doc_at(stmt.span.start);
@@ -657,18 +659,11 @@ impl<'c> Visitor<'c> for Finder<'_, '_, 'c> {
                     }
                 }
             }
-            StmtKind::Return(exprs) if self.returns && exprs.iter().any(is_table) => {
+            StmtKind::Return(exprs) if exprs.iter().any(is_table) => {
                 let expected = self.function_returns.last().cloned().unwrap_or_default();
                 for (ty, expr) in expected.iter().zip(exprs) {
                     self.top_table(ty, expr);
                 }
-            }
-            StmtKind::Function { .. } | StmtKind::LocalFunction { .. } => {
-                self.next_returns = Some(self.doc_returns(stmt));
-            }
-            // `local f = function() ... end` below its doc comment.
-            StmtKind::Local { exprs, .. } if matches!(exprs.as_slice(), [Expr { kind: ExprKind::Function(_), .. }]) => {
-                self.next_returns = Some(self.doc_returns(stmt));
             }
             _ => {}
         }
@@ -676,7 +671,7 @@ impl<'c> Visitor<'c> for Finder<'_, '_, 'c> {
     }
 
     fn visit_func_body(&mut self, func: &'c FuncBody) {
-        let returns = self.next_returns.take().unwrap_or_default();
+        let returns = self.documented.remove(&func.params_span.start).unwrap_or_default();
         self.function_returns.push(returns);
         visit::walk_func_body(self, func);
         self.function_returns.pop();

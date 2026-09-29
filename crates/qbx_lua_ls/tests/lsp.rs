@@ -2086,6 +2086,147 @@ print(tuple[2]:upper())
 }
 
 #[test]
+fn documented_returns_have_to_match_their_annotations() {
+    let mut client = Client::start(fixture_root());
+    let text = "\
+---@class Test.Point
+---@field x number
+---@field y number
+
+---@class (strict) Test.Sealed
+---@field name string
+
+---@return string
+local function wrong() return 5 end
+
+---@return string
+local function maybe(flag)
+    if flag then return 'a' end
+end
+
+---@return string?
+local function optional(flag)
+    if flag then return 'a' end
+end
+
+---@return integer
+local function waitFor()
+    while true do
+        if math.random() > 0.5 then return 1 end
+    end
+end
+
+---@return string
+---@return integer
+local function pair() return 'a' end
+
+---@return Test.Point
+local function point() return { x = 1 } end
+
+---@return Test.Sealed
+local function sealed() return { name = 'a', extra = 1 } end
+
+---@return boolean
+local function fail() error('no') end
+
+---@return string
+function TestStub() end
+
+---@return string
+local nothing = function() return nil end
+
+---@return 'a'|'b'
+local function letter() return 'c' end
+
+---@return ...string
+local function many() return 'a', 1 end
+
+---@return string
+local function reassigned()
+    local result = nil
+    result = 'x'
+    return result
+end
+
+---@return integer
+local function outer()
+    local inner = function() return 'x' end
+    return inner and 1 or 2
+end
+
+---@return string
+local function forwarded() return wrong() end
+
+---@return table?
+local function slotOf(inventory)
+    local slot = inventory and inventory.items[1]
+    return slot
+end
+print(maybe, optional, waitFor, pair, point, sealed, fail, nothing, letter, many, reassigned, outer, forwarded, slotOf)
+
+---@param a number
+---@param b number
+---@return number
+RegisterServerCallback('test:add', function(source, a, b)
+end)
+
+---@return string
+Test:register('test:name', function(source) return 1 end)
+";
+    client.open_with(CLIENT, text);
+    let line = |needle: &str| pos(text, needle, 0).0 as u64;
+    let finding = |code: &str, at: u64, message: &str| (code.to_string(), at, message.to_string());
+    let (mismatch, missing) = ("return-type-mismatch", "missing-return");
+    assert_eq!(
+        findings(&mut client, CLIENT, &[mismatch, missing, "missing-fields", "undeclared-field"]),
+        [
+            finding(mismatch, line("return 5"), "Cannot return `integer` as return value #1 of type `string`"),
+            finding(
+                missing,
+                line("if flag then return 'a' end\nend") + 1,
+                "The function can reach its end without returning, but `@return` requires `string`"
+            ),
+            finding(
+                missing,
+                line("return 'a' end\n\n---@return Test.Point"),
+                "`@return` requires 2 values, but this returns 1 value"
+            ),
+            finding("missing-fields", line("return { x = 1 }"), "Missing required fields in type `Test.Point`: `y`"),
+            finding(
+                "undeclared-field",
+                line("extra = 1"),
+                "Field `extra` is not declared in strict class `Test.Sealed`"
+            ),
+            finding(
+                missing,
+                line("function TestStub() end"),
+                "The function can reach its end without returning, but `@return` requires `string`"
+            ),
+            finding(mismatch, line("return nil"), "Cannot return `nil` as return value #1 of type `string`"),
+            finding(mismatch, line("return 'c'"), "Cannot return `\"c\"` as return value #1 of type `\"a\"|\"b\"`"),
+            finding(mismatch, line("return 'a', 1"), "Cannot return `integer` as return value #2 of type `string`"),
+            // `forwarded` returns what `wrong` declares; its own `return 5` is reported above.
+            // The doc comment above a call applies to the functions passed to it.
+            finding(
+                missing,
+                line("function(source, a, b)") + 1,
+                "The function can reach its end without returning, but `@return` requires `number`"
+            ),
+            finding(mismatch, line("return 1 end)"), "Cannot return `integer` as return value #1 of type `string`"),
+        ],
+        "optional values, endless loops, error(), reassigned locals and nested functions pass"
+    );
+
+    // A `---@meta` file only declares signatures, so its empty bodies pass.
+    let declared = "---@return string\nfunction TestDeclared() end\n";
+    client.open_with(SERVER, declared);
+    assert_eq!(findings(&mut client, SERVER, &[missing]).len(), 1, "an empty body is missing its value");
+    client.change(SERVER, 2, &format!("---@meta\n\n{declared}"));
+    let found = findings(&mut client, SERVER, &[missing]);
+    assert!(found.is_empty(), "{found:?}");
+}
+
+#[test]
 fn hover_binds_generics_from_arguments_and_callbacks() {
     let mut client = Client::start(fixture_root());
     let text = "\

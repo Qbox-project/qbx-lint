@@ -18,7 +18,7 @@ use crate::infer::Infer;
 pub fn undeclared_fields(infer: &Infer, chunk: &Chunk, by_default: impl Fn(FileId) -> bool) -> Vec<(Span, String)> {
     let classes = Classes::new(infer);
     let mut out = Vec::new();
-    for found in class_tables(infer, chunk, false) {
+    for found in class_tables(infer, chunk) {
         let ExprKind::Table(fields) = &found.table.kind else { continue };
         if !classes.is_strict(&found.class, found.from, &by_default) {
             continue;

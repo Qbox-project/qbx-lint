@@ -1247,8 +1247,7 @@ impl<'a> Infer<'a> {
     /// What an undocumented function returns: at each position, the union of what every `return`
     /// passes there. A `return` with fewer values, and running past the end of the body, give `nil`.
     fn inferred_returns(&self, body: &Block) -> Vec<Type> {
-        let mut exits: Vec<&[Expr]> = Vec::new();
-        collect_returns(body, &mut exits);
+        let mut exits: Vec<&[Expr]> = return_stmts(body).into_iter().map(|(_, exprs)| exprs).collect();
         if exits.is_empty() {
             return Vec::new();
         }
@@ -1528,12 +1527,20 @@ fn is_integer_key(key: &Type) -> bool {
     matches!(key.widen(), Type::Integer | Type::Number)
 }
 
+/// The `return` statements of a function body with the values each passes, leaving out those of
+/// the functions defined in it.
+pub fn return_stmts(body: &Block) -> Vec<(&Stmt, &[Expr])> {
+    let mut out = Vec::new();
+    collect_returns(body, &mut out);
+    out
+}
+
 /// The expressions of the first `return` that belongs to this function body itself.
 /// The values of every `return` in a function body, leaving out nested functions.
-fn collect_returns<'b>(block: &'b Block, out: &mut Vec<&'b [Expr]>) {
+fn collect_returns<'b>(block: &'b Block, out: &mut Vec<(&'b Stmt, &'b [Expr])>) {
     for stmt in &block.stmts {
         match &stmt.kind {
-            StmtKind::Return(exprs) => out.push(exprs),
+            StmtKind::Return(exprs) => out.push((stmt, exprs)),
             StmtKind::Do(body) | StmtKind::While { body, .. } | StmtKind::Repeat { body, .. } => {
                 collect_returns(body, out)
             }
@@ -1554,7 +1561,7 @@ fn collect_returns<'b>(block: &'b Block, out: &mut Vec<&'b [Expr]>) {
 /// Whether running `block` always ends in a `return`, an `error(...)` call, a loop that only a
 /// `return` leaves, such as `while true do` without `break`, or a `goto`, so a function never runs
 /// past the end of it.
-fn always_exits(block: &Block) -> bool {
+pub fn always_exits(block: &Block) -> bool {
     match block.stmts.last().map(|stmt| &stmt.kind) {
         Some(StmtKind::Return(_) | StmtKind::Goto(_)) => true,
         Some(StmtKind::Expr(Expr { kind: ExprKind::Call { callee, .. }, .. })) => {
@@ -1582,4 +1589,29 @@ fn breaks(block: &Block) -> bool {
         }
         _ => false,
     })
+}
+
+/// The functions a statement defines under its doc comment: `function f()`, `local function f()`,
+/// function literals assigned directly, `local f = function()` or `M.f = function()`, and those
+/// passed to the call the statement makes, `RegisterServerCallback('name', function()`. These are
+/// the functions whose parameters take the `@param` lines above the statement.
+pub fn documented_functions(stmt: &Stmt) -> Vec<&FuncBody> {
+    match &stmt.kind {
+        StmtKind::Function { func, .. } | StmtKind::LocalFunction { func, .. } => vec![func],
+        StmtKind::Local { exprs, .. } | StmtKind::Assign { exprs, .. } => function_literals(exprs),
+        StmtKind::Expr(Expr { kind: ExprKind::Call { args, .. } | ExprKind::MethodCall { args, .. }, .. }) => {
+            function_literals(args)
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn function_literals(exprs: &[Expr]) -> Vec<&FuncBody> {
+    exprs
+        .iter()
+        .filter_map(|expr| match &expr.kind {
+            ExprKind::Function(func) => Some(&**func),
+            _ => None,
+        })
+        .collect()
 }
