@@ -1,11 +1,16 @@
 use std::path::Path;
 
 use lsp_types::{Diagnostic, DiagnosticSeverity, DiagnosticTag, NumberOrString};
+use qbx_lua_analysis::directives::Suppressions;
 use qbx_lua_analysis::lint::all_files;
+use qbx_lua_analysis::rules::UNDEFINED_DOC_NAME;
 use qbx_lua_analysis::summary::summarize;
-use qbx_lua_analysis::{check_file, check_manifest, FileInput, Level, ManifestInput, ResourceInput, Severity, Tag};
+use qbx_lua_analysis::{
+    check_file, check_manifest, FileConfig, FileInput, Level, ManifestInput, ResourceInput, Severity, Tag,
+};
 use serde::{Deserialize, Serialize};
 
+use super::doc_names::undefined_doc_names;
 use crate::document::Document;
 use crate::workspace::Workspace;
 
@@ -20,6 +25,26 @@ pub struct FixData {
 
 pub fn is_silenced(ws: &Workspace, path: &Path) -> bool {
     ws.lint_config.is_excluded(path) || ws.lint_config.ignores_diagnostics(path)
+}
+
+/// Findings for rules qbx-lint registers but cannot check, because they need the LuaCATS types only
+/// the server indexes. Inline suppression comments apply to them as they do to the linter's own.
+fn type_diagnostics(ws: &Workspace, doc: &Document, config: &FileConfig) -> Vec<qbx_lua_analysis::Diagnostic> {
+    let Some(severity) = config.severity(UNDEFINED_DOC_NAME) else { return Vec::new() };
+    let suppressions = Suppressions::parse(&doc.text, &doc.chunk.comments, &doc.lines);
+    let side = ws.index.file(doc.file).and_then(|f| f.side);
+    undefined_doc_names(&ws.index, &doc.text, &doc.chunk, side)
+        .into_iter()
+        .filter(|(span, _)| !suppressions.is_suppressed(UNDEFINED_DOC_NAME, doc.lines.line_of(span.start)))
+        .map(|(span, message)| qbx_lua_analysis::Diagnostic {
+            code: UNDEFINED_DOC_NAME,
+            severity,
+            span,
+            message,
+            tag: None,
+            fix: None,
+        })
+        .collect()
 }
 
 pub fn diagnostics(
@@ -113,7 +138,7 @@ pub(crate) fn diagnostics_with_support(
         } else {
             None
         };
-        check_file(&FileInput {
+        let mut found = check_file(&FileInput {
             relative_path: &relative_path,
             source: &doc.text,
             chunk: &doc.chunk,
@@ -124,7 +149,9 @@ pub(crate) fn diagnostics_with_support(
             resource: resource_input,
             crossrefs: Some(crossrefs),
             locale: support.and_then(|support| support.locale).or(owned_locale.as_ref()),
-        })
+        });
+        found.extend(type_diagnostics(ws, doc, &config));
+        found
     };
 
     let positions = support.map(|_| super::assistant::InspectionPositions::new(&doc.text));

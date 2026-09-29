@@ -282,7 +282,7 @@ pub struct Infer<'a> {
 
 /// Natives call their handles `Vehicle`, `Ped` and so on. They are integers, and resources (ox_lib,
 /// qbx_core) declare unrelated classes under the same names, so they must not resolve as classes.
-const NATIVE_HANDLE_TYPES: &[&str] =
+pub(crate) const NATIVE_HANDLE_TYPES: &[&str] =
     &["Vehicle", "Ped", "Entity", "Object", "Player", "Hash", "Cam", "Blip", "Pickup", "ScrHandle", "FireId"];
 
 fn native_type(name: &str) -> Type {

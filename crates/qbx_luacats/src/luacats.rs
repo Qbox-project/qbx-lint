@@ -365,11 +365,20 @@ fn skip_name(rest: &str) -> Option<&str> {
     Some(parser.rest())
 }
 
+/// A class or alias name on a doc line.
+struct FoundName<'a> {
+    /// The byte of the line it starts at.
+    start: usize,
+    name: &'a str,
+    /// The name a `@class`, `@alias` or `@enum` declares, rather than one it refers to.
+    declared: bool,
+}
+
 /// Collects the class and alias names of one doc line. Every `rest` passed in is a suffix of
 /// `line`, so it starts at `line.len() - rest.len()`.
 struct TypeNames<'a> {
     line: &'a str,
-    found: Vec<(usize, &'a str)>,
+    found: Vec<FoundName<'a>>,
 }
 
 impl<'a> TypeNames<'a> {
@@ -377,7 +386,7 @@ impl<'a> TypeNames<'a> {
     fn declared(&mut self, rest: &'a str) -> Option<&'a str> {
         let mut parser = TypeParser::new(rest);
         let name = parser.ident()?;
-        self.found.push((self.line.len() - parser.rest().len() - name.len(), name));
+        self.found.push(FoundName { start: self.line.len() - parser.rest().len() - name.len(), name, declared: true });
         Some(parser.rest())
     }
 
@@ -385,7 +394,8 @@ impl<'a> TypeNames<'a> {
     fn ty(&mut self, rest: &'a str) -> &'a str {
         let start = self.line.len() - rest.len();
         let mut parser = TypeParser::new(rest);
-        self.found.extend(parser.parse_names().into_iter().map(|(offset, name)| (start + offset, name)));
+        let names = parser.parse_names().into_iter();
+        self.found.extend(names.map(|(offset, name)| FoundName { start: start + offset, name, declared: false }));
         parser.rest()
     }
 
@@ -405,6 +415,44 @@ impl<'a> TypeNames<'a> {
 /// The class or alias name at byte `offset` of a doc line whose `---` prefix is removed, with the
 /// byte it starts at. Parameter, field and return names, literals and built-in types do not count.
 pub fn type_name_at(line: &str, offset: usize) -> Option<(usize, &str)> {
+    let (_, found) = type_names(line)?;
+    found
+        .into_iter()
+        .find(|found| (found.start..=found.start + found.name.len()).contains(&offset))
+        .map(|found| (found.start, found.name))
+}
+
+/// The class and alias names a doc line refers to, with the byte each starts at: not the name a
+/// `@class`, `@alias` or `@enum` declares, and nothing from `@see`, which may name a function.
+pub fn referenced_type_names(line: &str) -> Vec<(usize, &str)> {
+    match type_names(line) {
+        Some((tag, found)) if tag != "see" => {
+            found.into_iter().filter(|found| !found.declared).map(|found| (found.start, found.name)).collect()
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// The generic parameters a doc line declares: the `T, K` of `@generic T, K: table` or of
+/// `@class Pair<T, K>`.
+pub fn declared_generics(line: &str) -> Vec<&str> {
+    let Some((tag, rest)) = split_tag(line) else { return Vec::new() };
+    let list = match tag {
+        "generic" => rest,
+        "class" => {
+            let head = split_attributes(rest).1.split(':').next().unwrap_or_default();
+            match head.split_once('<').and_then(|(_, params)| params.split_once('>')) {
+                Some((params, _)) => params,
+                None => return Vec::new(),
+            }
+        }
+        _ => return Vec::new(),
+    };
+    list.split(',').filter_map(|entry| entry.trim().split([':', ' ']).next()).filter(|name| !name.is_empty()).collect()
+}
+
+/// The tag of a doc line and the class and alias names on it.
+fn type_names(line: &str) -> Option<(&str, Vec<FoundName<'_>>)> {
     let (tag, rest) = match alias_member(line) {
         Some(member) => ("|", member),
         None => split_tag(line)?,
@@ -475,7 +523,7 @@ pub fn type_name_at(line: &str, offset: usize) -> Option<(usize, &str)> {
         "type" | "vararg" | "as" | "|" => names.types(rest),
         _ => {}
     }
-    names.found.into_iter().find(|(start, name)| (*start..=start + name.len()).contains(&offset))
+    Some((tag, names.found))
 }
 
 #[cfg(test)]
@@ -663,6 +711,29 @@ mod tests {
         }
         let line = "@type Garage.Point[]";
         assert_eq!(type_name_at(line, line.find("Point").unwrap()), Some((6, "Garage.Point")));
+    }
+
+    #[test]
+    fn lists_the_type_names_a_line_refers_to() {
+        fn names(line: &str) -> Vec<&str> {
+            referenced_type_names(line).into_iter().map(|(_, name)| name).collect()
+        }
+        assert_eq!(names("@class Garage : Base, Other"), ["Base", "Other"]);
+        assert_eq!(names("@alias Mode Kind|'a'"), ["Kind"]);
+        assert_eq!(names("@enum Jobs"), Vec::<&str>::new());
+        assert_eq!(names("@param cb fun(point: Point): Garage?"), ["Point", "Garage"]);
+        assert_eq!(names("@field (server) spots table<string, Spot>"), ["Spot"]);
+        assert_eq!(names("@return string name, integer"), Vec::<&str>::new());
+        assert_eq!(names("@see Garage.open"), Vec::<&str>::new(), "@see may name a function");
+        assert_eq!(referenced_type_names("@type  Vec"), [(7, "Vec")]);
+    }
+
+    #[test]
+    fn lists_declared_generic_parameters() {
+        assert_eq!(declared_generics("@generic T, K: table, V"), ["T", "K", "V"]);
+        assert_eq!(declared_generics("@class (exact) Pair<L, R> : Base"), ["L", "R"]);
+        assert!(declared_generics("@class Plain : Base").is_empty());
+        assert!(declared_generics("@param value T").is_empty());
     }
 
     #[test]
