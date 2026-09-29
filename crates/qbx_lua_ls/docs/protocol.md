@@ -75,14 +75,17 @@ a second item beside each function that takes a callback, labelled like the func
 description `snippet`. It inserts the call with the function literal written out. It is left out
 when a `(` already follows the name.
 
+Strings that completions write, in snippets such as `RegisterNetEvent` and `fx_version`, in call
+snippets and in the quoted values below, use the formatter's `quote_style`. With `preserve`, they
+use the quote most strings of the document use, and `'` when it has none.
+
 Functions tagged `---@callback await` or `trigger` also get this snippet. Its first stop is empty,
 between the quotes of the callback name. So is the stop of each parameter that lists string values,
 through its type, an alias or the `@overload`s that apply on the side of the call, and functions
 with such a parameter get the snippet without taking a callback. When an `@overload` takes one of
 those values alone, as `fun(action: "playerUnloaded", handler: fun(source: number))` does, the
 snippet ends right after that parameter, since the arguments after it depend on the value picked:
-`OnAction('$1'$0)`. Strings use the formatter's `quote_style`, or else the quote most strings of
-the document use.
+`OnAction('$1'$0)`.
 
 When the client lists `editor.action.triggerSuggest` under
 `capabilities.experimental.commands.commands`, as rust-analyzer's clients list the commands they
@@ -121,6 +124,7 @@ standard LSP requests.
 | `qbx/reindex` | `null` | Rebuilds the index from disk while preserving open-document text; returns `files`, `resources` and `millis`. |
 | `qbx/fileInfo` | `{ "uri": "file:///path/to/script.lua" }` | Object with `side` and `resource` (a resource name or `null`). |
 | `qbx/snippets` | `{ "uri": "file:///path/to/script.lua" }` or `null` | Array of snippets with `label`, `description`, `body` and `preview`. |
+| `qbx/quote` | `{ "uri": "file:///path/to/script.lua" }` or `null` | `"'"` or `"\""`: the quote that strings written into that open document use. |
 | `qbx/referenceSearch` | Search object below, or `null` for defaults. | A bounded page of native, control or ped flag summaries. |
 | `qbx/referenceDetail` | `{ "id": "native:GetEntityCoords" }` | Reference detail object below, or `null` for an unknown ID. |
 | `qbx/resourceDetails` | `{ "uri": "file:///path/to/resource" }` | Resource snapshot below; accepts an indexed resource folder or its selected manifest. |
@@ -134,7 +138,9 @@ standard LSP requests.
 `qbx/fileInfo.side` is one of `client`, `server`, `shared`, `module`, `manifest` or `standalone`.
 It describes manifest placement; a guard inside the file can narrow the side of an individual
 call. `qbx/snippets` returns snippet syntax in `body` even for a client that has not enabled
-completion snippets, so a custom snippet picker must handle that syntax itself.
+completion snippets, so a custom snippet picker must handle that syntax itself. Its strings, and
+the result of `qbx/quote`, follow the quote rule of completions. Without an open document, as with
+`null`, `preserve` gives `'`.
 
 ### Bundled reference search
 
