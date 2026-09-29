@@ -3,14 +3,17 @@ use std::path::Path;
 use lsp_types::{Diagnostic, DiagnosticSeverity, DiagnosticTag, NumberOrString};
 use qbx_lua_analysis::directives::Suppressions;
 use qbx_lua_analysis::lint::all_files;
-use qbx_lua_analysis::rules::UNDEFINED_DOC_NAME;
+use qbx_lua_analysis::rules::{MISSING_FIELDS, UNDEFINED_DOC_NAME};
 use qbx_lua_analysis::summary::summarize;
 use qbx_lua_analysis::{
     check_file, check_manifest, FileConfig, FileInput, Level, ManifestInput, ResourceInput, Severity, Tag,
 };
+use qbx_lua_syntax::Span;
 use serde::{Deserialize, Serialize};
 
 use super::doc_names::undefined_doc_names;
+use super::missing_fields::missing_fields;
+use super::with_infer;
 use crate::document::Document;
 use crate::workspace::Workspace;
 
@@ -30,21 +33,33 @@ pub fn is_silenced(ws: &Workspace, path: &Path) -> bool {
 /// Findings for rules qbx-lint registers but cannot check, because they need the LuaCATS types only
 /// the server indexes. Inline suppression comments apply to them as they do to the linter's own.
 fn type_diagnostics(ws: &Workspace, doc: &Document, config: &FileConfig) -> Vec<qbx_lua_analysis::Diagnostic> {
-    let Some(severity) = config.severity(UNDEFINED_DOC_NAME) else { return Vec::new() };
+    type Check = fn(&Workspace, &Document) -> Vec<(Span, String)>;
+    let checks: [(&'static str, Check); 2] = [
+        (UNDEFINED_DOC_NAME, |ws, doc| {
+            let side = ws.index.file(doc.file).and_then(|f| f.side);
+            undefined_doc_names(&ws.index, &doc.text, &doc.chunk, side)
+        }),
+        (MISSING_FIELDS, |ws, doc| with_infer(ws, doc, |infer| missing_fields(infer, &doc.chunk))),
+    ];
     let suppressions = Suppressions::parse(&doc.text, &doc.chunk.comments, &doc.lines);
-    let side = ws.index.file(doc.file).and_then(|f| f.side);
-    undefined_doc_names(&ws.index, &doc.text, &doc.chunk, side)
-        .into_iter()
-        .filter(|(span, _)| !suppressions.is_suppressed(UNDEFINED_DOC_NAME, doc.lines.line_of(span.start)))
-        .map(|(span, message)| qbx_lua_analysis::Diagnostic {
-            code: UNDEFINED_DOC_NAME,
-            severity,
-            span,
-            message,
-            tag: None,
-            fix: None,
-        })
-        .collect()
+    let mut out = Vec::new();
+    for (code, check) in checks {
+        let Some(severity) = config.severity(code) else { continue };
+        out.extend(
+            check(ws, doc)
+                .into_iter()
+                .filter(|(span, _)| !suppressions.is_suppressed(code, doc.lines.line_of(span.start)))
+                .map(|(span, message)| qbx_lua_analysis::Diagnostic {
+                    code,
+                    severity,
+                    span,
+                    message,
+                    tag: None,
+                    fix: None,
+                }),
+        );
+    }
+    out
 }
 
 pub fn diagnostics(

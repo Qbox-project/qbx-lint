@@ -30,6 +30,7 @@ const EQUIVALENT_CODES: &[&str] = &[
     "duplicate-index",
     "missing-parameter",
     "undefined-doc-name",
+    "missing-fields",
 ];
 
 #[derive(Debug, Default)]
