@@ -192,6 +192,7 @@ impl<'a> Indexer<'a> {
                 doc: (!class.description.is_empty()).then(|| Arc::from(class.description.as_str())),
                 range,
                 side: class.side,
+                strict: class.strict,
             });
         }
         for alias in doc.aliases {
@@ -228,9 +229,16 @@ impl<'a> Indexer<'a> {
         }
     }
 
-    fn push_member(&mut self, owner: SmolStr, symbol: Symbol) {
+    /// Whether `name` is the table a `---@class` annotation declares, preferring this file's globals
+    /// like `global_class`.
+    fn is_class_table(&self, name: &Name) -> bool {
+        let own = self.out.globals.iter().rev().find(|s| s.name == name.text).filter(|_| self.is_global(name));
+        own.map_or_else(|| self.infer.is_class_table(name), Symbol::is_class_table)
+    }
+
+    fn push_member(&mut self, owner: SmolStr, symbol: Symbol, injected: bool) {
         if self.out.members.len() < MAX_MEMBERS_PER_FILE {
-            self.out.members.push(Member { owner, symbol });
+            self.out.members.push(Member { owner, symbol, injected });
         }
     }
 
@@ -338,7 +346,7 @@ impl<'a> Indexer<'a> {
             if symbol.kind == SymbolKind::Variable {
                 symbol.kind = SymbolKind::Field;
             }
-            self.push_member(owner.clone(), symbol);
+            self.push_member(owner.clone(), symbol, false);
         }
         let elements = table_elements(fields);
         if !elements.array.is_empty() {
@@ -459,19 +467,24 @@ impl<'a> Indexer<'a> {
             return;
         }
         let owner_path = if is_method { &name.path[..] } else { &name.path[..name.path.len() - 1] };
-        let mut owner = if self.is_global(&name.base) {
-            self.global_class(&name.base.text).unwrap_or_else(|| name.base.text.clone())
+        let (mut owner, typed_as_class) = if self.is_global(&name.base) {
+            match self.global_class(&name.base.text) {
+                Some(class) => (class, true),
+                None => (name.base.text.clone(), false),
+            }
         } else {
             let base = FuncName { base: name.base.clone(), path: Vec::new(), method: None, span: name.base.span };
-            match self.owner_of(&self.infer.func_name_owner_type(&base)) {
-                Some(owner) => owner,
+            let ty = self.infer.func_name_owner_type(&base);
+            match self.owner_of(&ty) {
+                Some(owner) => (owner, matches!(ty.without_nil(), Type::Named(..))),
                 None => return,
             }
         };
+        let injected = typed_as_class && owner_path.is_empty() && !self.is_class_table(&name.base);
         for segment in owner_path {
             owner = SmolStr::new(format!("{owner}.{}", segment.text));
         }
-        self.push_member(owner, symbol);
+        self.push_member(owner, symbol, injected);
     }
 
     fn assignment(&mut self, stmt: &Stmt, target: &Expr, value: Option<&Expr>) {
@@ -501,28 +514,32 @@ impl<'a> Indexer<'a> {
                 return;
             }
         }
-        let owner = match base.dotted_path() {
+        let (owner, typed_as_class) = match base.dotted_path() {
             Some(path) if self.root_is_global(base) => {
                 let own_class = match &base.kind {
                     ExprKind::Name(root) => self.global_class(&root.text),
                     _ => None,
                 };
                 match own_class.map(|class| Type::Named(class, Vec::new())).unwrap_or_else(|| self.infer.expr(base)) {
-                    Type::Named(class, _) => class,
-                    _ => SmolStr::new(path),
+                    Type::Named(class, _) => (class, true),
+                    _ => (SmolStr::new(path), false),
                 }
             }
-            _ => match self.owner_of(&self.infer.expr(base)) {
-                Some(owner) => owner,
-                None => return,
-            },
+            _ => {
+                let ty = self.infer.expr(base);
+                match self.owner_of(&ty) {
+                    Some(owner) => (owner, matches!(ty.without_nil(), Type::Named(..))),
+                    None => return,
+                }
+            }
         };
+        let class_table = matches!(&base.kind, ExprKind::Name(root) if self.is_class_table(root));
         let nested = format!("{owner}.{}", name.text);
         let mut symbol = self.value_symbol(name, value, stmt.span.start, &nested, 1);
         if symbol.kind == SymbolKind::Variable {
             symbol.kind = SymbolKind::Field;
         }
-        self.push_member(owner, symbol);
+        self.push_member(owner, symbol, typed_as_class && !class_table);
     }
 
     fn root_is_global(&self, expr: &Expr) -> bool {
@@ -626,7 +643,7 @@ impl<'a> Indexer<'a> {
             literal: None,
             range: self.range(key.span),
         };
-        self.push_member(owner, symbol);
+        self.push_member(owner, symbol, false);
     }
 
     /// The handler a framework or `@callback` registration passes: a function literal typed by the

@@ -32,6 +32,7 @@ set any rule to `off`, `hint`, `info`, `warning`, or `error`.
 | `undefined-doc-name` | warning | A LuaCATS annotation names a type that no `@class`, `@alias` or `@enum` declares, or that only `(server)` or `(client)` declarations of the other side declare. Reported by qbx-lua-ls only. |
 | `missing-fields` | warning | A table constructor typed as a `---@class` leaves out required fields. Reported by qbx-lua-ls only. |
 | `assign-type-mismatch` | warning | A table constructor or an assignment stores a value that the `@field` type, or the value type of an index such as `[string] number`, does not take, such as a number for a `string` field. Clearing a field with `nil` needs a type that allows it, such as `string?` or `string|nil`. Reported by qbx-lua-ls only. |
+| `undeclared-field` | warning | A field or key that a strict `---@class`, marked `(strict)` or `(exact)` or made strict by `strict_classes`, does not declare is set in a table constructor or assignment, or read. Reported by qbx-lua-ls only. |
 | `const-reassign` | error | An assignment to a `<const>` or `<close>` local. |
 | `self-assignment` | warning | A variable is assigned to itself. |
 | `self-comparison` | warning | A comparison has the same expression on both sides. |

@@ -42,6 +42,7 @@ struct RawConfig {
     ignore_diagnostics: Vec<String>,
     globals: Vec<String>,
     ignore_unused_prefix: Option<String>,
+    strict_classes: bool,
     rules: BTreeMap<String, Level>,
     overrides: Vec<RawOverride>,
     imports: Imports,
@@ -90,6 +91,9 @@ pub struct Config {
     ignore_diagnostics: Gitignore,
     pub globals: Vec<String>,
     pub ignore_unused_prefix: String,
+    /// Whether a `---@class` without `(strict)` or `(loose)` is strict. Only classes declared in
+    /// files whose diagnostics are reported follow it; qbx-lua-ls applies it.
+    pub strict_classes: bool,
     pub format: qbx_lua_fmt::FormatOptions,
     /// Whether `format` comes from a `qbxlint.toml`. Editors keep their own indentation otherwise.
     pub format_configured: bool,
@@ -231,6 +235,7 @@ impl Config {
             ignore_diagnostics,
             globals: raw.globals,
             ignore_unused_prefix: raw.ignore_unused_prefix.unwrap_or_else(|| "_".to_string()),
+            strict_classes: raw.strict_classes,
             format: raw.format,
             format_configured: false,
             notes: Vec::new(),
@@ -354,6 +359,8 @@ mod tests {
         assert_eq!(file.severity("fivem/citizen-prefix"), Some(Severity::Error));
         assert_eq!(file.severity("undefined-global"), Some(Severity::Warning));
         assert_eq!(config.for_file(Path::new("/repo/tests/a.lua")).severity("undefined-global"), None);
+        assert!(!config.strict_classes);
+        assert!(Config::parse("strict_classes = true", PathBuf::from("/repo")).unwrap().strict_classes);
     }
 
     #[test]

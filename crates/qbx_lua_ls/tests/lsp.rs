@@ -1824,6 +1824,168 @@ local account = { name = 'Ann' }
     assert_eq!(missing(&mut client, SERVER), [5]);
 }
 
+/// The `undeclared-field` findings of `file` as (line, message), in source order.
+fn undeclared_fields(client: &mut Client, file: &str) -> Vec<(u64, String)> {
+    client.diagnostics_for(file);
+    let uri = client.uri(file).to_string();
+    let mut found: Vec<(u64, String)> = client.diagnostics[&uri]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|d| d["code"] == "undeclared-field")
+        .map(|d| (d["range"]["start"]["line"].as_u64().unwrap(), d["message"].as_str().unwrap().into()))
+        .collect();
+    found.sort();
+    found
+}
+
+#[test]
+fn strict_classes_report_fields_they_do_not_declare() {
+    let mut client = Client::start(fixture_root());
+    let text = "\
+---@class (strict) Test.Strict
+---@field test string
+---@field inner? Test.StrictInner
+local Strict = {}
+Strict.__index = Strict
+Strict.count = 0
+
+function Strict:greet() end
+
+---@class (exact) Test.StrictInner
+---@field label string
+
+---@class Test.Loose
+---@field test string
+
+---@class (strict) Test.StrictChild : Test.Strict
+---@field extra integer
+
+---@class (strict) Test.StrictOpen
+---@field [string] any
+
+---@type Test.Strict
+local abc = {
+    test = '2543',
+    other = true,
+    greet = function() end,
+    ['count'] = 1,
+    inner = { label = 'a', nope = 1 },
+}
+
+---@type Test.Loose
+local loose = { test = 'x', other = true }
+
+---@type Test.StrictChild
+local child = { test = 'x', extra = 1, greet = function() end, missing = 2 }
+
+---@type Test.StrictOpen
+local open = { anything = 1 }
+
+abc.test = 'y'
+abc.injected = true
+abc['quoted'] = 1
+function abc.helper() end
+Strict.static = 1
+function Strict:method() end
+abc.static = 2
+
+function Strict:init()
+    self.test = 'z'
+    self.cache = {}
+end
+
+loose.other = 1
+---@diagnostic disable-next-line: undeclared-field
+abc.skipped = 1
+print(abc, loose, child, open)
+";
+    client.open_with(CLIENT, text);
+    let line = |needle: &str| pos(text, needle, 0).0 as u64;
+    let message = |field: &str, class: &str| format!("Field `{field}` is not declared in strict class `{class}`");
+    assert_eq!(
+        undeclared_fields(&mut client, CLIENT),
+        [
+            (line("other = true"), message("other", "Test.Strict")),
+            (line("nope = 1"), message("nope", "Test.StrictInner")),
+            (line("missing = 2"), message("missing", "Test.StrictChild")),
+            (line("abc.injected"), message("injected", "Test.Strict")),
+            (line("abc['quoted']"), message("quoted", "Test.Strict")),
+            (line("abc.helper"), message("helper", "Test.Strict")),
+            (line("self.cache"), message("cache", "Test.Strict")),
+        ],
+        "fields and methods set on the class table count as declared, fields set through values of it do not"
+    );
+}
+
+#[test]
+fn strict_classes_setting_makes_the_workspace_classes_strict() {
+    struct Fixture(PathBuf);
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            if let (Ok(root), Ok(temp)) = (self.0.canonicalize(), std::env::temp_dir().canonicalize()) {
+                if root.parent() == Some(temp.as_path()) {
+                    let _ = std::fs::remove_dir_all(root);
+                }
+            }
+        }
+    }
+    let fixture = Fixture(std::env::temp_dir().join(format!(
+        "qbx-strict-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos(),
+    )));
+    let write = |relative: &str, text: &str| {
+        let path = fixture.0.join(relative);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    };
+    write("qbxlint.toml", "strict_classes = true\nignore_diagnostics = ['vendor/']\n");
+    write(
+        "fxmanifest.lua",
+        "fx_version 'cerulean'\ngame 'gta5'\nclient_scripts { 'vendor/*.lua', 'api.lua', 'extend.lua', 'main.lua' }\n",
+    );
+    write(
+        "vendor/types.lua",
+        "---@class VendorOptions\n---@field id string\n\n---@class (strict) VendorStrict\n---@field id string\n",
+    );
+    write("api.lua", "---@class Api\n---@field name string\nApi = {}\n");
+    // Extending the global class table from another file declares the fields.
+    write("extend.lua", "Api.version = 1\nfunction Api.extend() end\n");
+    let text = "\
+---@class Own
+---@field id string
+
+---@class (loose) OwnLoose
+---@field id string
+
+---@type Own
+local own = { id = 'a', extra = 1 }
+---@type OwnLoose
+local ownLoose = { id = 'a', extra = 1 }
+---@type VendorOptions
+local vendor = { id = 'a', extra = 1 }
+---@type VendorStrict
+local vendorStrict = { id = 'a', extra = 1 }
+---@type Api
+local api = { name = 'a', version = 2, extend = function() end, extra = 1 }
+api.more = 1
+print(own, ownLoose, vendor, vendorStrict, api)
+";
+    write("main.lua", text);
+    let mut client = Client::start(fixture.0.clone());
+    let lines = |client: &mut Client| -> Vec<u64> {
+        undeclared_fields(client, "main.lua").into_iter().map(|(line, _)| line).collect()
+    };
+    assert_eq!(
+        lines(&mut client),
+        [7, 13, 15, 16],
+        "(loose) opts out, and classes of ignored files stay loose unless marked (strict)"
+    );
+    client.open_with("main.lua", text);
+    assert_eq!(lines(&mut client), [7, 13, 15, 16], "the same once the file is open");
+}
+
 /// The findings of `file` for the given codes as (code, line, message), sorted by line.
 fn findings(client: &mut Client, file: &str, codes: &[&str]) -> Vec<(String, u64, String)> {
     client.diagnostics_for(file);
@@ -1843,7 +2005,7 @@ fn findings(client: &mut Client, file: &str, codes: &[&str]) -> Vec<(String, u64
 }
 
 #[test]
-fn index_fields_type_their_keys() {
+fn index_fields_type_their_keys_and_strict_classes_check_reads() {
     let mut client = Client::start(fixture_root());
     let text = "\
 ---@class (strict) Test.Indexed
@@ -1901,17 +2063,25 @@ print(tuple[2]:upper())
     let line = |needle: &str| pos(text, needle, 0).0 as u64;
     let finding = |code: &str, needle: &str, message: &str| (code.to_string(), line(needle), message.to_string());
     let mismatch = "assign-type-mismatch";
+    let undeclared = "undeclared-field";
     assert_eq!(
-        findings(&mut client, CLIENT, &[mismatch]),
+        findings(&mut client, CLIENT, &[mismatch, undeclared]),
         [
             finding(mismatch, "other = true", "Cannot assign `boolean` to field `other` of type `number`"),
+            finding(undeclared, "[1] = 2", "Strict class `Test.Indexed` has no `integer` keys"),
+            finding(undeclared, "print(abc[1]", "Strict class `Test.Indexed` has no `integer` keys"),
             finding(mismatch, "abc.more", "Cannot assign `string` to field `more` of type `number`"),
             finding(mismatch, "abc.test = 5", "Cannot assign `integer` to field `test` of type `string`"),
+            finding(undeclared, "abc[2]", "Strict class `Test.Indexed` has no `integer` keys"),
+            finding(undeclared, "'positional'", "Strict class `Test.Closed` has no `integer` keys"),
+            finding(undeclared, "closed.nope", "Field `nope` is not declared in strict class `Test.Closed`"),
+            finding(undeclared, "closed:missing", "Field `missing` is not declared in strict class `Test.Closed`"),
             finding(mismatch, "closed.name = nil", "Cannot assign `nil` to field `name` of type `string`"),
             finding(mismatch, "a = 'x'", "Cannot assign `string` to field `a` of type `integer`"),
             finding(mismatch, "abc.test = nil", "Cannot assign `nil` to field `test` of type `string`"),
         ],
-        "`= nil` only clears fields whose type allows `nil`, and tuple fields like `[1]` are not checked"
+        "a string variable may name a field, loose classes take any key, `= nil` only clears fields whose \
+         type allows `nil`, and tuple fields like `[1]` are not checked"
     );
 }
 
