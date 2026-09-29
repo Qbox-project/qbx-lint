@@ -13,6 +13,7 @@ use qbx_lua_syntax::{CommentKind, Span, TokenKind};
 use rustc_hash::{FxHashMap, FxHashSet};
 use serde_json::json;
 
+use super::class_tables::{class_table_at, named_field, Classes};
 use super::hover::{event_handler_signature, event_string_context};
 use super::{lua_block, markdown, with_infer};
 use crate::callback_wrappers::{families, takes_function, Wrapper};
@@ -738,6 +739,24 @@ fn type_of_path(infer: &Infer, text: &str, offset: u32) -> Type {
 
 /// Field names of the table type a call expects, when the cursor is inside a table argument.
 fn expected_field_items(infer: &Infer, doc: &Document, offset: u32) -> Vec<CompletionItem> {
+    // A table typed as a class, by `---@type`, a parameter, an assignment, `@return` or the field
+    // of another such table, offers the `@field`s it does not set yet.
+    if let Some(found) = class_table_at(infer, &doc.chunk, offset) {
+        let ExprKind::Table(existing) = &found.table.kind else { return Vec::new() };
+        let present: FxHashSet<&str> = existing.iter().filter_map(named_field).map(|(name, _)| name).collect();
+        return Classes::new(infer)
+            .fields(&found.class)
+            .into_iter()
+            .filter(|field| !present.contains(field.name.as_str()) && is_identifier(&field.name))
+            .map(|field| {
+                let mut out = item(&field.name, CompletionItemKind::PROPERTY, 0);
+                out.detail = Some(field.ty.to_string());
+                out.documentation = field.doc.map(|doc| Documentation::MarkupContent(markdown(doc.to_string())));
+                out.insert_text = Some(format!("{} = ", field.name));
+                out
+            })
+            .collect();
+    }
     let located = locate(&doc.chunk, offset);
     let Some((call, arg_index, table)) = located.table_in_call else { return Vec::new() };
     let ExprKind::Table(existing) = &table.kind else { return Vec::new() };

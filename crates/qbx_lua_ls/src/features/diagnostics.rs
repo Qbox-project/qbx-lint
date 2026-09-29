@@ -11,8 +11,8 @@ use qbx_lua_analysis::{
 use qbx_lua_syntax::Span;
 use serde::{Deserialize, Serialize};
 
+use super::class_tables::missing_fields;
 use super::doc_names::undefined_doc_names;
-use super::missing_fields::missing_fields;
 use super::with_infer;
 use crate::document::Document;
 use crate::workspace::Workspace;
