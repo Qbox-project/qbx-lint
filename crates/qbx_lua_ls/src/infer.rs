@@ -634,18 +634,21 @@ impl<'a> Infer<'a> {
                 fields.chain(array).chain(index).unzip()
             }
             Type::Named(ref name, _) => {
-                let index = self
-                    .index
-                    .class(name, self.side)
-                    .and_then(|(_, c)| c.index.clone())
-                    .filter(|(key, _)| !array_only || is_integer_key(key));
+                let class = self.index.class(name, self.side).map(|(_, c)| c);
+                let index = class.and_then(|c| c.index.clone()).filter(|(key, _)| !array_only || is_integer_key(key));
+                // `---@field [1] number` fields, with their keys shown as `integer` rather than `1|2|3`.
+                let literal_fields = class
+                    .into_iter()
+                    .flat_map(|c| &c.literal_fields)
+                    .filter(|(key, _)| !array_only || is_integer_key(key))
+                    .map(|(key, value)| (key.widen(), value.clone()));
                 // An instance holds its data; the methods its class provides are not visited.
                 let fields = self
                     .members(&resolved)
                     .into_iter()
                     .filter(|m| !array_only && !matches!(m.kind, SymbolKind::Method | SymbolKind::Function))
                     .map(|m| (Type::String, m.ty));
-                let (keys, values): (Vec<Type>, Vec<Type>) = fields.chain(index).unzip();
+                let (keys, values): (Vec<Type>, Vec<Type>) = fields.chain(literal_fields).chain(index).unzip();
                 if keys.is_empty() {
                     return (Type::String, Type::Unknown);
                 }
@@ -767,8 +770,17 @@ impl<'a> Infer<'a> {
             },
             Type::Shape(shape) => Type::union(shape.array.iter().chain(shape.index.as_ref().map(|(_, v)| v)).cloned()),
             Type::Named(name, _) => {
-                let class = self.index.class(&name, self.side);
-                class.and_then(|(_, c)| c.index.as_ref().map(|(_, v)| v.clone())).unwrap_or_default()
+                let Some((_, class)) = self.index.class(&name, self.side) else { return Type::Unknown };
+                let index = class.index.as_ref().map(|(_, value)| value.clone());
+                // `employee[1]` reads the `---@field [1] number` of its key, and `employee[i]` any
+                // literal-keyed field that `i` may name.
+                let key_ty = self.resolve_alias(key_ty);
+                if key_ty.is_literal() {
+                    let field = class.literal_fields.iter().find(|(key, _)| *key == key_ty);
+                    return field.map(|(_, value)| value.clone()).or(index).unwrap_or_default();
+                }
+                let fields = class.literal_fields.iter().filter(|(key, _)| may_be_literal_key(&key_ty, key));
+                Type::union(fields.map(|(_, value)| value.clone()).chain(index))
             }
             // `list[i]` on a table whose array part the index or a top-level local's constructor holds.
             Type::GlobalTable(owner)
@@ -1525,6 +1537,18 @@ pub fn table_elements(fields: &[TableField]) -> TableElements<'_> {
 
 fn is_integer_key(key: &Type) -> bool {
     matches!(key.widen(), Type::Integer | Type::Number)
+}
+
+/// Whether a key of type `key` may be the `literal` that a `---@field [1] number` is keyed by:
+/// `1` itself, a key of its kind such as `integer`, or a key of unknown type.
+fn may_be_literal_key(key: &Type, literal: &Type) -> bool {
+    match key {
+        Type::Union(types) => types.iter().any(|part| may_be_literal_key(part, literal)),
+        Type::Unknown | Type::Any => true,
+        Type::Number => matches!(literal, Type::IntLit(_)),
+        key if key.is_literal() => key == literal,
+        key => *key == literal.widen(),
+    }
 }
 
 /// The `return` statements of a function body with the values each passes, leaving out those of

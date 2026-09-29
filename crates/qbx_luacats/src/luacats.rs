@@ -38,6 +38,9 @@ pub struct DocClass {
     pub parents: Vec<SmolStr>,
     pub fields: Vec<DocField>,
     pub index: Option<(Type, Type)>,
+    /// `---@field [1] number` and `---@field [true] string`: fields keyed by an integer or boolean
+    /// literal, with their values, in declaration order.
+    pub literal_fields: Vec<(Type, Type)>,
     pub call: Option<Arc<FunType>>,
     pub description: String,
     pub line: usize,
@@ -356,6 +359,7 @@ fn parse_field(rest: &str, line: usize, group: &mut DocGroup) {
         let value = TypeParser::new(after).parse();
         match key {
             Type::StringLit(name) => class.fields.push(DocField { name, ty: value, line, side, ..DocField::default() }),
+            key @ (Type::IntLit(_) | Type::BooleanLit(_)) => class.literal_fields.push((key, value)),
             key => class.index = Some((key, value)),
         }
         return;
@@ -590,6 +594,19 @@ mod tests {
         assert!(class.call.is_some());
         assert_eq!(doc.aliases[0].ty.to_string(), "\"client\"|\"server\"");
         assert_eq!(doc.aliases[1].ty.to_string(), "integer|string");
+    }
+
+    #[test]
+    fn literal_keyed_fields() {
+        let doc = parse(
+            "---@class RawEmployee\n---@field [1] number Source\n---@field [2] string Character name\n---@field [9] boolean Visible\n---@field [true] string\n---@field [integer] any",
+        );
+        let class = &doc.classes[0];
+        let fields: Vec<String> = class.literal_fields.iter().map(|(key, value)| format!("[{key}] {value}")).collect();
+        assert_eq!(fields, ["[1] number", "[2] string", "[9] boolean", "[true] string"]);
+        assert!(class.fields.is_empty());
+        let (key, value) = class.index.as_ref().expect("`[integer]` is a general index");
+        assert_eq!(format!("[{key}] {value}"), "[integer] any");
     }
 
     #[test]

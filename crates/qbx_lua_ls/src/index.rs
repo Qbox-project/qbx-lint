@@ -72,6 +72,9 @@ pub struct ClassDef {
     /// The side each of `fields` is scoped to by `@field (server) name type`.
     pub field_sides: Vec<Option<Side>>,
     pub index: Option<(Type, Type)>,
+    /// `---@field [1] number` and `---@field [true] string`: fields keyed by an integer or boolean
+    /// literal, with their values, in declaration order.
+    pub literal_fields: Vec<(Type, Type)>,
     pub call: Option<Arc<FunType>>,
     pub doc: Option<Arc<str>>,
     pub range: Range,

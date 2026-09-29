@@ -1,9 +1,10 @@
 //! `undeclared-field`: fields and keys a strict class does not declare. A class is strict when it
 //! says `---@class (strict) Name` or LuaLS's `(exact)`, or when `strict_classes` in qbxlint.toml
 //! makes every class without `(loose)` strict. Table constructors typed as the class, assignments
-//! through values of it and reads from them may only use its declared fields, and keys of a type
-//! one of its indexes takes. The table the `---@class` annotation declares may still take fields
-//! and methods, which then count as declared.
+//! through values of it and reads from them may only use its declared fields, including those
+//! keyed by a literal like `---@field [1] number`, and keys of a type one of its indexes takes. The
+//! table the `---@class` annotation declares may still take fields and methods, which then count
+//! as declared.
 
 use qbx_lua_syntax::ast::*;
 use qbx_lua_syntax::Span;
@@ -40,8 +41,8 @@ pub fn undeclared_fields(infer: &Infer, chunk: &Chunk, by_default: impl Fn(FileI
 }
 
 fn message(key: &Key, class: &str) -> String {
-    match key {
-        Key::Name(name) => format!("Field `{name}` is not declared in strict class `{class}`"),
-        Key::Typed(key) => format!("Strict class `{class}` has no `{key}` keys"),
+    match key.field() {
+        Some(field) => format!("Field `{field}` is not declared in strict class `{class}`"),
+        None => format!("Strict class `{class}` has no `{}` keys", key.ty()),
     }
 }

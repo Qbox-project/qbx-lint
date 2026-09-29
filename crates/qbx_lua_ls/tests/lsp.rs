@@ -2058,6 +2058,16 @@ abc.test = nil
 ---@type Test.Tuple
 local tuple = { 1, 'a' }
 print(tuple[2]:upper())
+
+---@type Test.Tuple
+local swapped = {
+    'swapped',
+    12,
+    false,
+}
+print(tuple[3])
+tuple[1] = 'x'
+for i = 1, 2 do print(tuple[i]) end
 ";
     client.open_with(CLIENT, text);
     let line = |needle: &str| pos(text, needle, 0).0 as u64;
@@ -2068,21 +2078,76 @@ print(tuple[2]:upper())
         findings(&mut client, CLIENT, &[mismatch, undeclared]),
         [
             finding(mismatch, "other = true", "Cannot assign `boolean` to field `other` of type `number`"),
-            finding(undeclared, "[1] = 2", "Strict class `Test.Indexed` has no `integer` keys"),
-            finding(undeclared, "print(abc[1]", "Strict class `Test.Indexed` has no `integer` keys"),
+            finding(undeclared, "[1] = 2", "Field `[1]` is not declared in strict class `Test.Indexed`"),
+            finding(undeclared, "print(abc[1]", "Field `[1]` is not declared in strict class `Test.Indexed`"),
             finding(mismatch, "abc.more", "Cannot assign `string` to field `more` of type `number`"),
             finding(mismatch, "abc.test = 5", "Cannot assign `integer` to field `test` of type `string`"),
-            finding(undeclared, "abc[2]", "Strict class `Test.Indexed` has no `integer` keys"),
-            finding(undeclared, "'positional'", "Strict class `Test.Closed` has no `integer` keys"),
+            finding(undeclared, "abc[2]", "Field `[2]` is not declared in strict class `Test.Indexed`"),
+            finding(undeclared, "'positional'", "Field `[1]` is not declared in strict class `Test.Closed`"),
             finding(undeclared, "closed.nope", "Field `nope` is not declared in strict class `Test.Closed`"),
             finding(undeclared, "closed:missing", "Field `missing` is not declared in strict class `Test.Closed`"),
             finding(mismatch, "closed.name = nil", "Cannot assign `nil` to field `name` of type `string`"),
             finding(mismatch, "a = 'x'", "Cannot assign `string` to field `a` of type `integer`"),
             finding(mismatch, "abc.test = nil", "Cannot assign `nil` to field `test` of type `string`"),
+            finding(mismatch, "'swapped'", "Cannot assign `string` to field `[1]` of type `number`"),
+            finding(mismatch, "12,", "Cannot assign `integer` to field `[2]` of type `string`"),
+            finding(undeclared, "false,", "Field `[3]` is not declared in strict class `Test.Tuple`"),
+            finding(undeclared, "tuple[3]", "Field `[3]` is not declared in strict class `Test.Tuple`"),
+            finding(mismatch, "tuple[1] = 'x'", "Cannot assign `string` to field `[1]` of type `number`"),
         ],
         "a string variable may name a field, loose classes take any key, `= nil` only clears fields whose \
-         type allows `nil`, and tuple fields like `[1]` are not checked"
+         type allows `nil`, tuple fields like `[1]` check their own key and value, and an `integer` \
+         variable may be any of them"
     );
+}
+
+#[test]
+fn literal_keyed_class_fields_type_their_own_keys() {
+    let mut client = Client::start(fixture_root());
+    let text = "\
+---@class Test.RawEmployee
+---@field [1] number Source
+---@field [2] string Character name
+---@field [9] boolean Visible
+---@field [true] string
+
+---@param employee Test.RawEmployee
+---@param slot integer
+local function show(employee, slot)
+    local source = employee[1]
+    local name = employee[2]
+    local visible = employee[9]
+    local flagged = employee[true]
+    local absent = employee[3]
+    local picked = employee[slot]
+    for key, value in pairs(employee) do end
+    for i, element in ipairs(employee) do end
+end
+";
+    client.open_with(CLIENT, text);
+    let cases = [
+        ("source =", "source: number"),
+        ("name =", "name: string"),
+        ("visible =", "visible: boolean"),
+        ("flagged", "flagged: string"),
+        ("absent", "absent: unknown"),
+        ("picked", "picked: number|string|boolean"),
+        ("key,", "key: integer|boolean"),
+        ("value in", "value: number|string|boolean"),
+        ("i,", "i: integer"),
+        ("element", "element: number|string|boolean"),
+    ];
+    for (needle, expected) in cases {
+        let (l, c) = pos(text, needle, 0);
+        let hover = client.hover_text(CLIENT, l, c);
+        assert!(hover.contains(expected), "{needle}: expected {expected:?} in {hover}");
+    }
+
+    let (l, c) = pos(text, "Test.RawEmployee\n---@param slot", 1);
+    let hover = client.hover_text(CLIENT, l, c);
+    for part in ["[1]: number,", "[2]: string,", "[9]: boolean,", "[true]: string,"] {
+        assert!(hover.contains(part), "missing {part:?} in {hover}");
+    }
 }
 
 #[test]

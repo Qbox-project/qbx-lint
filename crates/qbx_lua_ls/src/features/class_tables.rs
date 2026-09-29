@@ -14,7 +14,7 @@ use std::sync::Arc;
 use qbx_lua_analysis::scope::Resolved;
 use qbx_lua_syntax::ast::*;
 use qbx_lua_syntax::visit::{self, Visitor};
-use qbx_lua_syntax::{SmolStr, Span};
+use qbx_lua_syntax::{NumberValue, SmolStr, Span};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::index::{AliasDef, ClassDef, FileId, ResourceId};
@@ -58,17 +58,40 @@ pub enum Key<'k> {
 }
 
 impl Key<'_> {
-    fn ty(&self) -> Type {
+    pub fn ty(&self) -> Type {
         match self {
             Key::Name(name) => Type::StringLit(SmolStr::new(name)),
             Key::Typed(ty) => ty.clone(),
         }
     }
+
+    /// How a message names the one field this key is: `name`, or `[1]` for an integer or boolean
+    /// literal. Keys of other types, such as `integer`, name no single field.
+    pub fn field(&self) -> Option<String> {
+        match self {
+            Key::Name(name) => Some(name.to_string()),
+            Key::Typed(ty) if ty.is_literal() => Some(format!("[{ty}]")),
+            Key::Typed(_) => None,
+        }
+    }
+}
+
+/// The type of a key that is no string. An integer or boolean written out, like the `1` of
+/// `value[1]`, stays a literal to find its `---@field [1] number`; a variable is widened, since it
+/// may hold other keys.
+fn key_type(infer: &Infer, expr: &Expr) -> Type {
+    match &expr.unparen().kind {
+        ExprKind::Number(NumberValue::Int(i)) => Type::IntLit(*i),
+        ExprKind::True => Type::BooleanLit(true),
+        ExprKind::False => Type::BooleanLit(false),
+        _ => infer.expr(expr).widen(),
+    }
 }
 
 /// Each entry of a table constructor: its key, where the entry is written, and its value. Array
-/// entries have `integer` keys, and `.name` sets `name` to `true` without a value to check.
+/// entries are keyed by their position, and `.name` sets `name` to `true` without a value to check.
 pub fn entries<'c>(infer: &Infer, fields: &'c [TableField]) -> Vec<(Key<'c>, Span, Option<&'c Expr>)> {
+    let mut position = 0;
     fields
         .iter()
         .map(|field| match field {
@@ -76,9 +99,12 @@ pub fn entries<'c>(infer: &Infer, fields: &'c [TableField]) -> Vec<(Key<'c>, Spa
             TableField::SetMember(name) => (Key::Name(name.text.as_str()), name.span, None),
             TableField::Keyed { key, value } => match key.as_string() {
                 Some(name) => (Key::Name(name.as_str()), key.span, Some(value)),
-                None => (Key::Typed(infer.expr(key).widen()), key.span, Some(value)),
+                None => (Key::Typed(key_type(infer, key)), key.span, Some(value)),
             },
-            TableField::Positional(value) => (Key::Typed(Type::Integer), value.span, Some(value)),
+            TableField::Positional(value) => {
+                position += 1;
+                (Key::Typed(Type::IntLit(position)), value.span, Some(value))
+            }
         })
         .collect()
 }
@@ -209,11 +235,40 @@ impl<'a, 'b> Classes<'a, 'b> {
             || (!defs.is_empty() && defs.iter().all(|(file, def)| def.strict.is_none() && by_default(*file)))
     }
 
+    /// The fields of `class` and its parents that are keyed by an integer or boolean literal, like
+    /// `---@field [1] number`, with their values and the files that declare them. The first
+    /// declaration of a key wins, as with named fields.
+    fn literal_fields(&self, class: &str, from: FileId) -> Vec<(Type, Type, FileId)> {
+        let mut out = Vec::new();
+        self.collect_literal_fields(class, from, &mut out, 0);
+        out
+    }
+
+    fn collect_literal_fields(&self, class: &str, from: FileId, out: &mut Vec<(Type, Type, FileId)>, depth: u32) {
+        if depth > MAX_DEPTH {
+            return;
+        }
+        let defs = self.class_defs(class, from);
+        for (file, def) in &defs {
+            for (key, value) in &def.literal_fields {
+                if !out.iter().any(|(seen, ..)| seen == key) {
+                    out.push((key.clone(), value.clone(), *file));
+                }
+            }
+        }
+        for (file, def) in &defs {
+            for parent in &def.parents {
+                self.collect_literal_fields(parent, *file, out, depth + 1);
+            }
+        }
+    }
+
     /// Whether `class` or a parent takes `key`. A name is taken by an `@field` for this side, by a
     /// field set on the table a `---@class` declares, like `function Test:greet()`, or by an index
-    /// such as `[string]`; another key by an index of its type. A parent that is no class, like the
-    /// `table` of `Name : table<string, any>`, takes anything, and so does a key whose type is not
-    /// known well enough to rule out a field name.
+    /// such as `[string]`; a literal like `1` by its `---@field [1] number`; another key by an index
+    /// of its type, or by a literal-keyed field it may be, as `integer` may be `1`. A parent that is
+    /// no class, like the `table` of `Name : table<string, any>`, takes anything, and so does a key
+    /// whose type is not known well enough to rule out a field name.
     pub fn declares(&self, class: &str, from: FileId, key: &Key) -> bool {
         let named = match key {
             Key::Name(name) => {
@@ -222,7 +277,12 @@ impl<'a, 'b> Classes<'a, 'b> {
             }
             Key::Typed(ty) => self.kinds(ty, self.file(), 0).is_none_or(|kinds| kinds & kind::STRING != 0),
         };
-        named || self.index_for(class, from, &key.ty(), 0).is_some() || self.has_open_parent(class, from, 0)
+        let literal = match key {
+            Key::Typed(ty) if ty.is_literal() => self.literal_fields(class, from).iter().any(|(key, ..)| key == ty),
+            Key::Typed(ty) => self.literal_fields(class, from).iter().any(|(key, _, file)| self.takes(key, *file, ty)),
+            Key::Name(_) => false,
+        };
+        named || literal || self.index_for(class, from, &key.ty(), 0).is_some() || self.has_open_parent(class, from, 0)
     }
 
     /// Whether the table that the `---@class` annotation of `class` or a parent declares sets `name`.
@@ -246,16 +306,19 @@ impl<'a, 'b> Classes<'a, 'b> {
     }
 
     /// The type that `key` of a `class` table holds, with the file whose view of the type names it
-    /// is read with: the `@field` of a name, or else the value of an index that takes the key.
+    /// is read with: the `@field` of a name or of a literal like `[1]`, or else the value of an
+    /// index that takes the key. A key such as `integer` that may be several fields has no one type.
     pub fn field_type(&self, class: &str, from: FileId, key: &Key) -> Option<(Type, FileId)> {
         let field = match key {
-            Key::Name(name) => self.fields(class, from).into_iter().find(|field| field.name == *name),
+            Key::Name(name) => {
+                self.fields(class, from).into_iter().find(|field| field.name == *name).map(|f| (f.ty, f.file))
+            }
+            Key::Typed(ty) if ty.is_literal() => {
+                self.literal_fields(class, from).into_iter().find(|(key, ..)| key == ty).map(|(_, v, file)| (v, file))
+            }
             Key::Typed(_) => None,
         };
-        match field {
-            Some(field) => Some((field.ty, field.file)),
-            None => self.index_for(class, from, &key.ty(), 0),
-        }
+        field.or_else(|| self.index_for(class, from, &key.ty(), 0))
     }
 
     /// The value type of the first index of `class` or a parent that takes keys of type `key`,
@@ -266,11 +329,6 @@ impl<'a, 'b> Classes<'a, 'b> {
         }
         let defs = self.class_defs(class, from);
         let own = defs.iter().find_map(|(file, def)| match &def.index {
-            // Of several `---@field [1] number` lines only the last is kept, so its value may belong
-            // to another key.
-            Some((index_key, _)) if index_key.is_literal() && self.takes(index_key, *file, key) => {
-                Some((Type::Unknown, *file))
-            }
             Some((index_key, value)) if self.takes(index_key, *file, key) => Some((value.clone(), *file)),
             _ => None,
         });
@@ -444,7 +502,7 @@ impl<'c> Accesses<'_, '_, 'c> {
             ExprKind::Index { base, index, .. } => {
                 let key = match index.as_string() {
                     Some(name) => Key::Name(name.as_str()),
-                    None => Key::Typed(self.infer.expr(index).widen()),
+                    None => Key::Typed(key_type(self.infer, index)),
                 };
                 Some((base, key, index.span))
             }
@@ -572,9 +630,9 @@ pub fn mismatched_fields(infer: &Infer, chunk: &Chunk) -> Vec<(Span, String)> {
         let given = classes.value_type(value);
         if classes.rejects(&ty, file, &given) {
             let shown = if classes.literal_mismatch(&ty, file, &given) { given } else { given.widen() };
-            let target = match key {
-                Key::Name(name) => format!("field `{name}`"),
-                Key::Typed(key) => format!("`[{key}]`"),
+            let target = match key.field() {
+                Some(field) => format!("field `{field}`"),
+                None => format!("`[{}]`", key.ty()),
             };
             out.push((value.span, format!("Cannot assign `{shown}` to {target} of type `{ty}`")));
         }
