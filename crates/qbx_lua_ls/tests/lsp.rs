@@ -3481,6 +3481,107 @@ function PlainGreeting(name) end
 }
 
 #[test]
+fn arguments_that_take_a_function_offer_it_as_a_snippet() {
+    let mut client = Client::start(fixture_root());
+    let defs = "\
+---@alias Actions \"playerUnloaded\"|\"jobUpdated\"|string
+
+---@param action Actions
+---@param handler fun(...)
+---@return number id
+---@overload fun(action: \"playerUnloaded\", handler: fun(source: number)): number
+---@overload fun(action: \"jobUpdated\", handler: fun(job: table, oldJob?: table)): number
+---@overload fun(action: \"jobUpdated\", handler: fun(source: number, job: table)): number
+---@overload (server) fun(action: \"serverOnly\", handler: fun(source: number, reason: string)): number
+function OnAction(action, handler) end
+
+---@class Poller
+Poller = {}
+
+---@param cb fun()
+function Poller:every(cb) end
+
+---@param ms integer
+---@param cb function
+function Later(ms, cb) end
+";
+    client.open_with("myresource/shared/config.lua", defs);
+    // `|` marks the cursor; `trigger` is the character typed to ask for completions.
+    let mut snippets = |file: &str, typed: &str, trigger: Option<&str>| -> Option<Vec<(String, String)>> {
+        let (line, column) = pos(typed, "|", 0);
+        client.open_with(file, &typed.replace('|', ""));
+        let mut params = client.position_params(file, line, column);
+        if let Some(trigger) = trigger {
+            params["context"] = json!({ "triggerKind": 2, "triggerCharacter": trigger });
+        }
+        let result = client.request("textDocument/completion", params);
+        let items = result["items"].as_array()?;
+        Some(
+            items
+                .iter()
+                .filter(|item| item["label"].as_str().is_some_and(|label| label.starts_with("function(")))
+                .map(|item| {
+                    (item["label"].as_str().unwrap().to_string(), item["insertText"].as_str().unwrap().to_string())
+                })
+                .collect(),
+        )
+    };
+    let one = |label: &str, body: &str| Some(vec![(label.to_string(), body.to_string())]);
+
+    // The overload that the value before the cursor picks gives the parameters, and a `,` right
+    // before the cursor gets a space.
+    assert_eq!(
+        snippets(CLIENT, "OnAction('playerUnloaded',|)", Some(",")),
+        one("function(source)", " function(${1:source})\n\t$0\nend")
+    );
+    assert_eq!(
+        snippets(CLIENT, "OnAction('playerUnloaded', |)", None),
+        one("function(source)", "function(${1:source})\n\t$0\nend")
+    );
+    assert_eq!(
+        snippets(CLIENT, "local id = OnAction('playerUnloaded', fun|)", None),
+        one("function(source)", "function(${1:source})\n\t$0\nend")
+    );
+    // Overloads that fit equally well each offer theirs.
+    assert_eq!(
+        snippets(CLIENT, "OnAction('jobUpdated',|", Some(",")),
+        Some(vec![
+            ("function(job, oldJob)".to_string(), " function(${1:job, oldJob})\n\t$0\nend".to_string()),
+            ("function(source, job)".to_string(), " function(${1:source, job})\n\t$0\nend".to_string()),
+        ])
+    );
+    // A value no overload lists keeps the declared handler, and a server overload applies on its side.
+    assert_eq!(
+        snippets(CLIENT, "OnAction('serverOnly', |)", None),
+        one("function(...)", "function(${1:...})\n\t$0\nend")
+    );
+    assert_eq!(
+        snippets(SERVER, "OnAction('serverOnly', |)", None),
+        one("function(source, reason)", "function(${1:source, reason})\n\t$0\nend")
+    );
+    assert_eq!(
+        snippets(CLIENT, "local poller = Poller\npoller:every(|)", None),
+        one("function()", "function()\n\t$0\nend")
+    );
+    assert_eq!(snippets(CLIENT, "Later(100,|)", Some(",")), one("function()", " function($1)\n\t$0\nend"));
+
+    // A `,` asks for nothing else, and nothing where no argument takes a function.
+    for typed in [
+        "local t = { a = 1,|}",
+        "OnAction('playerUnloaded', { 1,|})",
+        "OnAction('a,|')",
+        "-- OnAction('playerUnloaded',|)",
+        "print(1,|)",
+        "local a,|",
+        // The argument after the cursor is already written.
+        "OnAction('playerUnloaded',| handler)",
+    ] {
+        let found = snippets(CLIENT, typed, Some(","));
+        assert!(found.is_none(), "{typed}: {found:?}");
+    }
+}
+
+#[test]
 fn minimal_clients_receive_plain_completions_and_no_dynamic_watch_registration() {
     for capabilities in [
         json!({}),

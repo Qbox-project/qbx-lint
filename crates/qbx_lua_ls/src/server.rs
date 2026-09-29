@@ -99,7 +99,16 @@ pub fn capabilities() -> ServerCapabilities {
         })),
         completion_provider: Some(CompletionOptions {
             resolve_provider: Some(true),
-            trigger_characters: Some(vec![".".into(), ":".into(), "'".into(), "\"".into(), "@".into(), "{".into()]),
+            trigger_characters: Some(vec![
+                ".".into(),
+                ":".into(),
+                "'".into(),
+                "\"".into(),
+                "@".into(),
+                "{".into(),
+                "(".into(),
+                ",".into(),
+            ]),
             ..CompletionOptions::default()
         }),
         hover_provider: Some(HoverProviderCapability::Simple(true)),
@@ -618,7 +627,15 @@ impl Server {
                 let p: CompletionParams = params(raw)?;
                 let doc = self.doc(&p.text_document_position.text_document.uri)?;
                 let position = p.text_document_position.position;
-                reply(completion::completion(&self.ws, doc, position, self.snippet_support, self.trigger_suggest))
+                let trigger = p.context.as_ref().and_then(|context| context.trigger_character.as_deref());
+                reply(completion::completion(
+                    &self.ws,
+                    doc,
+                    position,
+                    self.snippet_support,
+                    self.trigger_suggest,
+                    trigger,
+                ))
             }
             req::ResolveCompletionItem::METHOD => reply(completion::resolve(params(raw)?)),
             req::HoverRequest::METHOD => {

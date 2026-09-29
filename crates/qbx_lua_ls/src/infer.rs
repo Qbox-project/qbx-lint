@@ -53,11 +53,13 @@ struct Literals {
 struct CallArgs<'e> {
     exprs: &'e [Expr],
     types: Vec<OnceCell<Type>>,
+    /// The call is still being written, so the parameters after these arguments may be passed yet.
+    open: bool,
 }
 
 impl<'e> CallArgs<'e> {
     fn new(exprs: &'e [Expr]) -> Self {
-        Self { exprs, types: exprs.iter().map(|_| OnceCell::new()).collect() }
+        Self { exprs, types: exprs.iter().map(|_| OnceCell::new()).collect(), open: false }
     }
 
     fn ty(&self, infer: &Infer, index: usize) -> &Type {
@@ -1048,6 +1050,33 @@ impl<'a> Infer<'a> {
         (signatures, best)
     }
 
+    /// The signatures a call at `at` that is still being written can use, given the `args` before
+    /// the cursor, each with whether it fits them best: `OnAction("playerUnloaded", ` fits the
+    /// `fun(action: "playerUnloaded", handler: fun(source: number))` overload best, although its
+    /// handler is not passed yet. When no signature fits, the declared one is the best there is.
+    pub fn open_call_signatures(
+        &self,
+        fun: &Arc<FunType>,
+        args: &[Expr],
+        via_method: bool,
+        at: u32,
+    ) -> Vec<(Arc<FunType>, bool)> {
+        let call = CallArgs { open: true, ..CallArgs::new(args) };
+        let fits: Vec<(Arc<FunType>, Fit)> = self
+            .signatures_at(fun, at)
+            .into_iter()
+            .map(|signature| {
+                let fit = self.fit(&signature, &call, via_method);
+                (signature, fit)
+            })
+            .collect();
+        let best = fits.iter().map(|(_, fit)| *fit).max().unwrap_or(Fit::No);
+        if best == Fit::No {
+            return vec![(fun.clone(), true)];
+        }
+        fits.into_iter().filter(|(_, fit)| *fit != Fit::No).map(|(signature, fit)| (signature, fit == best)).collect()
+    }
+
     /// The declared signature of `fun`, then the `@overload`s that apply to the code at `at`.
     fn signatures_at(&self, fun: &Arc<FunType>, at: u32) -> Vec<Arc<FunType>> {
         let side = self.side_at(at);
@@ -1091,7 +1120,7 @@ impl<'a> Infer<'a> {
         }
         let missing_required =
             fixed.iter().skip(args.len()).any(|p| self.param_kinds(fun, p).is_some_and(|kinds| kinds & kind::NIL == 0));
-        if missing_required && !open_ended {
+        if missing_required && !open_ended && !call.open {
             return Fit::No;
         }
         let mut literals = Literals::default();

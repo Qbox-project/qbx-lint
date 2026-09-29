@@ -100,7 +100,7 @@ fn guarded_event_diagnostics_match_the_cli() {
 
 fn labels(ws: &Workspace, doc: &Document) -> Vec<String> {
     let offset = doc.text.rfind("''").unwrap() + 1;
-    let result = completion::completion(ws, doc, doc.position(offset as u32), true, false).unwrap();
+    let result = completion::completion(ws, doc, doc.position(offset as u32), true, false, None).unwrap();
     let items = match result {
         CompletionResponse::List(list) => list.items,
         CompletionResponse::Array(items) => items,

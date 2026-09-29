@@ -81,6 +81,14 @@ under `capabilities.experimental.commands.commands`, as rust-analyzer's clients 
 they run themselves, the snippet item carries that command so the registered names are suggested
 right after insertion. Other clients get the snippet without the command.
 
+Where an argument that takes a function starts, right after the `(` or `,` in front of it, snippet
+clients get a function literal labelled like `function(source)`, with the filter text `function`.
+Its parameters come from the signature that the arguments before it fit best, so
+`OnAction("playerUnloaded", ` picks the `@overload` that lists `"playerUnloaded"`. Signatures that
+fit equally well each get an item. `(` and `,` are completion trigger characters for this item
+only: a request whose `context.triggerCharacter` is `(` or `,` returns nothing else, and returns
+`null` where the argument takes no function.
+
 The server requests file watches only when
 `workspace.didChangeWatchedFiles.dynamicRegistration` is `true`. It watches Lua, lint config,
 locale JSON and server config files through the client. It has no internal filesystem watcher
