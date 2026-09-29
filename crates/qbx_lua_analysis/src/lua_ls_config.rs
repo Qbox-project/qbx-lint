@@ -29,6 +29,7 @@ const EQUIVALENT_CODES: &[&str] = &[
     "unbalanced-assignments",
     "duplicate-index",
     "missing-parameter",
+    "undefined-doc-name",
 ];
 
 #[derive(Debug, Default)]

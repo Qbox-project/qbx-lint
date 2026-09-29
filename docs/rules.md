@@ -29,6 +29,7 @@ set any rule to `off`, `hint`, `info`, `warning`, or `error`.
 | `duplicate-index` | warning | A table constructor assigns the same key twice. |
 | `duplicate-argument` | error | Function parameters share a name. |
 | `missing-parameter` | warning | A call leaves out an argument that the function's LuaCATS annotations require. |
+| `undefined-doc-name` | warning | A LuaCATS annotation names a type that no `@class`, `@alias` or `@enum` declares, or that only `(server)` or `(client)` declarations of the other side declare. Reported by qbx-lua-ls only. |
 | `const-reassign` | error | An assignment to a `<const>` or `<close>` local. |
 | `self-assignment` | warning | A variable is assigned to itself. |
 | `self-comparison` | warning | A comparison has the same expression on both sides. |

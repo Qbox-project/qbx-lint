@@ -1140,6 +1140,17 @@ end
         let hover = client.hover_text(file, l, c);
         assert!(hover.contains(expected), "{file}: expected {expected:?} in {hover}");
     }
+
+    // A type that only the other side declares is reported where it is used.
+    let mut doc_names = |file: &str| -> Vec<String> {
+        client.diagnostics_for(file);
+        let uri = client.uri(file).to_string();
+        let found = client.diagnostics[&uri].as_array().unwrap().iter().filter(|d| d["code"] == "undefined-doc-name");
+        found.map(|d| d["message"].as_str().unwrap().to_string()).collect()
+    };
+    assert_eq!(doc_names(CLIENT), ["Type `BankRecord` only exists on the server, but this is a client script"]);
+    assert!(doc_names(SERVER).is_empty());
+    assert!(doc_names(SHARED).is_empty());
 }
 
 #[test]
@@ -1523,6 +1534,66 @@ lib.callback.await('probe:buy', false)
     assert_eq!(definition(SERVER, server, "RegisterServerCallback('probe:stock'"), [at("server", 3)]);
     // A trigger still goes to the registrations.
     assert_eq!(definition(CLIENT, text, "TriggerServerEvent('probe:buy'"), [at("server", 0), at("server", 1)]);
+}
+
+#[test]
+fn annotations_naming_undeclared_types_are_reported() {
+    let mut client = Client::start(fixture_root());
+    let text = "\
+---@class Garage
+---@field spot Spot
+---@field owner Player
+---@field position vector3
+
+---@class List<T>
+---@field items T[]
+
+---@generic K
+---@param key K
+---@param cb fun(value: Missing): Garage
+---@return self
+local function get(key, cb) end
+
+---@param item T
+function AddItem(item) end
+
+---@see UndefinedFunction
+---@diagnostic disable-next-line: undefined-doc-name
+---@type Hidden
+local hidden
+
+---@alias Mode 'a'|Unknown
+print(get, hidden)
+
+---@param kind WheelKind
+---@param expected type
+local function check(kind, expected) end
+";
+    // An enum a module returns, as in `qbx_customs/client/enums/WheelType.lua`.
+    client.open_with("myresource/shared/config.lua", "---@enum WheelKind\nreturn {\n    Sport = 0,\n}\n");
+    client.open_with(CLIENT, text);
+    client.diagnostics_for(CLIENT);
+    let uri = client.uri(CLIENT).to_string();
+    let found: Vec<(u64, u64, String)> = client.diagnostics[&uri]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|d| d["code"] == "undefined-doc-name")
+        .map(|d| {
+            let start = &d["range"]["start"];
+            (
+                start["line"].as_u64().unwrap(),
+                start["character"].as_u64().unwrap(),
+                d["message"].as_str().unwrap().into(),
+            )
+        })
+        .collect();
+    let at = |name: &str| {
+        let (line, column) = pos(text, name, 0);
+        (line as u64, column as u64, format!("Undefined type or alias `{name}`"))
+    };
+    // Handle types, stub classes, generics, `self`, `@see` and suppressed lines are not reported.
+    assert_eq!(found, [at("Spot"), at("Missing"), at("Unknown")]);
 }
 
 #[test]
