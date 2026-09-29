@@ -1220,21 +1220,52 @@ impl<'a> Infer<'a> {
             None => DocGroup::default().fun_type(&names, func.vararg.is_some(), is_method),
         };
         if fun.returns.is_empty() {
-            if let Some(exprs) = first_return(&func.body) {
-                let mut returns: Vec<Type> = Vec::new();
-                for (i, expr) in exprs.iter().enumerate() {
-                    if i + 1 == exprs.len() {
-                        returns.extend(self.expr_multi(expr).into_iter().map(|t| t.widen()));
-                    } else {
-                        returns.push(self.expr(expr).widen());
-                    }
-                }
-                if returns.iter().any(|t| !t.is_unknown()) {
-                    fun.returns = returns;
-                }
+            let returns = self.inferred_returns(&func.body);
+            if returns.iter().any(|t| !t.is_unknown()) {
+                fun.returns = returns;
             }
         }
         fun
+    }
+
+    /// What an undocumented function returns: at each position, the union of what every `return`
+    /// passes there. A `return` with fewer values, and running past the end of the body, give `nil`.
+    fn inferred_returns(&self, body: &Block) -> Vec<Type> {
+        let mut exits: Vec<&[Expr]> = Vec::new();
+        collect_returns(body, &mut exits);
+        if exits.is_empty() {
+            return Vec::new();
+        }
+        if !always_exits(body) {
+            exits.push(&[]);
+        }
+        let lists: Vec<Vec<Type>> = exits.iter().map(|exprs| self.return_values(exprs)).collect();
+        let width = lists.iter().map(Vec::len).max().unwrap_or(0);
+        (0..width)
+            .map(|i| {
+                let parts: Vec<Type> = lists.iter().map(|values| values.get(i).cloned().unwrap_or(Type::Nil)).collect();
+                // Merged with `nil`, a value that cannot be inferred would read as `nil`.
+                if parts.iter().any(Type::is_unknown) {
+                    return Type::Unknown;
+                }
+                // `return 1` and `return 0.5` return numbers, not `integer|number`.
+                let has_number = parts.iter().any(|t| matches!(t.without_nil(), Type::Number));
+                Type::union(parts.into_iter().filter(|t| !(has_number && matches!(t, Type::Integer))))
+            })
+            .collect()
+    }
+
+    /// The values one `return` passes, the last of them spread when it is a call or `...`.
+    fn return_values(&self, exprs: &[Expr]) -> Vec<Type> {
+        let mut values = Vec::new();
+        for (i, expr) in exprs.iter().enumerate() {
+            if i + 1 == exprs.len() {
+                values.extend(self.expr_multi(expr).into_iter().map(|t| t.widen()));
+            } else {
+                values.push(self.expr(expr).widen());
+            }
+        }
+        values
     }
 
     pub fn member(&self, ty: &Type, name: &str) -> Option<MemberInfo> {
@@ -1482,21 +1513,57 @@ fn is_integer_key(key: &Type) -> bool {
 }
 
 /// The expressions of the first `return` that belongs to this function body itself.
-fn first_return(block: &Block) -> Option<&[Expr]> {
+/// The values of every `return` in a function body, leaving out nested functions.
+fn collect_returns<'b>(block: &'b Block, out: &mut Vec<&'b [Expr]>) {
     for stmt in &block.stmts {
-        let found = match &stmt.kind {
-            StmtKind::Return(exprs) if !exprs.is_empty() => Some(exprs.as_slice()),
-            StmtKind::Do(body) | StmtKind::While { body, .. } | StmtKind::Repeat { body, .. } => first_return(body),
-            StmtKind::NumericFor { body, .. } | StmtKind::GenericFor { body, .. } => first_return(body),
-            StmtKind::If { branches, else_block } => branches
-                .iter()
-                .find_map(|b| first_return(&b.block))
-                .or_else(|| else_block.as_ref().and_then(first_return)),
-            _ => None,
-        };
-        if found.is_some() {
-            return found;
+        match &stmt.kind {
+            StmtKind::Return(exprs) => out.push(exprs),
+            StmtKind::Do(body) | StmtKind::While { body, .. } | StmtKind::Repeat { body, .. } => {
+                collect_returns(body, out)
+            }
+            StmtKind::NumericFor { body, .. } | StmtKind::GenericFor { body, .. } => collect_returns(body, out),
+            StmtKind::If { branches, else_block } => {
+                for branch in branches {
+                    collect_returns(&branch.block, out);
+                }
+                if let Some(block) = else_block {
+                    collect_returns(block, out);
+                }
+            }
+            _ => {}
         }
     }
-    None
+}
+
+/// Whether running `block` always ends in a `return`, an `error(...)` call, a loop that only a
+/// `return` leaves, such as `while true do` without `break`, or a `goto`, so a function never runs
+/// past the end of it.
+fn always_exits(block: &Block) -> bool {
+    match block.stmts.last().map(|stmt| &stmt.kind) {
+        Some(StmtKind::Return(_) | StmtKind::Goto(_)) => true,
+        Some(StmtKind::Expr(Expr { kind: ExprKind::Call { callee, .. }, .. })) => {
+            callee.dotted_path().as_deref() == Some("error")
+        }
+        Some(StmtKind::Do(body)) => always_exits(body),
+        Some(StmtKind::If { branches, else_block: Some(else_block) }) => {
+            branches.iter().all(|branch| always_exits(&branch.block)) && always_exits(else_block)
+        }
+        Some(StmtKind::While { cond, body }) => matches!(cond.unparen().kind, ExprKind::True) && !breaks(body),
+        Some(StmtKind::Repeat { body, cond }) => {
+            matches!(cond.unparen().kind, ExprKind::False | ExprKind::Nil) && !breaks(body)
+        }
+        _ => false,
+    }
+}
+
+/// Whether a loop body has a `break` that leaves that loop rather than one inside it.
+fn breaks(block: &Block) -> bool {
+    block.stmts.iter().any(|stmt| match &stmt.kind {
+        StmtKind::Break => true,
+        StmtKind::Do(body) => breaks(body),
+        StmtKind::If { branches, else_block } => {
+            branches.iter().any(|branch| breaks(&branch.block)) || else_block.as_ref().is_some_and(breaks)
+        }
+        _ => false,
+    })
 }
