@@ -1190,6 +1190,19 @@ end)
 ---@param item string
 ---@return integer price
 Shop.register('shop:price', function(source, item) end)
+
+---@class Appearance
+---@field model string
+
+---@return Appearance
+local function FixAppearanceKeys(data) return data end
+
+RegisterServerCallback('getPlayerAppearance', function(source)
+    if not source then
+        return
+    end
+    return FixAppearanceKeys(source)
+end)
 ";
     client.open_with(SERVER, server);
     let text = "\
@@ -1200,6 +1213,7 @@ AwaitServerCallback('')
 Shop:await('')
 local awaitAlias = AwaitServerCallback
 local aliased = awaitAlias('removeStoreLocation')
+local appearance = AwaitServerCallback('getPlayerAppearance')
 ";
     client.open_with(CLIENT, text);
 
@@ -1208,6 +1222,8 @@ local aliased = awaitAlias('removeStoreLocation')
         (CLIENT, text, "ok)", "ok: boolean"),
         (CLIENT, text, "price", "price: integer"),
         (CLIENT, text, "aliased", "aliased: boolean"),
+        // An undocumented handler that can return nothing.
+        (CLIENT, text, "appearance", "appearance: Appearance?"),
         // The doc comment above the registration types the handler's parameters.
         (SERVER, server, "storeId)", "storeId: number"),
     ] {
@@ -1243,7 +1259,7 @@ local aliased = awaitAlias('removeStoreLocation')
         labels.sort();
         labels
     };
-    assert_eq!(names(&mut client, "AwaitServerCallback('')"), ["removeStoreLocation"]);
+    assert_eq!(names(&mut client, "AwaitServerCallback('')"), ["getPlayerAppearance", "removeStoreLocation"]);
     assert_eq!(names(&mut client, "Shop:await('')"), ["shop:price"]);
 
     let (l, c) = pos(text, "removeStoreLocation", 3);
@@ -1342,6 +1358,88 @@ function TriggerServerCallback(cb, event, ...) end
 
     let found = snippets(snippet_client);
     assert_eq!(found[1], ("AwaitServerCallback('$1'$2)".into(), Value::Null), "the client cannot reopen suggestions");
+}
+
+#[test]
+fn undocumented_returns_merge_every_exit() {
+    let mut client = Client::start(fixture_root());
+    let text = "\
+---@class Appearance
+---@field model string
+
+---@return Appearance
+local function fix(data) return data end
+
+local function lookup(id)
+    if not id then
+        return
+    end
+    return fix(id)
+end
+
+local function pick(flag)
+    if flag then return 'yes' end
+    return 'no'
+end
+
+local function scan(list)
+    for _, v in ipairs(list) do
+        if v then return 1 end
+    end
+end
+
+local function strict(flag)
+    if flag then
+        return 1
+    else
+        error('no flag')
+    end
+end
+
+local function number(flag)
+    if flag then return 1 end
+    return 0.5
+end
+
+local function pair(flag)
+    if flag then return 1, 'a' end
+    return 2
+end
+
+local function unclear(value)
+    if value then return value.whatever end
+end
+
+local looked = lookup(1)
+local picked = pick(true)
+local scanned = scan({})
+local strictValue = strict(true)
+local numbered = number(true)
+local first, second = pair(true)
+local unclearValue = unclear(1)
+";
+    client.open_with(CLIENT, text);
+    for (needle, expected) in [
+        // A bare `return` returns nil.
+        ("looked", "looked: Appearance?"),
+        ("picked", "picked: string"),
+        // Running past the end of the loop returns nil.
+        ("scanned", "scanned: integer?"),
+        // `error` ends the function; it does not return nil.
+        ("strictValue", "strictValue: integer"),
+        ("numbered", "numbered: number"),
+        ("first", "first: integer"),
+        (", second", "second: string?"),
+        // An unknown value merged with nil stays unknown instead of reading as nil.
+        ("unclearValue", "unclearValue: unknown"),
+    ] {
+        let (l, c) = match needle.strip_prefix(", ") {
+            Some(_) => pos(text, needle, 2),
+            None => pos(text, &format!("local {needle}"), 6),
+        };
+        let hover = client.hover_text(CLIENT, l, c);
+        assert!(hover.contains(expected), "{needle}: expected {expected:?} in {hover}");
+    }
 }
 
 #[test]

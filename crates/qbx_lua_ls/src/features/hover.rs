@@ -103,8 +103,10 @@ fn value_overview(infer: &Infer, prefix: &str, name: &str, ty: &Type, literal: O
         let value = literal.map(|l| format!(" = {l}")).unwrap_or_default();
         return format!("{prefix}{name}: {}{value}", shown_type(infer, ty));
     }
+    // The fields are those of the value when it is not nil; the `?` still says it may be.
+    let optional = if *ty != bare && matches!(ty, Type::Union(types) if types.contains(&Type::Nil)) { "?" } else { "" };
     let label = match &bare {
-        Type::Named(class, _) => format!("{class} "),
+        Type::Named(class, _) => format!("{class}{optional} "),
         _ => String::new(),
     };
     let mut out = format!("{prefix}{name}: {label}{{");
@@ -121,6 +123,9 @@ fn value_overview(infer: &Infer, prefix: &str, name: &str, ty: &Type, literal: O
         out.push_str(&format!("\n    ...(+{})", members.len() - MAX_OVERVIEW_FIELDS));
     }
     out.push_str("\n}");
+    if label.is_empty() {
+        out.push_str(optional);
+    }
     out
 }
 
