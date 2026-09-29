@@ -67,6 +67,25 @@ impl Imports {
     }
 }
 
+/// The side an override gives the scripts of a resource that its fxmanifest.lua does not list.
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum ScriptSide {
+    Shared,
+    Client,
+    Server,
+}
+
+impl From<ScriptSide> for Side {
+    fn from(side: ScriptSide) -> Self {
+        match side {
+            ScriptSide::Shared => Side::Shared,
+            ScriptSide::Client => Side::Client,
+            ScriptSide::Server => Side::Server,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 struct RawOverride {
@@ -74,6 +93,7 @@ struct RawOverride {
     globals: Vec<String>,
     rules: BTreeMap<String, Level>,
     imports: Imports,
+    side: Option<ScriptSide>,
 }
 
 #[derive(Clone, Debug)]
@@ -82,6 +102,7 @@ struct Override {
     globals: Vec<String>,
     rules: BTreeMap<String, Level>,
     imports: Imports,
+    side: Option<Side>,
 }
 
 #[derive(Clone, Debug)]
@@ -226,6 +247,7 @@ impl Config {
                     globals: o.globals,
                     rules: o.rules,
                     imports: o.imports,
+                    side: o.side.map(Side::from),
                 })
             })
             .collect::<Result<Vec<_>, String>>()?;
@@ -287,6 +309,13 @@ impl Config {
         let relative = self.relative(manifest_path);
         let overrides = self.overrides.iter().filter(|o| o.files.is_match(relative)).map(|o| &o.imports);
         std::iter::once(&self.imports).chain(overrides).flat_map(Imports::entries).collect()
+    }
+
+    /// The side the last matching override with a `side` gives the script at `path`. It only counts
+    /// for scripts the manifest does not list, such as files a loader runs at runtime.
+    pub fn side_for(&self, path: &Path) -> Option<Side> {
+        let relative = self.relative(path);
+        self.overrides.iter().rev().filter(|o| o.files.is_match(relative)).find_map(|o| o.side)
     }
 }
 
@@ -413,6 +442,30 @@ mod tests {
             let error = Config::parse(&format!("imports = {{ shared = ['{pattern}'] }}"), PathBuf::new()).unwrap_err();
             assert!(error.contains(pattern), "{error}");
         }
+    }
+
+    #[test]
+    fn overrides_give_scripts_a_side() {
+        let config = Config::parse(
+            r#"
+            [[overrides]]
+            files = ["lib/**"]
+            side = "shared"
+            [[overrides]]
+            files = ["lib/client/**"]
+            side = "client"
+            [[overrides]]
+            files = ["lib/client/**"]
+            globals = ["Later"]
+            "#,
+            PathBuf::from("/repo"),
+        )
+        .unwrap();
+        let side = |path: &str| config.side_for(Path::new(&format!("/repo/{path}")));
+        assert_eq!(side("lib/client/main.lua"), Some(Side::Client), "a later override without a side keeps it");
+        assert_eq!(side("lib/shared/util.lua"), Some(Side::Shared));
+        assert_eq!(side("other/main.lua"), None);
+        assert!(Config::parse("[[overrides]]\nfiles = ['a']\nside = 'both'", PathBuf::new()).is_err());
     }
 
     #[test]

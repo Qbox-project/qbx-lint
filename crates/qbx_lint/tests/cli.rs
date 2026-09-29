@@ -205,6 +205,44 @@ fn configured_imports_define_globals_by_side_for_matching_resources() {
 }
 
 #[test]
+fn overrides_give_scripts_the_manifest_does_not_list_a_side() {
+    let fixture = Fixture::new();
+    fixture.write(
+        "fxmanifest.lua",
+        "fx_version 'cerulean'\ngame 'gta5'\nfiles { 'client/**.lua', 'server/**.lua' }\n\
+         shared_script 'load.lua'\nclient_script 'client/listed.lua'\n",
+    );
+    fixture.write("load.lua", "print('loader')\n");
+    fixture.write("client/api.lua", "function ClientApi() end\nprint(GetPlayerIdentifier(1, 0))\n");
+    fixture.write("client/listed.lua", "print(PlayerPedId())\n");
+    fixture.write("server/main.lua", "print(ClientApi)\n");
+    let findings = |config: &str| {
+        fixture.write("qbxlint.toml", config);
+        let output = fixture.run(&["--format", "json", "--no-fail", "."]);
+        let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        let mut found: Vec<String> = Vec::new();
+        for file in json["files"].as_array().unwrap() {
+            for diagnostic in file["diagnostics"].as_array().unwrap() {
+                let code = diagnostic["code"].as_str().unwrap();
+                if matches!(code, "undefined-global" | "fivem/native-wrong-side") {
+                    found.push(format!("{} {code}", file["path"].as_str().unwrap().replace('\\', "/")));
+                }
+            }
+        }
+        found.sort();
+        found
+    };
+    assert!(findings("").is_empty(), "files of an unknown side see both sides");
+    let sides = "[[overrides]]\nfiles = ['client/**']\nside = 'client'\n\
+                 [[overrides]]\nfiles = ['server/**', 'client/listed.lua']\nside = 'server'\n";
+    assert_eq!(
+        findings(sides),
+        ["client/api.lua fivem/native-wrong-side", "server/main.lua undefined-global"],
+        "the manifest keeps client/listed.lua on the client"
+    );
+}
+
+#[test]
 fn relative_and_absolute_config_paths_apply_identical_exclusions_and_overrides() {
     let fixture = Fixture::new();
     fixture.write(

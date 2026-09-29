@@ -192,11 +192,29 @@ impl Workspace {
         self.link_imports();
     }
 
+    /// The resource of `path` and the side its manifest, or else a `side` override, runs it on.
     pub fn side_and_resource(&mut self, path: &Path) -> (Option<ResourceId>, Option<Side>) {
         let Some(root) = find_manifest_dir(path) else { return (None, None) };
         let Some(id) = self.ensure_resource(&root) else { return (None, None) };
         let relative = relative_slash_path(&root, path);
-        (Some(id), side_of(&self.index.resources[id as usize].manifest, &relative))
+        let side = side_of(&self.index.resources[id as usize].manifest, &relative);
+        (Some(id), side.or_else(|| self.lint_config.side_for(path)))
+    }
+
+    /// Re-indexes the files whose side a changed configuration moves, since the side decides the
+    /// globals and `(server)` or `(client)` annotations a file sees.
+    pub fn resync_sides(&mut self) {
+        let files: Vec<(PathBuf, FileOrigin, Option<Side>)> = self
+            .index
+            .files()
+            .filter(|(_, f)| f.origin != FileOrigin::Stub && f.resource.is_some())
+            .map(|(_, f)| (f.path.clone(), f.origin, f.side))
+            .collect();
+        for (path, origin, side) in files {
+            if self.side_and_resource(&path).1 != side {
+                self.index_path(&path, origin, None);
+            }
+        }
     }
 
     /// Indexes `path`, reading it from disk unless `text` (an open document) is given.
