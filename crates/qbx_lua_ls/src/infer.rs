@@ -824,7 +824,11 @@ impl<'a> Infer<'a> {
         match op {
             BinOp::Concat => Type::String,
             BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => Type::Boolean,
-            BinOp::And => Type::union([self.expr(rhs).widen(), Type::BooleanLit(false)]).widen(),
+            // `a and b` is `b` whenever `a` holds a value, so an unknown `b` leaves it unknown.
+            BinOp::And => match self.expr(rhs).widen() {
+                rhs if rhs.is_unknown() => Type::Unknown,
+                rhs => Type::union([rhs, Type::BooleanLit(false)]).widen(),
+            },
             BinOp::Or => {
                 let left = self.expr(lhs).without_nil().widen();
                 let left = match left {
