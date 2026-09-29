@@ -256,10 +256,26 @@ Other keys need an index of their type. With only `---@field [string] number`, `
 `abc[1] = x` and array entries such as `{ 'a' }` are reported, since the class has no `integer`
 keys. A key held in a string variable, as in `abc[key]`, may name a field and is not reported.
 
+Fields keyed by an integer or boolean literal, such as the entries of a tuple, are declared one by
+one:
+
+```lua
+---@class (strict) Employee
+---@field [1] number Source
+---@field [2] string Character name
+
+---@type Employee
+local employee = { 1, "Jane" }
+employee[3] = true -- undeclared-field
+```
+
+Array entries are checked by their position, so `{ "Jane", 1 }` is an `assign-type-mismatch` for
+both entries. A key held in an `integer` variable, as in `employee[i]`, may be either field, so it
+is neither reported nor checked against their types.
+
 Index types also decide what a field without its own `@field` holds, for every class and not only
 strict ones: with `---@field [string] number`, `{ other = true }` and `abc.other = true` are an
-`assign-type-mismatch`. Fields marked like `---@field [1] number` are left unchecked, since only the
-last of them is kept.
+`assign-type-mismatch`.
 
 With `strict_classes = true`, every class is strict unless it is marked `(loose)`. That default
 only covers classes declared in workspace files outside `exclude` and `ignore_diagnostics`, so the

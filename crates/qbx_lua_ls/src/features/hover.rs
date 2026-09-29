@@ -290,16 +290,18 @@ fn class_hover(infer: &Infer, class: &ClassDef) -> String {
         declaration.push_str(&format!(" : {}", class.parents.join(", ")));
     }
     let members = infer.members(&Type::Named(class.name.clone(), Vec::new()));
-    if !members.is_empty() || class.index.is_some() {
+    let mut fields: Vec<String> = members.iter().map(|member| format!("{}: {}", member.name, member.ty)).collect();
+    fields.extend(class.literal_fields.iter().map(|(key, value)| format!("[{key}]: {value}")));
+    if !fields.is_empty() || class.index.is_some() {
         declaration.push_str(" {");
-        for member in members.iter().take(MAX_OVERVIEW_FIELDS) {
-            declaration.push_str(&format!("\n    {}: {},", member.name, member.ty));
+        for field in fields.iter().take(MAX_OVERVIEW_FIELDS) {
+            declaration.push_str(&format!("\n    {field},"));
         }
         if let Some((key, value)) = &class.index {
             declaration.push_str(&format!("\n    [{key}]: {value},"));
         }
-        if members.len() > MAX_OVERVIEW_FIELDS {
-            declaration.push_str(&format!("\n    ...(+{})", members.len() - MAX_OVERVIEW_FIELDS));
+        if fields.len() > MAX_OVERVIEW_FIELDS {
+            declaration.push_str(&format!("\n    ...(+{})", fields.len() - MAX_OVERVIEW_FIELDS));
         }
         declaration.push_str("\n}");
     }
