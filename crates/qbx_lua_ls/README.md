@@ -33,6 +33,9 @@ Available features depend on the editor's LSP client.
 - QB-Core and ESX server callback completion, navigation and payload hints from local handlers.
 - Callback systems a resource wraps itself, declared with `---@callback`, with name completion,
   payload hints and response types.
+- References on event and callback names: every registration and trigger of the name. Go to
+  definition on a registration returns the registration itself, so editors such as VS Code show
+  the calls that trigger it.
 - Whole-document formatting, configured through `qbxlint.toml`.
 - Completion for manifest paths, locale keys, convars, state bag keys and LuaCATS annotations.
 - Read-only resource, dependency-health, NUI callback and asset-reference requests
