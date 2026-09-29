@@ -1,6 +1,8 @@
 ---@meta
 
 ---@alias lua_type "nil"|"number"|"string"|"boolean"|"table"|"function"|"thread"|"userdata"
+---LuaLS's name for the same values, which annotations written for it use.
+---@alias type lua_type
 ---@alias gc_option "collect"|"stop"|"restart"|"count"|"step"|"isrunning"|"incremental"|"generational"
 ---@alias load_mode "b"|"t"|"bt"
 ---@alias open_mode "r"|"w"|"a"|"r+"|"w+"|"a+"|"rb"|"wb"|"ab"|"r+b"|"w+b"|"a+b"
