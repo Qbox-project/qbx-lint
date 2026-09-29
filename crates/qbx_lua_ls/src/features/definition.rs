@@ -47,6 +47,13 @@ fn string_definition(ws: &Workspace, infer: &Infer, doc: &Document, offset: u32)
             .into_iter()
             .collect();
     }
+    // A registration is its own definition. Editors such as VS Code then show its references
+    // instead, which list the calls that trigger it.
+    let range = doc.range(string.span);
+    let own_events = ws.index.file(doc.file).map(|entry| entry.index.events.as_slice()).unwrap_or_default();
+    if own_events.iter().any(|event| event.kind != EventKind::Trigger && event.range == range) {
+        return vec![Location::new(doc.uri.clone(), range)];
+    }
     let context = event_string_context(infer, call);
     ws.index
         .events()
@@ -57,6 +64,29 @@ fn string_definition(ws: &Workspace, infer: &Infer, doc: &Document, offset: u32)
         })
         .filter_map(|(file, event)| location(ws, file, event.range))
         .collect()
+}
+
+/// Every registration and trigger of the event or callback name under the cursor, within its family:
+/// `RegisterNetEvent('shop:buy')` finds each `TriggerServerEvent('shop:buy', ...)`, and the reverse.
+/// `None` when the cursor is not on such a name.
+pub fn event_references(
+    ws: &Workspace,
+    doc: &Document,
+    offset: u32,
+    include_declaration: bool,
+) -> Option<Vec<Location>> {
+    with_infer(ws, doc, |infer| {
+        let (string, call) = locate(&doc.chunk, offset).string?;
+        let ExprKind::String(value) = &string.kind else { return None };
+        let family = event_string_context(infer, call)?.family;
+        let found = ws
+            .index
+            .events()
+            .filter(|(_, event)| event.name == *value && event.family == family)
+            .filter(|(_, event)| include_declaration || event.kind == EventKind::Trigger)
+            .filter_map(|(file, event)| location(ws, file, event.range));
+        Some(found.collect())
+    })
 }
 
 pub fn definition(ws: &Workspace, doc: &Document, position: Position) -> Option<GotoDefinitionResponse> {

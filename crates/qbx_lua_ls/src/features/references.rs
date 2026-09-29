@@ -8,6 +8,7 @@ use qbx_lua_analysis::scope::{resolve, GlobalRefKind, Resolved};
 use qbx_lua_syntax::{parse, LineIndex, Span};
 
 use super::assistant::{InspectionBudget, InspectionPositions};
+use super::definition::event_references;
 use super::member_refs::{in_document, is_renamable, member_occurrences, member_target};
 use crate::document::Document;
 use crate::index::FileOrigin;
@@ -139,7 +140,9 @@ pub(crate) fn references_bounded(
         return out;
     }
     let Some(name) = global_name_at(doc, offset) else {
-        let Some(target) = member_target(ws, doc, offset) else { return Vec::new() };
+        let Some(target) = member_target(ws, doc, offset) else {
+            return event_references(ws, doc, offset, include_declaration).unwrap_or_default();
+        };
         return super::member_refs::member_occurrences_bounded(ws, docs, doc, &target, budget)
             .into_iter()
             .map(|(uri, range)| Location::new(uri, range))
@@ -172,7 +175,9 @@ pub fn references(
             .collect();
     }
     let Some(name) = global_name_at(doc, offset) else {
-        let Some(target) = member_target(ws, doc, offset) else { return Vec::new() };
+        let Some(target) = member_target(ws, doc, offset) else {
+            return event_references(ws, doc, offset, include_declaration).unwrap_or_default();
+        };
         return member_occurrences(ws, docs, doc, &target)
             .unwrap_or_default()
             .into_iter()

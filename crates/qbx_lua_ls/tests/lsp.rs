@@ -1443,6 +1443,89 @@ local unclearValue = unclear(1)
 }
 
 #[test]
+fn registrations_list_the_calls_that_trigger_them() {
+    let mut client = Client::start(fixture_root());
+    client.open_with(
+        "myresource/shared/config.lua",
+        "\
+---@callback register
+---@param name string
+---@param handler fun(source: integer, ...): ...
+function RegisterServerCallback(name, handler) end
+
+---@callback await
+---@param name string
+---@param ... any
+function AwaitServerCallback(name, ...) end
+",
+    );
+    let server = "\
+RegisterNetEvent('probe:buy', function(item) end)
+AddEventHandler('probe:buy', function(item) end)
+lib.callback.register('probe:price', function(source, item) return 1 end)
+RegisterServerCallback('probe:stock', function(source) return 1 end)
+TriggerEvent('probe:buy', 'bread')
+";
+    let text = "\
+TriggerServerEvent('probe:buy', 'water')
+TriggerServerEvent('probe:buy', 'bread')
+lib.callback.await('probe:price', false, 'water')
+AwaitServerCallback('probe:stock')
+lib.callback.await('probe:buy', false)
+";
+    client.open_with(SERVER, server);
+    client.open_with(CLIENT, text);
+
+    // Where each location is, as (file, line).
+    let places = |result: &Value| -> Vec<(String, u64)> {
+        let mut places: Vec<(String, u64)> = result
+            .as_array()
+            .unwrap_or(&Vec::new())
+            .iter()
+            .map(|location| {
+                let uri = location["uri"].as_str().unwrap();
+                let file = if uri.ends_with("server/main.lua") { "server" } else { "client" };
+                (file.to_string(), location["range"]["start"]["line"].as_u64().unwrap())
+            })
+            .collect();
+        places.sort();
+        places
+    };
+    let at = |file: &str, line: u64| (file.to_string(), line);
+    let mut references = |file: &str, source: &str, needle: &str, declarations: bool| {
+        let (l, c) = pos(source, needle, needle.find('\'').unwrap() as u32 + 2);
+        let mut params = client.position_params(file, l, c);
+        params["context"] = json!({ "includeDeclaration": declarations });
+        places(&client.request("textDocument/references", params))
+    };
+
+    // The other family using the same name, `lib.callback.await('probe:buy')`, is not listed.
+    let buy = [at("client", 0), at("client", 1), at("server", 0), at("server", 1), at("server", 4)];
+    assert_eq!(references(SERVER, server, "RegisterNetEvent('probe:buy'", true), buy);
+    assert_eq!(references(CLIENT, text, "TriggerServerEvent('probe:buy'", true), buy);
+    assert_eq!(
+        references(SERVER, server, "RegisterNetEvent('probe:buy'", false),
+        [at("client", 0), at("client", 1), at("server", 4)],
+        "without declarations, only the triggers"
+    );
+    assert_eq!(references(SERVER, server, "register('probe:price'", true), [at("client", 2), at("server", 2)]);
+    assert_eq!(
+        references(SERVER, server, "RegisterServerCallback('probe:stock'", true),
+        [at("client", 3), at("server", 3)]
+    );
+
+    // A registration is its own definition, so VS Code shows its references on Ctrl+click.
+    let mut definition = |file: &str, source: &str, needle: &str| {
+        let (l, c) = pos(source, needle, needle.find('\'').unwrap() as u32 + 2);
+        places(&client.request("textDocument/definition", client.position_params(file, l, c)))
+    };
+    assert_eq!(definition(SERVER, server, "AddEventHandler('probe:buy'"), [at("server", 1)]);
+    assert_eq!(definition(SERVER, server, "RegisterServerCallback('probe:stock'"), [at("server", 3)]);
+    // A trigger still goes to the registrations.
+    assert_eq!(definition(CLIENT, text, "TriggerServerEvent('probe:buy'"), [at("server", 0), at("server", 1)]);
+}
+
+#[test]
 fn hover_binds_generics_from_arguments_and_callbacks() {
     let mut client = Client::start(fixture_root());
     let text = "\
