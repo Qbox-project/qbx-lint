@@ -1,4 +1,5 @@
 pub mod assistant;
+pub mod callback_payloads;
 pub mod class_tables;
 pub mod code_action;
 pub mod completion;

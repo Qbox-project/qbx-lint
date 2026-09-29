@@ -244,6 +244,22 @@ is another call or `...` pass an unknown number of arguments and are skipped, as
 runtime functions, exports, and methods of objects returned by calls, such as
 `GetPlayer(source):setJob(job)`.
 
+qbx-lua-ls also checks the payload of calls to `---@callback await` and `trigger` wrappers. The
+values passed in the wrapper's `...` go to the handler registered under the name the call passes,
+on the other side, so they have to cover that handler's required parameters. A handler registered
+outside the client receives the calling player first, so that parameter is not counted:
+
+```lua
+---@param num1 number
+---@param num2 number
+RegisterServerCallback('add', function(source, num1, num2) ... end)
+
+-- Callback 'add' is called with 0 arguments, but needs 2; 'num1' (number) will be nil
+AwaitServerCallback('add')
+```
+
+When several handlers are registered under the name, the one that needs the fewest values decides.
+
 ## Strict classes
 
 A strict class takes only the fields it declares. Mark one with `(strict)`, or LuaLS's `(exact)`,

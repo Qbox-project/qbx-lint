@@ -1282,6 +1282,140 @@ local appearance = AwaitServerCallback('getPlayerAppearance')
 }
 
 #[test]
+fn callback_payloads_need_what_their_handler_requires() {
+    const SHARED: &str = "myresource/shared/config.lua";
+    let mut client = Client::start(fixture_root());
+    client.open_with(
+        SHARED,
+        "\
+---@callback register
+---@param name string
+---@param handler fun(source: integer, ...): ...
+function RegisterServerCallback(name, handler) end
+
+---@callback await
+---@param name string
+---@param ... any
+function AwaitServerCallback(name, ...) end
+
+---@callback trigger
+---@param event string
+---@param cb fun(...)
+---@param ... any
+function TriggerServerCallback(event, cb, ...) end
+
+Shop = {}
+
+---@callback register shop
+---@param name string
+---@param handler function
+function Shop.register(name, handler) end
+
+---@callback await shop
+---@param name string
+---@param ... any
+function Shop:await(name, ...) end
+",
+    );
+    client.open_with(
+        SERVER,
+        "\
+---@param num1 number
+---@param num2 number
+---@return number
+RegisterServerCallback('add', function(source, num1, num2)
+    return num1 + num2
+end)
+
+---@param label string
+---@param amount? number
+RegisterServerCallback('notify', function(source, label, amount) end)
+
+---@param item string
+Shop.register('shop:price', function(source, item) return 1 end)
+
+RegisterServerCallback('untyped', function(source, a, b) end)
+",
+    );
+    let text = "\
+local sum = AwaitServerCallback('add')
+local one = AwaitServerCallback('add', 1)
+local both = AwaitServerCallback('add', 1, 2)
+TriggerServerCallback('add', function(result) end)
+TriggerServerCallback('add', function(result) end, 1, 2)
+AwaitServerCallback('notify', 'hi')
+AwaitServerCallback('add', ...)
+AwaitServerCallback('add', GetValues())
+AwaitServerCallback('untyped')
+local price = Shop:await('shop:price')
+AwaitServerCallback('unknown')
+print(sum, one, both, price)
+";
+    client.open_with(CLIENT, text);
+    let line = |needle: &str| pos(text, needle, 0).0 as u64;
+    let finding = |at: u64, message: &str| ("missing-parameter".to_string(), at, message.to_string());
+    assert_eq!(
+        findings(&mut client, CLIENT, &["missing-parameter"]),
+        [
+            finding(
+                line("AwaitServerCallback('add')"),
+                "Callback 'add' is called with 0 arguments, but needs 2; 'num1' (number) will be nil"
+            ),
+            finding(
+                line("AwaitServerCallback('add', 1)"),
+                "Callback 'add' is called with 1 argument, but needs 2; 'num2' (number) will be nil"
+            ),
+            finding(
+                line("function(result) end)"),
+                "Callback 'add' is called with 0 arguments, but needs 2; 'num1' (number) will be nil"
+            ),
+            finding(
+                line("Shop:await"),
+                "Callback 'shop:price' is called with 0 arguments, but needs 1; 'item' (string) will be nil"
+            ),
+        ],
+        "the player the server passes first, optional and undocumented parameters, open-ended calls and unknown names pass"
+    );
+}
+
+#[test]
+fn new_files_register_callbacks_through_wrappers_of_other_files() {
+    const NEW: &str = "myresource/callback-test.lua";
+    let mut client = Client::start(fixture_root());
+    client.open_with(
+        "myresource/shared/config.lua",
+        "\
+---@callback register
+---@param event string
+---@param handler fun(source: number, ...): ...
+function RegisterServerCallback(event, handler) end
+
+---@callback await
+---@param event string
+---@param ... any
+function AwaitServerCallback(event, ...) end
+",
+    );
+    // Neither on disk nor listed in the manifest, so the file is indexed for the first time on open.
+    let text = "\
+---@param num1 number
+---@param num2 number
+RegisterServerCallback('add', function(source, num1, num2) end)
+
+AwaitServerCallback('add')
+";
+    client.open_with(NEW, text);
+    assert_eq!(
+        findings(&mut client, NEW, &["missing-parameter"]),
+        [(
+            "missing-parameter".to_string(),
+            pos(text, "AwaitServerCallback('add')", 0).0 as u64,
+            "Callback 'add' is called with 0 arguments, but needs 2; 'num1' (number) will be nil".to_string()
+        )]
+    );
+}
+
+#[test]
 fn callback_tags_complete_roles_and_the_families_in_use() {
     let mut client = Client::start(fixture_root());
     let wrappers = "\
