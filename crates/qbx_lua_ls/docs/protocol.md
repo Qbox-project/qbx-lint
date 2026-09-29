@@ -76,18 +76,30 @@ description `snippet`. It inserts the call with the function literal written out
 when a `(` already follows the name.
 
 Functions tagged `---@callback await` or `trigger` also get this snippet. Its first stop is empty,
-between the quotes of the callback name. When the client lists `editor.action.triggerSuggest`
-under `capabilities.experimental.commands.commands`, as rust-analyzer's clients list the commands
-they run themselves, the snippet item carries that command so the registered names are suggested
-right after insertion. Other clients get the snippet without the command.
+between the quotes of the callback name. So is the stop of each parameter that lists string values,
+through its type, an alias or the `@overload`s that apply on the side of the call, and functions
+with such a parameter get the snippet without taking a callback. When an `@overload` takes one of
+those values alone, as `fun(action: "playerUnloaded", handler: fun(source: number))` does, the
+snippet ends right after that parameter, since the arguments after it depend on the value picked:
+`OnAction('$1'$0)`. Strings use the formatter's `quote_style`, or else the quote most strings of
+the document use.
 
-Where an argument that takes a function starts, right after the `(` or `,` in front of it, snippet
-clients get a function literal labelled like `function(source)`, with the filter text `function`.
-Its parameters come from the signature that the arguments before it fit best, so
+When the client lists `editor.action.triggerSuggest` under
+`capabilities.experimental.commands.commands`, as rust-analyzer's clients list the commands they
+run themselves, a snippet whose first stop is a callback name or a list of values carries that
+command, titled `Suggest callback names` or `Suggest values`, so they are suggested right after
+insertion. Other clients get the snippet without the command.
+
+Where an argument starts, right after the `(` or `,` in front of it, completion offers what it can
+be. Values that its parameter lists are offered quoted, with the value as filter text. Snippet
+clients also get a function literal labelled like `function(source)`, with the filter text
+`function`, when the argument takes a function. Values come from every signature that the
+arguments before it fit, and the function's parameters from the signature they fit best, so
 `OnAction("playerUnloaded", ` picks the `@overload` that lists `"playerUnloaded"`. Signatures that
-fit equally well each get an item. `(` and `,` are completion trigger characters for this item
+fit equally well each get an item. `(` and `,` are completion trigger characters for these items
 only: a request whose `context.triggerCharacter` is `(` or `,` returns nothing else, and returns
-`null` where the argument takes no function.
+`null` where the argument lists no values and takes no function. Inside a string argument, the
+same values replace the string's contents.
 
 The server requests file watches only when
 `workspace.didChangeWatchedFiles.dynamicRegistration` is `true`. It watches Lua, lint config,
