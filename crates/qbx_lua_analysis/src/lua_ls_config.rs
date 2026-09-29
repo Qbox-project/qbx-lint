@@ -32,6 +32,8 @@ const EQUIVALENT_CODES: &[&str] = &[
     "undefined-doc-name",
     "missing-fields",
     "assign-type-mismatch",
+    "return-type-mismatch",
+    "missing-return",
 ];
 
 #[derive(Debug, Default)]

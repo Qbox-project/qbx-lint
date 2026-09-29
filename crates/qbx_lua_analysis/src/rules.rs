@@ -76,6 +76,10 @@ pub const MISSING_FIELDS: &str = "missing-fields";
 pub const ASSIGN_TYPE_MISMATCH: &str = "assign-type-mismatch";
 /// Reported by qbx-lua-ls, which reads the LuaCATS classes; the linter itself has no type information.
 pub const UNDECLARED_FIELD: &str = "undeclared-field";
+/// Reported by qbx-lua-ls, which infers the returned values; the linter itself has no type information.
+pub const RETURN_TYPE_MISMATCH: &str = "return-type-mismatch";
+/// Reported by qbx-lua-ls, which reads the `@return` annotations with the types they allow.
+pub const MISSING_RETURN: &str = "missing-return";
 pub const CONST_REASSIGN: &str = "const-reassign";
 pub const SELF_ASSIGNMENT: &str = "self-assignment";
 pub const SELF_COMPARISON: &str = "self-comparison";
@@ -133,6 +137,8 @@ pub static RULES: &[Rule] = &[
     rule(MISSING_FIELDS, Correctness, WARN, false, "A table constructor typed as a LuaCATS class leaves out required fields (language server only)."),
     rule(ASSIGN_TYPE_MISMATCH, Correctness, WARN, false, "A table constructor or assignment sets a field of a LuaCATS class to a value of the wrong type (language server only)."),
     rule(UNDECLARED_FIELD, Correctness, WARN, false, "A field or key that a strict LuaCATS class does not declare is set or read (language server only)."),
+    rule(RETURN_TYPE_MISMATCH, Correctness, WARN, false, "A function returns a value of a different type than its @return annotation declares (language server only)."),
+    rule(MISSING_RETURN, Correctness, WARN, false, "A function with a required @return value can end, or return, without it (language server only)."),
     rule(CONST_REASSIGN, Correctness, ERROR, false, "A <const> or <close> local is assigned to."),
     rule(SELF_ASSIGNMENT, Suspicious, WARN, false, "A variable is assigned to itself."),
     rule(SELF_COMPARISON, Suspicious, WARN, false, "Both sides of a comparison are the same expression."),
