@@ -2444,6 +2444,52 @@ end)
 }
 
 #[test]
+fn rule_levels_of_the_config_file_win_over_the_client_settings() {
+    struct Fixture(PathBuf);
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            if let (Ok(root), Ok(temp)) = (self.0.canonicalize(), std::env::temp_dir().canonicalize()) {
+                if root.parent() == Some(temp.as_path()) {
+                    let _ = std::fs::remove_dir_all(root);
+                }
+            }
+        }
+    }
+    let fixture = Fixture(std::env::temp_dir().join(format!(
+        "qbx-rule-levels-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos(),
+    )));
+    let write = |relative: &str, text: &str| {
+        let path = fixture.0.join(relative);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    };
+    write(
+        "qbxlint.toml",
+        "[rules]\n'lowercase-global' = 'off'\n[[overrides]]\nfiles = ['kept/**']\nrules = { 'unused-local' = 'warning' }\n",
+    );
+    write("fxmanifest.lua", "fx_version 'cerulean'\ngame 'gta5'\nclient_scripts { 'kept/main.lua', 'other.lua' }\n");
+    let text = "function helper(value)\n    local unused = 1\nend\n";
+    write("kept/main.lua", text);
+    write("other.lua", text);
+    let mut client = Client::start(fixture.0.clone());
+    let rules = json!({ "lowercase-global": "warning", "unused-local": "off", "no-unknown": "warning" });
+    client.notify(
+        "workspace/didChangeConfiguration",
+        json!({ "settings": { "qbxLua": { "diagnostics": { "rules": rules } } } }),
+    );
+    let codes = |client: &mut Client, file: &str| -> Vec<String> {
+        let found = findings(client, file, &["lowercase-global", "unused-local", "no-unknown"]);
+        found.into_iter().map(|(code, ..)| code).collect()
+    };
+    assert_eq!(codes(&mut client, "kept/main.lua"), ["no-unknown", "unused-local"], "an override keeps its level");
+    assert_eq!(codes(&mut client, "other.lua"), ["no-unknown"], "the client sets the rules the file leaves alone");
+    client.open_with("kept/main.lua", text);
+    assert_eq!(codes(&mut client, "kept/main.lua"), ["no-unknown", "unused-local"], "the same once it is open");
+}
+
+#[test]
 fn open_files_keep_their_hints_when_the_client_spells_uris_its_own_way() {
     struct Fixture(PathBuf);
     impl Drop for Fixture {

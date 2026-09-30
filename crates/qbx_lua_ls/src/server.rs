@@ -443,7 +443,7 @@ impl Server {
                 continue;
             }
             let mut config = self.ws.lint_config.for_file(&locale.path);
-            overrides.iter().for_each(|(code, level)| config.set(code, *level));
+            overrides.iter().for_each(|(code, level)| config.set_default(code, *level));
             let Some(severity) = config.severity(qbx_lua_analysis::rules::UNUSED_LOCALE_KEY) else { continue };
             let lines = qbx_lua_syntax::LineIndex::new(&locale.source);
             let found: Vec<Diagnostic> = qbx_lua_analysis::lint::unused_locale_keys_from(&locale, usages.into_iter())

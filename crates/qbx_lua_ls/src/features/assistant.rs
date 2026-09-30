@@ -563,7 +563,7 @@ pub fn diagnostic_snapshot(
                 continue;
             }
             let mut config = ws.lint_config.for_file(&locale.path);
-            overrides.iter().for_each(|(code, level)| config.set(code, *level));
+            overrides.iter().for_each(|(code, level)| config.set_default(code, *level));
             let Some(severity) = config.severity(qbx_lua_analysis::rules::UNUSED_LOCALE_KEY) else { continue };
             let positions = InspectionPositions::new(&locale.source);
             for diagnostic in qbx_lua_analysis::lint::unused_locale_keys_from(locale, usage.into_iter()) {

@@ -29,7 +29,7 @@ Use absolute paths in `library`; Windows paths such as `C:/server/resources` wor
 | `library` | `[]` | Extra folders to index for types, definitions and resource imports. Restart after changing it. |
 | `diagnostics.enable` | `true` | Publish diagnostics. |
 | `diagnostics.workspace` | `true` | Also report diagnostics for closed files in the workspace. |
-| `diagnostics.rules` | `{}` | Override rule levels with `off`, `hint`, `info`, `warning` or `error`. |
+| `diagnostics.rules` | `{}` | Rule levels, as `off`, `hint`, `info`, `warning` or `error`, for the rules the config file does not set. |
 | `inlayHints.enable` | `true` | Return parameter hints. |
 | `semanticTokens.enable` | `true` | Return semantic highlighting tokens. |
 
@@ -49,8 +49,9 @@ the client must provide settings during initialization or send the notification.
 
 The server discovers `qbxlint.toml` from the first workspace root and its ancestors. Its
 `[format]` section controls formatting. Without a discovered config file, the editor's formatting
-request supplies indentation width and tabs/spaces. Diagnostic rule overrides from the client
-take precedence over the config file.
+request supplies indentation width and tabs/spaces. The rule levels of the config file, in
+`[rules]`, in `[[overrides]]` or taken from LuaLS or EmmyLua settings, take precedence over
+`diagnostics.rules` from the client, which sets the level of the remaining rules.
 
 On-type formatting triggers on a newline and only touches LuaCATS lines. Enter at the end of a
 `---@tag ...` line starts the new line with `---@` at the same indentation. Enter on a line that
