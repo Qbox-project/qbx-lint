@@ -126,6 +126,7 @@ standard LSP requests.
 | `qbx/fileInfo` | `{ "uri": "file:///path/to/script.lua" }` | Object with `side` and `resource` (a resource name or `null`). |
 | `qbx/snippets` | `{ "uri": "file:///path/to/script.lua" }` or `null` | Array of snippets with `label`, `description`, `body` and `preview`. |
 | `qbx/quote` | `{ "uri": "file:///path/to/script.lua" }` or `null` | `"'"` or `"\""`: the quote that strings written into that open document use. |
+| `qbx/rules` | `null` | Array of every rule with `code`, `category`, `default` (`off`, `hint`, `info`, `warning` or `error`), `fixable` and `summary`. |
 | `qbx/referenceSearch` | Search object below, or `null` for defaults. | A bounded page of native, control or ped flag summaries. |
 | `qbx/referenceDetail` | `{ "id": "native:GetEntityCoords" }` | Reference detail object below, or `null` for an unknown ID. |
 | `qbx/resourceDetails` | `{ "uri": "file:///path/to/resource" }` | Resource snapshot below; accepts an indexed resource folder or its selected manifest. |
