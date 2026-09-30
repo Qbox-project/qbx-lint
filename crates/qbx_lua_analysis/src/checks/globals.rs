@@ -190,7 +190,7 @@ impl Fields<'_, '_> {
         let resource_defines = self.input.resource.is_some_and(|r| {
             r.env.defines_field(table, &field.text)
                 || (OX_LIB_STD_EXTENSIONS.contains(&(table, field.text.as_str()))
-                    && r.manifest.imports_path("@ox_lib/init.lua", self.input.side.unwrap_or(Side::Shared)))
+                    && r.env.imports_path("@ox_lib/init.lua", self.input.side.unwrap_or(Side::Shared)))
         });
         if !defined_here && !resource_defines {
             self.sink.report(rules::UNDEFINED_FIELD, field.span, format!("'{table}' has no field '{}'", field.text));
