@@ -2853,6 +2853,243 @@ end
 }
 
 #[test]
+fn class_table_diagnostics_and_completion_follow_the_selected_overload() {
+    let mut client = Client::start(fixture_root());
+    let text = "\
+---@class (strict) Test.OverloadA
+---@field a string
+---@class (strict) Test.OverloadB
+---@field b number
+
+---@overload fun(kind: 'b', value: Test.OverloadB)
+---@param kind 'a'
+---@param value Test.OverloadA
+local function consume(kind, value) end
+consume('a', { a = 'ok' })
+consume('b', { b = 42 })
+consume('b', { b = 'wrong' })
+consume('b', {})
+consume('b', { b = 42, extra = true })
+";
+    client.open_with(CLIENT, text);
+    let (line, character) = pos(text, "consume('b', { b = 42 })", 2);
+    let hover = client.hover_text(CLIENT, line, character);
+    assert!(hover.contains("Test.OverloadB"), "{hover}");
+    let codes = ["missing-fields", "assign-type-mismatch", "undeclared-field"];
+    let found = findings(&mut client, CLIENT, &codes);
+    for (code, needle) in [
+        ("assign-type-mismatch", "consume('b', { b = 'wrong' })"),
+        ("missing-fields", "consume('b', {})"),
+        ("undeclared-field", "consume('b', { b = 42, extra = true })"),
+    ] {
+        assert!(
+            found.iter().any(|(seen, line, _)| seen == code && *line == pos(text, needle, 0).0 as u64),
+            "{found:?}"
+        );
+    }
+    assert_eq!(found.len(), 3, "valid overload calls must not be checked against Test.OverloadA: {found:?}");
+    let (line, character) = pos(text, "consume('b', {})", 14);
+    let labels = client.completion_labels(CLIENT, line, character);
+    assert!(labels.contains(&"b".to_string()) && !labels.contains(&"a".to_string()), "{labels:?}");
+}
+
+#[test]
+fn indexed_class_fields_keep_their_side_in_diagnostics_and_inference() {
+    let mut client = Client::start(fixture_root());
+    client.open_with(
+        "myresource/shared/config.lua",
+        "\
+---@class (strict) Test.SidedFields
+---@field (server) [1] string
+---@field (client) [1] number
+---@field (server) [true] string
+---@field (client) [true] boolean
+
+---@class Test.SidedIndex
+---@field (server) [integer] string
+---@field (client) [integer] number
+
+---@class (strict) Test.ServerOnlyField
+---@field (server) [2] string
+
+---@class (strict) Test.ServerOnlyIndex
+---@field (server) [integer] string
+
+---@class Test.InheritedFields : Test.SidedFields
+
+---@class Test.InheritedIndex : Test.SidedIndex
+
+---@class Test.UnscopedIndex
+---@field [integer] boolean
+---@field [integer] number
+
+---@class Test.UnscopedFields
+---@field [1] number
+
+---@class Test.ReversedIndex
+---@field (client) [integer] number
+---@field (server) [integer] string
+
+",
+    );
+    for (file, value, flag, expected, expected_flag, wrong) in
+        [(CLIENT, "42", "false", "number", "boolean", "'wrong'"), (SERVER, "'ok'", "'flag'", "string", "string", "42")]
+    {
+        let text = format!(
+            "\
+---@type Test.SidedFields
+local fields = {{ {value}, [true] = {flag} }}
+local first = fields[1]
+local flagged = fields[true]
+for slot, element in ipairs(fields) do end
+---@type Test.SidedIndex
+local indexed = {{ {value} }}
+local item = indexed[42]
+for key, entry in pairs(indexed) do end
+---@type Test.InheritedFields
+local inherited = {{ {value}, [true] = {flag} }}
+---@type Test.InheritedIndex
+local inheritedIndex = {{ {value} }}
+---@type Test.ReversedIndex
+local reversed = {{ {value} }}
+---@type Test.UnscopedIndex
+local unscoped = {{ 42 }}
+---@type Test.UnscopedFields
+local unscopedFields = {{ 42 }}
+fields[1] = {wrong}
+indexed[42] = {wrong}
+---@type Test.ServerOnlyField
+local serverField = {{ [2] = 'ok' }}
+---@type Test.ServerOnlyIndex
+local serverIndex = {{ [2] = 'ok' }}
+"
+        );
+        client.open_with(file, &text);
+        let found = findings(&mut client, file, &["assign-type-mismatch", "undeclared-field"]);
+        let expected_count = if file == CLIENT { 4 } else { 2 };
+        assert_eq!(found.len(), expected_count, "{file}: {found:?}");
+        for needle in ["fields[1] =", "indexed[42] ="] {
+            assert!(
+                found
+                    .iter()
+                    .any(|(code, line, _)| code == "assign-type-mismatch" && *line == pos(&text, needle, 0).0 as u64),
+                "{found:?}"
+            );
+        }
+        if file == CLIENT {
+            for needle in ["local serverField", "local serverIndex"] {
+                assert!(
+                    found
+                        .iter()
+                        .any(|(code, line, _)| code == "undeclared-field" && *line == pos(&text, needle, 0).0 as u64),
+                    "{found:?}"
+                );
+            }
+        }
+        for (needle, ty) in [
+            ("first", expected),
+            ("flagged", expected_flag),
+            ("element", expected),
+            ("item", expected),
+            ("entry", expected),
+        ] {
+            let (line, character) = pos(&text, needle, 0);
+            let hover = client.hover_text(file, line, character);
+            assert!(hover.contains(&format!("{needle}: {ty}")), "{file} {needle}: {hover}");
+        }
+        let (line, character) = pos(&text, "Test.SidedFields", 1);
+        let hover = client.hover_text(file, line, character);
+        assert!(hover.contains(&format!("[1]: {expected},")), "{hover}");
+        assert!(hover.contains(&format!("[true]: {expected_flag},")), "{hover}");
+        let (line, character) = pos(&text, "Test.SidedIndex", 1);
+        let hover = client.hover_text(file, line, character);
+        assert!(hover.contains(&format!("[integer]: {expected},")), "{hover}");
+    }
+}
+
+#[test]
+fn repeat_bodies_that_always_return_have_no_fallthrough() {
+    let mut client = Client::start(fixture_root());
+    let text = "\
+---@return number
+local function direct()
+    repeat return 42 until true
+end
+---@return number
+local function branches(flag)
+    repeat
+        if flag then return 1 else return 2 end
+    until flag
+end
+---@return number
+local function canBreak(flag)
+    repeat
+        if flag then break end
+        return 42
+    until true
+end -- canBreak
+---@return number
+local function canFinish(flag)
+    repeat
+        if flag then return 42 end
+    until true
+end -- canFinish
+local function inferred()
+    repeat return 42 until true
+end
+local result = inferred()
+";
+    client.open_with(CLIENT, text);
+    let found = findings(&mut client, CLIENT, &["missing-return"]);
+    let lines: Vec<_> = found.iter().map(|(_, line, _)| *line).collect();
+    assert_eq!(
+        lines,
+        [pos(text, "end -- canBreak", 0).0 as u64, pos(text, "end -- canFinish", 0).0 as u64],
+        "{found:?}"
+    );
+    let (line, character) = pos(text, "result", 0);
+    let hover = client.hover_text(CLIENT, line, character);
+    assert!(hover.contains("result: integer") && !hover.contains("integer?"), "{hover}");
+}
+
+#[test]
+fn literal_completions_preserve_values_in_both_quote_styles() {
+    use qbx_lua_syntax::ast::{ExprKind, StmtKind};
+    let mut client = Client::start(fixture_root());
+    for value in ["owner's", "say \"hello\"", "C:\\temp\\file", "with\ttab", "control\u{7f}", "café", "${1:literal}"] {
+        let delimiter = if value.contains('\'') { '"' } else { '\'' };
+        let defs = format!("---@param value {delimiter}{value}{delimiter}\nfunction SayLiteral(value) end\n");
+        client.open_with("myresource/shared/config.lua", &defs);
+        for quote in ['\'', '"'] {
+            for in_string in [false, true] {
+                let call =
+                    if in_string { format!("SayLiteral({quote}prefix|{quote})") } else { "SayLiteral(|)".to_string() };
+                let text = format!("local label = {quote}x{quote}\n{call}");
+                let (line, character) = pos(&text, "|", 0);
+                let text = text.replace('|', "");
+                client.open_with(CLIENT, &text);
+                let result = client.request("textDocument/completion", client.position_params(CLIENT, line, character));
+                let item = result["items"].as_array().unwrap().iter().find(|item| item["kind"] == 20).unwrap();
+                let completed = if in_string {
+                    let edit = &item["textEdit"];
+                    let start = edit["range"]["start"]["character"].as_u64().unwrap() as usize;
+                    let end = edit["range"]["end"]["character"].as_u64().unwrap() as usize;
+                    let call = text.lines().last().unwrap();
+                    format!("{}{}{}", &call[..start], edit["newText"].as_str().unwrap(), &call[end..])
+                } else {
+                    format!("SayLiteral({})", item["insertText"].as_str().unwrap())
+                };
+                let parsed = qbx_lua_syntax::parse(&completed);
+                assert!(parsed.errors.is_empty(), "{completed}: {:?}", parsed.errors);
+                let StmtKind::Expr(call) = &parsed.block.stmts[0].kind else { panic!("{completed}") };
+                let ExprKind::Call { args, .. } = &call.kind else { panic!("{completed}") };
+                assert_eq!(args[0].as_string().map(|value| value.as_str()), Some(value), "{completed}");
+            }
+        }
+    }
+}
+
+#[test]
 fn documented_returns_have_to_match_their_annotations() {
     let mut client = Client::start(fixture_root());
     let text = "\

@@ -789,11 +789,14 @@ impl<'a> Infer<'a> {
             }
             Type::Named(ref name, _) => {
                 let class = self.index.class(name, self.side).map(|(_, c)| c);
-                let index = class.and_then(|c| c.index.clone()).filter(|(key, _)| !array_only || is_integer_key(key));
+                let index = class
+                    .and_then(|c| c.index(self.side))
+                    .filter(|(key, _)| !array_only || is_integer_key(key))
+                    .map(|(key, value)| (key.clone(), value.clone()));
                 // `---@field [1] number` fields, with their keys shown as `integer` rather than `1|2|3`.
                 let literal_fields = class
                     .into_iter()
-                    .flat_map(|c| &c.literal_fields)
+                    .flat_map(|c| c.literal_fields(self.side))
                     .filter(|(key, _)| !array_only || is_integer_key(key))
                     .map(|(key, value)| (key.widen(), value.clone()));
                 // An instance holds its data; the methods its class provides are not visited.
@@ -925,15 +928,15 @@ impl<'a> Infer<'a> {
             Type::Shape(shape) => Type::union(shape.array.iter().chain(shape.index.as_ref().map(|(_, v)| v)).cloned()),
             Type::Named(name, _) => {
                 let Some((_, class)) = self.index.class(&name, self.side) else { return Type::Unknown };
-                let index = class.index.as_ref().map(|(_, value)| value.clone());
+                let index = class.index(self.side).map(|(_, value)| value.clone());
                 // `employee[1]` reads the `---@field [1] number` of its key, and `employee[i]` any
                 // literal-keyed field that `i` may name.
                 let key_ty = self.resolve_alias(key_ty);
                 if key_ty.is_literal() {
-                    let field = class.literal_fields.iter().find(|(key, _)| *key == key_ty);
+                    let field = class.literal_fields(self.side).find(|(key, _)| **key == key_ty);
                     return field.map(|(_, value)| value.clone()).or(index).unwrap_or_default();
                 }
-                let fields = class.literal_fields.iter().filter(|(key, _)| may_be_literal_key(&key_ty, key));
+                let fields = class.literal_fields(self.side).filter(|(key, _)| may_be_literal_key(&key_ty, key));
                 Type::union(fields.map(|(_, value)| value.clone()).chain(index))
             }
             // `list[i]` on a table whose array part the index or a top-level local's constructor holds.
@@ -1861,7 +1864,7 @@ pub fn always_exits(block: &Block) -> bool {
         }
         Some(StmtKind::While { cond, body }) => matches!(cond.unparen().kind, ExprKind::True) && !breaks(body),
         Some(StmtKind::Repeat { body, cond }) => {
-            matches!(cond.unparen().kind, ExprKind::False | ExprKind::Nil) && !breaks(body)
+            (always_exits(body) || matches!(cond.unparen().kind, ExprKind::False | ExprKind::Nil)) && !breaks(body)
         }
         _ => false,
     }

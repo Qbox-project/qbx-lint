@@ -8,7 +8,7 @@ use qbx_lua_analysis::summary::FileSummary;
 use rustc_hash::FxHashMap;
 use smol_str::SmolStr;
 
-use crate::luacats::applies_on;
+use crate::luacats::{applies_on, DocIndexField};
 use crate::types::{FunType, Type};
 
 pub type FileId = u32;
@@ -71,10 +71,10 @@ pub struct ClassDef {
     pub fields: Vec<Symbol>,
     /// The side each of `fields` is scoped to by `@field (server) name type`.
     pub field_sides: Vec<Option<Side>>,
-    pub index: Option<(Type, Type)>,
+    pub indices: Vec<DocIndexField>,
     /// `---@field [1] number` and `---@field [true] string`: fields keyed by an integer or boolean
     /// literal, with their values, in declaration order.
-    pub literal_fields: Vec<(Type, Type)>,
+    pub literal_fields: Vec<DocIndexField>,
     pub call: Option<Arc<FunType>>,
     pub doc: Option<Arc<str>>,
     pub range: Range,
@@ -83,6 +83,20 @@ pub struct ClassDef {
     /// `Some(true)` for `@class (strict) Name` or `(exact)`, `Some(false)` for `(loose)`, and `None`
     /// when `strict_classes` in qbxlint.toml decides.
     pub strict: Option<bool>,
+}
+
+impl ClassDef {
+    /// The last general index declared for this side, as for an unscoped index before side filtering.
+    pub fn index(&self, side: Option<Side>) -> Option<(&Type, &Type)> {
+        self.indices.iter().rev().find(|field| applies_on(field.side, side)).map(|field| (&field.key, &field.ty))
+    }
+
+    pub fn literal_fields(&self, side: Option<Side>) -> impl Iterator<Item = (&Type, &Type)> {
+        self.literal_fields
+            .iter()
+            .filter(move |field| applies_on(field.side, side))
+            .map(|field| (&field.key, &field.ty))
+    }
 }
 
 #[derive(Clone, Debug)]
