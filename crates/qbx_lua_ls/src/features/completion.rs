@@ -312,6 +312,26 @@ fn quoted(body: &str, quote: char) -> String {
     body.replace('\'', quote.encode_utf8(&mut [0; 4]))
 }
 
+/// Encodes a literal value inside a short Lua string without changing its contents.
+fn escaped_string(value: &str, quote: char) -> String {
+    let mut out = String::new();
+    for ch in value.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            ch if ch == quote => {
+                out.push('\\');
+                out.push(ch);
+            }
+            ch if ch.is_ascii_control() => out.push_str(&format!("\\x{:02x}", ch as u32)),
+            ch => out.push(ch),
+        }
+    }
+    out
+}
+
 /// The snippet as it looks right after insertion: `${1:0}` becomes `0`, `${1|a,b|}` becomes `a`.
 pub fn snippet_preview(body: &str) -> String {
     let mut out = String::new();
@@ -528,7 +548,7 @@ fn argument_items(
         .into_iter()
         .enumerate()
         .map(|(i, literal)| {
-            let quoted = format!("{quote}{}{quote}", literal.value);
+            let quoted = format!("{quote}{}{quote}", escaped_string(&literal.value, quote));
             let mut out = literal.item(i, &quoted);
             out.filter_text = Some(literal.value.to_string());
             out.insert_text = Some(format!("{space}{quoted}"));
@@ -762,7 +782,8 @@ fn string_items(ws: &Workspace, doc: &Document, offset: u32, token_index: usize)
         };
         return candidates(target_side.is_some());
     }
-    let literals = || with_infer(ws, doc, |infer| literal_items(infer, call, arg_index, range));
+    let quote = if token.span.text(&doc.text).starts_with('"') { '"' } else { '\'' };
+    let literals = || with_infer(ws, doc, |infer| literal_items(infer, call, arg_index, range, quote));
     let Some(path) = path else { return literals() };
     let path = path.as_str();
     if arg_index == 0 && matches!(path, "lib.onCache") {
@@ -861,7 +882,7 @@ fn argument_literals(
 }
 
 /// The string values that the parameter of a string argument lists, each replacing its contents.
-fn literal_items(infer: &Infer, call: &Expr, arg_index: usize, range: Range) -> Vec<CompletionItem> {
+fn literal_items(infer: &Infer, call: &Expr, arg_index: usize, range: Range, quote: char) -> Vec<CompletionItem> {
     let (base, method, args) = match &call.kind {
         ExprKind::Call { callee, args, .. } => (callee.as_ref(), None, args),
         ExprKind::MethodCall { base, method, args, .. } => (base.as_ref(), Some(method), args),
@@ -875,8 +896,11 @@ fn literal_items(infer: &Infer, call: &Expr, arg_index: usize, range: Range) -> 
         .enumerate()
         .map(|(i, literal)| {
             let mut out = literal.item(i, &literal.value);
+            let value = escaped_string(&literal.value, quote);
             if range.start.line == range.end.line {
-                out.text_edit = Some(TextEdit { range, new_text: literal.value.to_string() }.into());
+                out.text_edit = Some(TextEdit { range, new_text: value }.into());
+            } else {
+                out.insert_text = Some(value);
             }
             out
         })

@@ -250,7 +250,7 @@ impl<'a, 'b> Classes<'a, 'b> {
         }
         let defs = self.class_defs(class, from);
         for (file, def) in &defs {
-            for (key, value) in &def.literal_fields {
+            for (key, value) in def.literal_fields(self.infer.side()) {
                 if !out.iter().any(|(seen, ..)| seen == key) {
                     out.push((key.clone(), value.clone(), *file));
                 }
@@ -328,7 +328,7 @@ impl<'a, 'b> Classes<'a, 'b> {
             return None;
         }
         let defs = self.class_defs(class, from);
-        let own = defs.iter().find_map(|(file, def)| match &def.index {
+        let own = defs.iter().find_map(|(file, def)| match def.index(self.infer.side()) {
             Some((index_key, value)) if self.takes(index_key, *file, key) => Some((value.clone(), *file)),
             _ => None,
         });
@@ -767,6 +767,7 @@ impl<'c> Visitor<'c> for Finder<'_, '_, 'c> {
         };
         if let Some((base, method, args)) = call.filter(|(_, _, args)| args.iter().any(is_table)) {
             if let Some((fun, _)) = self.classes.infer.callee_fun(base, method) {
+                let fun = self.classes.infer.call_signature(&fun, args, method.is_some(), base.span.start);
                 let (skip_params, skip_args) = fun.call_offsets(method.is_some());
                 for (param, arg) in fun.params.iter().skip(skip_params).zip(args.iter().skip(skip_args)) {
                     self.top_table(&param.ty, arg);
