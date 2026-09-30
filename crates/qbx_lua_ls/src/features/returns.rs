@@ -24,7 +24,7 @@ pub fn mismatched_returns(infer: &Infer, chunk: &Chunk) -> Vec<(Span, String)> {
     let mut out = Vec::new();
     for function in documented(infer, chunk) {
         for (_, exprs) in return_stmts(&function.func.body) {
-            let values = returned_values(infer, &classes, exprs);
+            let values = classes.values(exprs);
             out.extend(mismatches(&classes, function.closest(&classes, exprs, &values), &values));
         }
     }
@@ -74,7 +74,7 @@ pub fn missing_returns(infer: &Infer, chunk: &Chunk) -> Vec<(Span, String)> {
             let required = match sets.is_empty() {
                 true => required,
                 false => {
-                    let values = returned_values(infer, &classes, exprs);
+                    let values = classes.values(exprs);
                     required_values(&classes, function.closest(&classes, exprs, &values))
                 }
             };
@@ -124,19 +124,6 @@ fn expected_at(returns: &[Type], index: usize) -> Option<&Type> {
             _ => None,
         },
     }
-}
-
-/// The values one `return` passes with where each is written, the last spread when it is a call.
-fn returned_values(infer: &Infer, classes: &Classes, exprs: &[Expr]) -> Vec<(Type, Span)> {
-    let mut values = Vec::new();
-    for (i, expr) in exprs.iter().enumerate() {
-        if i + 1 == exprs.len() && expr.is_call() {
-            values.extend(infer.expr_multi(expr).into_iter().map(|ty| (ty, expr.span)));
-        } else {
-            values.push((classes.value_type(expr), expr.span));
-        }
-    }
-    values
 }
 
 /// A function documented with `@return`.
