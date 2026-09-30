@@ -1,5 +1,10 @@
 # Contributing
 
+This repository accepts changes to both `qbx-lint` and `qbx-lua-ls`, including their shared
+parser, formatter, analysis and FiveM data. The former standalone server repository is archived;
+use this repository for language-server issues and pull requests. Editor adapters remain in
+[qbx-editor](https://github.com/Qbox-project/qbx-editor).
+
 Use a stable Rust toolchain with `rustfmt` and `clippy`. From the repository root:
 
 ```sh
@@ -98,9 +103,13 @@ ordinary tests use the checked-in data.
 
 ## Reporting a bug
 
-Include `qbx-lint --version`, your platform, the command you ran, expected and actual output,
-and a minimal Lua example. Include the manifest and relevant `qbxlint.toml` settings when the
-problem depends on imports, side selection, or resource layout.
+Report linter, formatter and language-server bugs in
+[this repository](https://github.com/Qbox-project/qbx-lint/issues). Include the affected tool
+and its version (`qbx-lint --version` or `qbx-lua-ls --version`), your platform, expected and actual
+behavior, and a minimal Lua example. For CLI bugs, include the command you ran. For LSP bugs,
+include the editor/LSP client, settings, server logs and the editor action that triggered the
+problem. Include the manifest and relevant `qbxlint.toml` settings when the problem depends on
+imports, side selection, or resource layout.
 
 For a pull request, explain the resulting behavior and the checks you ran. Keep generated-data
 updates identifiable in the diff. Release notes are generated from commit messages, so write them as [Conventional Commits](https://www.conventionalcommits.org).

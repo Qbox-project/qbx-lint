@@ -1,11 +1,11 @@
 name: Bug report
-description: Report a problem with the tool.
+description: Report a problem with the linter, formatter, or language server.
 body:
   - type: textarea
     id: environment
     attributes:
       label: Version and environment
-      description: Include the tool version, operating system, and editor if relevant.
+      description: Name the affected tool (qbx-lint or qbx-lua-ls), its version, your operating system, and your editor/LSP client if relevant.
     validations:
       required: true
   - type: textarea

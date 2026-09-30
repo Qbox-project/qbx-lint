@@ -1,37 +1,67 @@
-# qbx-lint
+# Qbox Lua tooling (qbx-lint)
 
-A Lua linter and formatter for FiveM resources. It parses CfxLua syntax, reads resource manifests,
-and checks code against bundled native definitions, runtime globals, and client/server context.
+This repository contains a **Lua linter, formatter, and language server for FiveM**. Both tools
+share the same CfxLua parser, formatting engine, analysis rules and bundled FiveM data. They read
+resource manifests to understand imports and client/server context.
 
-It reports Lua mistakes, missing manifest imports, event and export mismatches, and common Qbox
-patterns. The same workspace contains the parser, formatter, analysis crates and
-[qbx-lua-ls](crates/qbx_lua_ls), the server behind the
-[Qbox Lua editor integrations](https://github.com/Qbox-project/qbx-editor).
+| Tool | What it does | Guide |
+| --- | --- | --- |
+| `qbx-lint` | Lints and formats files from the command line or CI, with reports and automatic fixes. | [CLI usage](#use) |
+| `qbx-lua-ls` | Provides editor diagnostics, completion, hover, navigation, rename, quick fixes and formatting over LSP. | [Language server and editors](#language-server-and-editors) |
 
-Shared analysis and language-server changes can be developed and tested in one pull request.
-See the [language-server guide](crates/qbx_lua_ls/README.md) for features and setup, and the
-[migration notes](docs/repository-migration.md) for Git history and release compatibility.
+The former `Qbox-project/qbx-lua-ls` repository was merged into
+[`crates/qbx_lua_ls`](crates/qbx_lua_ls). From **v1.0.5**, releases here contain both executables;
+the original commits, authors and historical tags are preserved. See the
+[migration notes](docs/repository-migration.md) for what moved and where to contribute.
+
+Editor adapters remain in [qbx-editor](https://github.com/Qbox-project/qbx-editor). Shared
+analysis and language-server changes can now be developed and tested in one pull request here.
 
 ## Install
 
-Build from a checkout with a stable Rust toolchain and Cargo:
+### Download binaries
+
+Download the archive for your platform from the
+[releases page](https://github.com/Qbox-project/qbx-lint/releases): choose `qbx-lint-<target>` for
+the CLI or `qbx-lua-ls-<target>` for the language server. Each archive contains one executable
+and its license. Extract the executable and put it on your `PATH`, or configure its absolute
+path in your editor. `SHA256SUMS` contains checksums for both tools.
+
+Both tools are available for Windows x64, Linux x64/ARM64 (musl), and macOS x64/ARM64.
+The [Qbox Lua VS Code extension](https://marketplace.visualstudio.com/items?itemName=Qbox.qbx-lua)
+bundles the server, so VS Code users can install the extension directly.
+
+### Build from source
+
+Use a stable Rust toolchain and Cargo. One checkout contains everything needed for both tools:
 
 ```sh
 git clone https://github.com/Qbox-project/qbx-lint.git
 cd qbx-lint
+
+# Install either or both tools.
 cargo install --path crates/qbx_lint --locked --profile lint-release
+cargo install --path crates/qbx_lua_ls --locked
+
 qbx-lint --version
+qbx-lua-ls --version
 ```
 
 Cargo installs the executable into its `bin` directory, which must be on your `PATH`.
-For a local build without installation, run `cargo build --profile lint-release --locked -p qbx_lint`.
-The executable is then in `target/lint-release` (`qbx-lint.exe` on Windows).
+For local builds without installation, run these commands separately from the workspace root:
 
-Download the archive for your platform from the
-[releases page](https://github.com/Qbox-project/qbx-lint/releases), extract it, and put the
-executable on your `PATH`.
+```sh
+cargo build --profile lint-release --locked -p qbx_lint
+cargo build --release --locked -p qbx_lua_ls
+```
+
+The CLI is in `target/lint-release/qbx-lint` and the server is in `target/release/qbx-lua-ls`
+(add `.exe` on Windows). The separate profiles preserve the CLI's abort-on-panic behavior and
+the server's request recovery; see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Use
+
+### Command-line linter and formatter
 
 Run these commands from your resource or server checkout:
 
@@ -64,7 +94,31 @@ fails if a source file cannot be formatted. The formatter verifies tokens and co
 writing. Both formatting and automatic fixes reject non-UTF-8 source; escrow, binary and
 obfuscated files are skipped.
 
+## Language server and editors
+
+`qbx-lua-ls` provides:
+
+- Diagnostics and quick fixes using the same rules as the CLI, with resource and client/server context.
+- Completion, hover and signature help for Lua symbols, FiveM natives, exports, events and LuaCATS annotations.
+- Definitions, references, rename, semantic tokens and inlay hints.
+- Whole-document formatting using the shared `qbxlint.toml` settings.
+
+For VS Code, install [Qbox Lua](https://marketplace.visualstudio.com/items?itemName=Qbox.qbx-lua)
+and open a resource folder or your server's `resources` folder. The extension includes the server.
+For Zed, Neovim, Helix and other LSP clients, see the
+[editor setup guide](https://github.com/Qbox-project/qbx-editor/blob/main/docs/editors.md).
+
+The server communicates over standard input and output using the Language Server Protocol.
+An editor starts `qbx-lua-ls` without arguments; `--version` checks the installed version.
+It does not need a running FiveM server. See the [server guide](crates/qbx_lua_ls/README.md)
+for the full feature list and limits, and the
+[LSP configuration and protocol reference](crates/qbx_lua_ls/docs/protocol.md) for client settings.
+
 ## Configure
+
+Both the CLI and language server use `qbxlint.toml` for lint rules and formatting.
+The language server also accepts editor settings for library paths, diagnostics, inlay hints
+and semantic tokens; see its [configuration guide](crates/qbx_lua_ls/README.md#configuration).
 
 The CLI searches upward from the first input path for `qbxlint.toml` or `.qbxlint.toml`.
 Use `--config path/to/qbxlint.toml` to select a file explicitly. Paths in configuration patterns
@@ -117,6 +171,11 @@ data, not a live lookup. Security rules flag patterns for review; a clean report
 that a resource is secure. Review automatic edits and test resource behavior in FiveM.
 
 ## Contribute
+
+Report linter, formatter, shared analysis and language-server bugs in
+[this repository's issues](https://github.com/Qbox-project/qbx-lint/issues), and submit changes
+here. Editor adapter and UI issues belong in
+[qbx-editor](https://github.com/Qbox-project/qbx-editor/issues).
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the crate layout, checks, and data generation commands.
 Release notes are on the [releases page](https://github.com/Qbox-project/qbx-lint/releases).

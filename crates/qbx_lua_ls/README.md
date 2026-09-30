@@ -1,8 +1,15 @@
 # qbx-lua-ls
 
-A language server for FiveM Lua. It reads `fxmanifest.lua` to resolve resource imports and
-client/server scripts, uses LuaCATS annotations for editor help, and provides diagnostics from
-[qbx-lint](https://github.com/Qbox-project/qbx-lint).
+The FiveM Lua language server included in the [Qbox Lua tooling workspace](../../README.md).
+It lives in `crates/qbx_lua_ls` alongside the `qbx-lint` CLI and their shared parser, formatter,
+analysis and FiveM data crates. It reads `fxmanifest.lua` to resolve resource imports and
+client/server scripts, uses LuaCATS annotations for editor help, and provides the same lint
+rules as the CLI.
+
+The former standalone `Qbox-project/qbx-lua-ls` repository is archived. Development, issues,
+pull requests and releases for both tools now live in
+[Qbox-project/qbx-lint](https://github.com/Qbox-project/qbx-lint). The original Git history is
+preserved; see [what moved and how](../../docs/repository-migration.md).
 
 The server communicates over standard input and output using the Language Server Protocol
 (LSP). Editor integrations and setup instructions live in
@@ -61,7 +68,9 @@ See the [convention and maintenance notes](docs/framework-callbacks.md) for sour
 
 ## Build and run
 
-Download the archive for your platform from [Releases](https://github.com/Qbox-project/qbx-lint/releases).
+Download the `qbx-lua-ls-<target>` archive for your platform from the
+[shared releases](https://github.com/Qbox-project/qbx-lint/releases). These releases also
+contain `qbx-lint-<target>` CLI archives; choose the server archive for an LSP client.
 Archives cover Windows x64, Linux x64/ARM64 (musl), and macOS x64/ARM64. You can also build
 from source using the steps below.
 
@@ -73,6 +82,9 @@ git clone https://github.com/Qbox-project/qbx-lint.git
 cd qbx-lint
 cargo build --release --locked -p qbx_lua_ls
 ```
+
+To install the server on `PATH` with Cargo instead, run
+`cargo install --path crates/qbx_lua_ls --locked` from the workspace root.
 
 The executable is `target/release/qbx-lua-ls`, or `target/release/qbx-lua-ls.exe` on Windows.
 Put it on `PATH`, or configure its absolute path in your editor. Start it without arguments for
