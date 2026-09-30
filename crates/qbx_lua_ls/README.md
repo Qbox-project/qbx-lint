@@ -42,7 +42,8 @@ Available features depend on the editor's LSP client.
   [sets of values](#sets-of-returned-values) such as `false | (string, string)`.
 - Diagnostics and quick fixes with resource and client/server context, plus LuaCATS type checks:
   `missing-fields` and `assign-type-mismatch` for tables and assignments that leave out required
-  fields of their class or store a value of the wrong type, `undeclared-field` for fields and keys
+  fields of their class or store a value of the wrong type, in a field or in a variable typed with
+  `---@type` or `@param`, `undeclared-field` for fields and keys
   a `---@class (strict)` does not declare, and `return-type-mismatch` and `missing-return` for
   functions, including callback handlers, that do not return what their `@return` declares.
   `impossible-comparison` reports an `==` or `~=` between values whose declared types share no

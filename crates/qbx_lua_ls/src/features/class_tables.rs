@@ -360,6 +360,20 @@ impl<'a, 'b> Classes<'a, 'b> {
         self.infer.expr(expr)
     }
 
+    /// The values that `exprs` give a `return` or an assignment, with where each is written. A call
+    /// at the end gives every value it returns.
+    pub fn values(&self, exprs: &[Expr]) -> Vec<(Type, Span)> {
+        let mut values = Vec::new();
+        for (i, expr) in exprs.iter().enumerate() {
+            if i + 1 == exprs.len() && expr.is_call() {
+                values.extend(self.infer.expr_multi(expr).into_iter().map(|ty| (ty, expr.span)));
+            } else {
+                values.push((self.value_type(expr), expr.span));
+            }
+        }
+        values
+    }
+
     /// Whether a field of type `ty` may be left out: `string?`, `string|nil`, `any` or no type.
     pub fn admits_nil(&self, ty: &Type, from: FileId) -> bool {
         self.admits_nil_at(ty, from, 0)

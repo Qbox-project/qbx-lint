@@ -1,3 +1,4 @@
+pub mod assignments;
 pub mod assistant;
 pub mod callback_payloads;
 pub mod class_tables;

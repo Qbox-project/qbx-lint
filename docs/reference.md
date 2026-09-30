@@ -365,6 +365,33 @@ assigned again after its declaration, since its declared type may not be what it
 applies to the values `assign-type-mismatch` checks, where `nil` is a value like any other:
 `abc.field = nil` needs a field type that allows it, such as `string?` or `string|nil`.
 
+## Typed variables
+
+`assign-type-mismatch` also covers variables whose type is declared. A `local` or an assignment
+with a `---@type` above it has to store values of that type, and so does every later assignment to
+a local declared with `---@type` or to a parameter documented with `@param`:
+
+```lua
+---@alias State 1 | 2 | 3 | false | true
+
+---@type State
+local state = "test" -- Cannot assign `"test"` to `state` of type `State`
+
+state = "abc"        -- Cannot assign `"abc"` to `state` of type `State`
+state = nil          -- Cannot assign `nil` to `state` of type `State`
+```
+
+The check is that of `return-type-mismatch`: a different kind of value, or a literal the type does
+not list. A local is compared with the type it is declared with, not with what the guards around
+the assignment narrow it to, so `name = "x"` inside `if not name then` passes for a `string?`. A
+`local` declared without a value is not reported, while `= nil` needs a type that allows it. A call
+at the end of the values gives each name the value it returns at that position.
+
+A `---@type` line that lists several types gives each name of the statement its own, as
+`---@type boolean, string?` does above `local ok, err = pcall(...)`; one type covers every name.
+Locals without a `---@type`, whose type is inferred from what they hold, take any value, and so do
+globals in assignments that have no `---@type` above them.
+
 ## Impossible comparisons
 
 `impossible-comparison` reports an `==` or `~=` whose two sides can never be equal, so that the

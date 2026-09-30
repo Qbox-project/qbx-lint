@@ -2825,6 +2825,94 @@ for i = 1, 2 do print(tuple[i]) end
 }
 
 #[test]
+fn values_assigned_to_typed_variables_are_checked() {
+    let mut client = Client::start(fixture_root());
+    let text = "\
+---@alias Test.State 1 | 2 | 3 | false | true
+
+---@type Test.State
+local state = 'test'
+state = 'abc'
+state = 2
+state = 4
+state = nil
+
+---@type Test.State?
+local maybe = nil
+if not maybe then maybe = 1 end
+maybe = {}
+
+---@type string
+local unset
+unset = 'later'
+
+---@type 'a'|'b'
+local letter = 'c'
+letter = state
+
+---@class Test.Holder
+---@field name string
+local Holder = {}
+Holder = nil
+
+---@type Test.Holder
+local holder = { name = 'a' }
+---@type number
+holder.name = true
+---@type string
+holder.label = 5
+---@type string
+TestLabel = false
+
+---@return string, integer
+local function pair() return 'a', 1 end
+---@type string
+local first, second = pair()
+---@type string, integer?
+local name, count, extra = pair()
+name, count, extra = 1, 'two', 3
+
+---@param id number
+---@param label? string
+local function show(id, label, other)
+    id = tostring(id)
+    label = label or 'none'
+    label = nil
+    other = 1
+end
+
+local plain = 1
+plain = 'text'
+";
+    client.open_with(CLIENT, text);
+    let finding = |needle: &str, message: &str| {
+        ("assign-type-mismatch".to_string(), pos(text, needle, 0).0 as u64, message.to_string())
+    };
+    assert_eq!(
+        findings(&mut client, CLIENT, &["assign-type-mismatch"]),
+        [
+            finding("local state", "Cannot assign `\"test\"` to `state` of type `Test.State`"),
+            finding("state = 'abc'", "Cannot assign `\"abc\"` to `state` of type `Test.State`"),
+            finding("state = 4", "Cannot assign `4` to `state` of type `Test.State`"),
+            finding("state = nil", "Cannot assign `nil` to `state` of type `Test.State`"),
+            finding("maybe = {}", "Cannot assign `table` to `maybe` of type `Test.State?`"),
+            finding("local letter", "Cannot assign `\"c\"` to `letter` of type `\"a\"|\"b\"`"),
+            // The `@field` decides what a class field takes, and reports it once.
+            finding("holder.name = true", "Cannot assign `boolean` to field `name` of type `string`"),
+            finding("holder.label = 5", "Cannot assign `integer` to `holder.label` of type `string`"),
+            finding("TestLabel = false", "Cannot assign `boolean` to `TestLabel` of type `string`"),
+            finding("second = pair()", "Cannot assign `integer` to `second` of type `string`"),
+            // A list of types gives each name its own, and the names after it none.
+            finding("name, count, extra = 1", "Cannot assign `integer` to `name` of type `string`"),
+            finding("name, count, extra = 1", "Cannot assign `string` to `count` of type `integer?`"),
+            finding("id = tostring(id)", "Cannot assign `string` to `id` of type `number`"),
+        ],
+        "values the type takes, a guarded local, a local without a value, a reassigned local as the value, \
+         the table a `---@class` declares, optional and undocumented parameters and untyped locals pass"
+    );
+}
+
+#[test]
 fn literal_keyed_class_fields_type_their_own_keys() {
     let mut client = Client::start(fixture_root());
     let text = "\

@@ -14,8 +14,9 @@ use qbx_lua_analysis::{
 use qbx_lua_syntax::Span;
 use serde::{Deserialize, Serialize};
 
+use super::assignments::mismatched_assignments;
 use super::callback_payloads::missing_payloads;
-use super::class_tables::{mismatched_fields, missing_fields};
+use super::class_tables::missing_fields;
 use super::comparisons::impossible_comparisons;
 use super::doc_names::undefined_doc_names;
 use super::returns::{mismatched_returns, missing_returns};
@@ -59,7 +60,7 @@ fn type_diagnostics(ws: &Workspace, doc: &Document, config: &FileConfig) -> Vec<
             undefined_doc_names(&ws.index, &doc.text, &doc.chunk, side)
         }),
         (MISSING_FIELDS, |ws, doc| with_infer(ws, doc, |infer| missing_fields(infer, &doc.chunk))),
-        (ASSIGN_TYPE_MISMATCH, |ws, doc| with_infer(ws, doc, |infer| mismatched_fields(infer, &doc.chunk))),
+        (ASSIGN_TYPE_MISMATCH, |ws, doc| with_infer(ws, doc, |infer| mismatched_assignments(infer, &doc.chunk))),
         (UNDECLARED_FIELD, |ws, doc| {
             // Without a strict class there is nothing to find, so no assignment needs its type inferred.
             if !ws.lint_config.strict_classes && !ws.index.has_strict_class() {
