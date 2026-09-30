@@ -1,6 +1,6 @@
 # qbx-lua-ls
 
-The FiveM Lua language server included in the [Qbox Lua tooling workspace](../../README.md).
+The FiveM Lua language server included in the [qbx-lua tooling workspace](../../README.md).
 It lives in `crates/qbx_lua_ls` alongside the `qbx-lint` CLI and their shared parser, formatter,
 analysis and FiveM data crates. It reads `fxmanifest.lua` to resolve resource imports and
 client/server scripts, uses LuaCATS annotations for editor help, and provides the same lint
@@ -8,7 +8,7 @@ rules as the CLI.
 
 The former standalone `Qbox-project/qbx-lua-ls` repository is archived. Development, issues,
 pull requests and releases for both tools now live in
-[Qbox-project/qbx-lint](https://github.com/Qbox-project/qbx-lint). The original Git history is
+[Qbox-project/qbx-lua](https://github.com/Qbox-project/qbx-lua). The original Git history is
 preserved; see [what moved and how](../../docs/repository-migration.md).
 
 The server communicates over standard input and output using the Language Server Protocol
@@ -69,7 +69,7 @@ See the [convention and maintenance notes](docs/framework-callbacks.md) for sour
 ## Build and run
 
 Download the `qbx-lua-ls-<target>` archive for your platform from the
-[shared releases](https://github.com/Qbox-project/qbx-lint/releases). These releases also
+[shared releases](https://github.com/Qbox-project/qbx-lua/releases). These releases also
 contain `qbx-lint-<target>` CLI archives; choose the server archive for an LSP client.
 Archives cover Windows x64, Linux x64/ARM64 (musl), and macOS x64/ARM64. You can also build
 from source using the steps below.
@@ -78,8 +78,8 @@ Install stable Rust and clone the shared tooling workspace. The server uses the 
 formatter, analysis and FiveM data crates from the same checkout.
 
 ```sh
-git clone https://github.com/Qbox-project/qbx-lint.git
-cd qbx-lint
+git clone https://github.com/Qbox-project/qbx-lua.git
+cd qbx-lua
 cargo build --release --locked -p qbx_lua_ls
 ```
 
@@ -133,7 +133,7 @@ and custom requests.
   that an event handler or resource is secure.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development checks and the
-[releases page](https://github.com/Qbox-project/qbx-lint/releases) for release notes.
+[releases page](https://github.com/Qbox-project/qbx-lua/releases) for release notes.
 
 ## License
 

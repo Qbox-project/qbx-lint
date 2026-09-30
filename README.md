@@ -1,6 +1,6 @@
-# Qbox Lua tooling (qbx-lint)
+# qbx-lua
 
-This repository contains a **Lua linter, formatter, and language server for FiveM**. Both tools
+**Qbox Lua (`qbx-lua`)** provides a **Lua linter, formatter, and language server for FiveM**. Both tools
 share the same CfxLua parser, formatting engine, analysis rules and bundled FiveM data. They read
 resource manifests to understand imports and client/server context.
 
@@ -17,12 +17,16 @@ the original commits, authors and historical tags are preserved. See the
 Editor adapters remain in [qbx-editor](https://github.com/Qbox-project/qbx-editor). Shared
 analysis and language-server changes can now be developed and tested in one pull request here.
 
+This repository was formerly named `qbx-lint`. Its new name describes the whole tooling suite;
+the executable names remain `qbx-lint` and `qbx-lua-ls`. Existing GitHub links and Git remotes
+redirect to `qbx-lua`; GitHub Action users must update their `uses:` address as shown below.
+
 ## Install
 
 ### Download binaries
 
 Download the archive for your platform from the
-[releases page](https://github.com/Qbox-project/qbx-lint/releases): choose `qbx-lint-<target>` for
+[releases page](https://github.com/Qbox-project/qbx-lua/releases): choose `qbx-lint-<target>` for
 the CLI or `qbx-lua-ls-<target>` for the language server. Each archive contains one executable
 and its license. Extract the executable and put it on your `PATH`, or configure its absolute
 path in your editor. `SHA256SUMS` contains checksums for both tools.
@@ -36,8 +40,8 @@ bundles the server, so VS Code users can install the extension directly.
 Use a stable Rust toolchain and Cargo. One checkout contains everything needed for both tools:
 
 ```sh
-git clone https://github.com/Qbox-project/qbx-lint.git
-cd qbx-lint
+git clone https://github.com/Qbox-project/qbx-lua.git
+cd qbx-lua
 
 # Install either or both tools.
 cargo install --path crates/qbx_lint --locked --profile lint-release
@@ -149,19 +153,23 @@ See the [configuration and analysis reference](docs/reference.md), the
 
 ## GitHub Actions
 
-Add the action to your workflow:
+Use the suite's lint action in your workflow:
 
 ```yaml
 - uses: actions/checkout@v4
-- uses: Qbox-project/qbx-lint@v1.0.5
+- uses: Qbox-project/qbx-lua@v1.0.6
   with:
-    version: v1.0.5
+    version: v1.0.6
     paths: .
     args: --max-warnings 0
 ```
 
 The action emits GitHub annotations and writes a SARIF report. See
 [examples/lint.yml](examples/lint.yml) and [action.yml](action.yml) for its inputs and output.
+
+If you previously used `Qbox-project/qbx-lint@...`, change it to
+`Qbox-project/qbx-lua@v1.0.6`. GitHub does not redirect Action references after repository renames;
+see the [migration notes](docs/repository-migration.md#repository-rename-and-github-action).
 
 ## Limits
 
@@ -173,12 +181,12 @@ that a resource is secure. Review automatic edits and test resource behavior in 
 ## Contribute
 
 Report linter, formatter, shared analysis and language-server bugs in
-[this repository's issues](https://github.com/Qbox-project/qbx-lint/issues), and submit changes
+[this repository's issues](https://github.com/Qbox-project/qbx-lua/issues), and submit changes
 here. Editor adapter and UI issues belong in
 [qbx-editor](https://github.com/Qbox-project/qbx-editor/issues).
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the crate layout, checks, and data generation commands.
-Release notes are on the [releases page](https://github.com/Qbox-project/qbx-lint/releases).
+Release notes are on the [releases page](https://github.com/Qbox-project/qbx-lua/releases).
 
 ## License
 
