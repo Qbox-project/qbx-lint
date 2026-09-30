@@ -4,9 +4,10 @@
 import { spawn } from 'node:child_process';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
-const [workspace, binary = 'target/release/qbx-lua-ls', perFile = '25'] = process.argv.slice(2);
+const defaultBinary = fileURLToPath(new URL(`../../../target/release/qbx-lua-ls${process.platform === 'win32' ? '.exe' : ''}`, import.meta.url));
+const [workspace, binary = defaultBinary, perFile = '25'] = process.argv.slice(2);
 if (!workspace) {
     console.error('usage: node scripts/stress.mjs <workspace-dir> [server-binary] [positions-per-file]');
     process.exit(2);

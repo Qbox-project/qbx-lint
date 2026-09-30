@@ -3,9 +3,10 @@
 import { spawn, execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
-const [workspace, fileToOpen, binary = 'target/release/qbx-lua-ls'] = process.argv.slice(2);
+const defaultBinary = fileURLToPath(new URL(`../../../target/release/qbx-lua-ls${process.platform === 'win32' ? '.exe' : ''}`, import.meta.url));
+const [workspace, fileToOpen, binary = defaultBinary] = process.argv.slice(2);
 if (!workspace) {
     console.error('usage: node scripts/bench.mjs <workspace-dir> [file-to-open] [server-binary]');
     process.exit(2);

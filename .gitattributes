@@ -1,4 +1,5 @@
 * text=auto eol=lf
 *.tsv text eol=lf
+*.lua text eol=lf
 **/escrowed.lua binary
 **/encrypted.lua binary

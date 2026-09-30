@@ -2,28 +2,30 @@
 
 ## Set up
 
-Install stable Rust. Keep this checkout beside
-[qbx-lint](https://github.com/Qbox-project/qbx-lint), which provides the parser, formatter,
-analysis and FiveM data crates through local path dependencies:
+Install stable Rust and clone [qbx-lint](https://github.com/Qbox-project/qbx-lint). The language
+server is a member of the same Cargo workspace as the parser, formatter, analysis and FiveM data
+crates:
 
 ```text
-work/
-  qbx-lint/
-  qbx-lua-ls/
+qbx-lint/
+  Cargo.toml
+  crates/
+    qbx_lua_ls/
+    qbx_lua_analysis/
+    ...
 ```
 
-From `qbx-lua-ls`, build with `cargo build --locked`. If a change needs shared parser or lint
-behavior, make the corresponding change in `qbx-lint` and mention both changes in the pull
-request. Keep the path dependencies intact.
+From the workspace root, build with `cargo build --locked -p qbx_lua_ls`. If a change needs shared
+parser or lint behavior, include those crate changes in the same pull request.
 
 ## Check changes
 
-Run these commands from this repository before submitting a pull request:
+Run these commands from the workspace root before submitting a pull request:
 
 ```sh
-cargo fmt --check
-cargo clippy --locked --all-targets -- -D warnings
-cargo test --locked
+cargo fmt --all --check
+cargo clippy --workspace --locked --all-targets -- -D warnings
+cargo test --workspace --locked
 ```
 
 Use `cargo fmt` to apply formatting. Add a regression test when fixing a bug, using a small Lua
@@ -38,8 +40,8 @@ protocol behavior. Editor integration code belongs in
 For manual inspection, build the executable and use the probe script:
 
 ```sh
-cargo build --release --locked
-node scripts/probe.mjs <workspace> <virtual-file> <server-executable> < snippet.lua
+cargo build --release --locked -p qbx_lua_ls
+node crates/qbx_lua_ls/scripts/probe.mjs <workspace> <virtual-file> <server-executable> < snippet.lua
 ```
 
 `probe.mjs` requires Node.js. It opens the supplied text as a document and prints completions

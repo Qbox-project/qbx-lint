@@ -61,18 +61,17 @@ See the [convention and maintenance notes](docs/framework-callbacks.md) for sour
 
 ## Build and run
 
-Download the archive for your platform from [Releases](https://github.com/Qbox-project/qbx-lua-ls/releases).
+Download the archive for your platform from [Releases](https://github.com/Qbox-project/qbx-lint/releases).
 Archives cover Windows x64, Linux x64/ARM64 (musl), and macOS x64/ARM64. You can also build
 from source using the steps below.
 
-Install stable Rust and keep these repositories next to each other. The server currently uses
-local path dependencies from `qbx-lint`.
+Install stable Rust and clone the shared tooling workspace. The server uses the parser,
+formatter, analysis and FiveM data crates from the same checkout.
 
 ```sh
 git clone https://github.com/Qbox-project/qbx-lint.git
-git clone https://github.com/Qbox-project/qbx-lua-ls.git
-cd qbx-lua-ls
-cargo build --release --locked
+cd qbx-lint
+cargo build --release --locked -p qbx_lua_ls
 ```
 
 The executable is `target/release/qbx-lua-ls`, or `target/release/qbx-lua-ls.exe` on Windows.
@@ -122,7 +121,7 @@ and custom requests.
   that an event handler or resource is secure.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development checks and the
-[releases page](https://github.com/Qbox-project/qbx-lua-ls/releases) for release notes.
+[releases page](https://github.com/Qbox-project/qbx-lint/releases) for release notes.
 
 ## License
 

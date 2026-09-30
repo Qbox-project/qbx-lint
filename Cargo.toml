@@ -6,6 +6,7 @@ members = [
     "crates/qbx_lua_analysis",
     "crates/qbx_fivem_data",
     "crates/qbx_lint",
+    "crates/qbx_lua_ls",
     "xtask",
 ]
 default-members = [
@@ -14,6 +15,7 @@ default-members = [
     "crates/qbx_lua_analysis",
     "crates/qbx_fivem_data",
     "crates/qbx_lint",
+    "crates/qbx_lua_ls",
 ]
 
 [workspace.package]
@@ -35,4 +37,8 @@ opt-level = 3
 lto = "fat"
 codegen-units = 1
 strip = true
+
+# LSP requests recover from panics, so the server must keep unwinding enabled.
+[profile.lint-release]
+inherits = "release"
 panic = "abort"
