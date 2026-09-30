@@ -118,6 +118,7 @@ impl DocGroup {
             params,
             returns: self.returns.iter().map(|r| r.ty.clone()).collect(),
             return_sets: self.return_sets.clone(),
+            returns_inferred: false,
             is_method,
             lists_receiver: !is_method,
             generics: self.generics.clone(),

@@ -2463,6 +2463,98 @@ end)
 }
 
 #[test]
+fn comparisons_of_types_that_share_no_value_are_reported() {
+    let mut client = Client::start(fixture_root());
+    let text = "\
+---@alias Probe.DoorState 'open'|'closed'
+
+---@class Probe.Door
+---@field state Probe.DoorState
+---@field count integer
+
+---@return 'active'|'busy'|'ready'
+local function GetState()
+    return 'active'
+end
+
+---@return boolean
+local function IsReady()
+    return true
+end
+
+local function guess()
+    return 'a'
+end
+
+Settings = {}
+Settings.Webhook = ''
+
+---@param door Probe.Door
+---@param name string
+---@param id integer
+---@param extra string?
+local function check(door, name, id, extra, untyped)
+    if GetState() == 'invalid_state' then return end
+    if GetState() ~= 'invalid_state' then return end
+    if GetState() == 5 then return end
+    local state = GetState()
+    if state == 'invalid_state' then return end
+    if door.state == 'ajar' then return end
+    if door.count == '3' then return end
+    if name == id then return end
+    if extra == 5 then return end
+    if not name == 'x' then return end
+    if type(door) == 'tabel' then return end
+    if GetEntityModel(id) == 'adder' then return end
+    local ready = IsReady()
+    if ready then
+        if ready == false then return end
+    end
+
+    if GetState() == 'busy' or door.state == 'open' or type(door) == 'vector3' then return end
+    if name == nil or extra == nil or nil ~= id then return end
+    if untyped == 5 or (untyped or 'a') == 5 then return end
+    local mode = 'dev'
+    if mode == 'prod' then return end
+    local current = GetState()
+    current = 'other'
+    if current == 'invalid_state' then return end
+    if guess() == 5 or Settings.Webhook == false then return end
+    local isCamActive = IsCamActive
+    if IsPedInAnyVehicle(id, false) == 1 or isCamActive(id) == 1 then return end
+    ---@diagnostic disable-next-line: impossible-comparison
+    if GetState() == 'suppressed' then return end
+end
+check()
+";
+    client.open_with(CLIENT, text);
+    let line = |needle: &str| pos(text, needle, 0).0 as u64;
+    let finding =
+        |needle: &str, message: &str| ("impossible-comparison".to_string(), line(needle), message.to_string());
+    let state = "`\"active\"|\"busy\"|\"ready\"`";
+    assert_eq!(
+        findings(&mut client, CLIENT, &["impossible-comparison"]),
+        [
+            finding("GetState() == 'inv", &format!("Comparing {state} with `\"invalid_state\"` is always false")),
+            finding("GetState() ~= 'inv", &format!("Comparing {state} with `\"invalid_state\"` is always true")),
+            finding("GetState() == 5", &format!("Comparing {state} with `5` is always false")),
+            // A local holds what the call that declares it returned.
+            finding("state == 'inv", &format!("Comparing {state} with `\"invalid_state\"` is always false")),
+            finding("door.state == 'ajar'", "Comparing `Probe.DoorState` with `\"ajar\"` is always false"),
+            finding("door.count == '3'", "Comparing `integer` with `\"3\"` is always false"),
+            finding("name == id", "Comparing `string` with `integer` is always false"),
+            finding("extra == 5", "Comparing `string?` with `5` is always false"),
+            finding("not name == 'x'", "Comparing `boolean` with `\"x\"` is always false"),
+            finding("'tabel'", "Comparing `lua_type` with `\"tabel\"` is always false"),
+            finding("'adder'", "Comparing `Hash` with `\"adder\"` is always false"),
+            // The guard around it leaves `ready` only `true`.
+            finding("ready == false", "Comparing `true` with `false` is always false"),
+        ],
+        "values the types share, `nil`, and types that are only inferred from values are left alone"
+    );
+}
+
+#[test]
 fn rule_levels_of_the_config_file_win_over_the_client_settings() {
     struct Fixture(PathBuf);
     impl Drop for Fixture {

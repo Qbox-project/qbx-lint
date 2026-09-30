@@ -1,6 +1,7 @@
 ---@meta
 
----@alias lua_type "nil"|"number"|"string"|"boolean"|"table"|"function"|"thread"|"userdata"
+---The names `type` gives: those of Lua, and those of the vectors, quaternions and matrices CfxLua adds.
+---@alias lua_type "nil"|"number"|"string"|"boolean"|"table"|"function"|"thread"|"userdata"|"vector2"|"vector3"|"vector4"|"quat"|"matrix"
 ---LuaLS's name for the same values, which annotations written for it use.
 ---@alias type lua_type
 ---@alias gc_option "collect"|"stop"|"restart"|"count"|"step"|"isrunning"|"incremental"|"generational"

@@ -39,6 +39,7 @@ set any rule to `off`, `hint`, `info`, `warning`, or `error`.
 | `const-reassign` | error | An assignment to a `<const>` or `<close>` local. |
 | `self-assignment` | warning | A variable is assigned to itself. |
 | `self-comparison` | warning | A comparison has the same expression on both sides. |
+| `impossible-comparison` | info | An `==` or `~=` compares values whose declared types share no value, such as a string with a number, or a literal with a type that does not list it, so it always gives the same answer. Comparisons with `nil` are not reported. Reported by qbx-lua-ls only. |
 | `lowercase-global` | warning | A global definition starts with a lowercase letter. |
 | `implicit-global` | warning | A function creates a global without a file-scope declaration. |
 | `builtin-overwrite` | warning | Code overwrites a known runtime global or native. |

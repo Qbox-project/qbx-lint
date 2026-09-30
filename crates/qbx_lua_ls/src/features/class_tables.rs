@@ -442,6 +442,30 @@ impl<'a, 'b> Classes<'a, 'b> {
             && !listed.contains(&given)
     }
 
+    /// Whether no value is both a `left` and a `right`, with their names read as this file sees
+    /// them: they are different kinds of value, or literals of which none is on both sides. A side
+    /// that is only `nil` counts as shared, so that a check for a missing value is never ruled out.
+    pub fn never_equal(&self, left: &Type, right: &Type) -> bool {
+        let from = self.file();
+        let (mut lefts, mut rights) = (Vec::new(), Vec::new());
+        self.flatten(left, from, &mut lefts, 0);
+        self.flatten(right, from, &mut rights, 0);
+        let is_nil = |parts: &[Type]| parts.iter().all(|part| matches!(part, Type::Nil));
+        if is_nil(&lefts) || is_nil(&rights) {
+            return false;
+        }
+        let may_equal = |left: &Type, right: &Type| {
+            if left.is_literal() && right.is_literal() {
+                return left == right;
+            }
+            match (self.kinds(left, from, 0), self.kinds(right, from, 0)) {
+                (Some(left), Some(right)) => left & right != 0,
+                _ => true,
+            }
+        };
+        !lefts.iter().any(|left| rights.iter().any(|right| may_equal(left, right)))
+    }
+
     /// The parts of a union, with the aliases it names resolved.
     fn flatten(&self, ty: &Type, from: FileId, out: &mut Vec<Type>, depth: u32) {
         if depth > MAX_DEPTH {
