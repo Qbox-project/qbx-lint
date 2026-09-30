@@ -2364,6 +2364,85 @@ print(own, ownLoose, vendor, vendorStrict, api)
     assert_eq!(lines(&mut client), [7, 13, 15, 16], "the same once the file is open");
 }
 
+#[test]
+fn no_unknown_reports_names_without_a_type_when_turned_on() {
+    struct Fixture(PathBuf);
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            if let (Ok(root), Ok(temp)) = (self.0.canonicalize(), std::env::temp_dir().canonicalize()) {
+                if root.parent() == Some(temp.as_path()) {
+                    let _ = std::fs::remove_dir_all(root);
+                }
+            }
+        }
+    }
+    let fixture = Fixture(std::env::temp_dir().join(format!(
+        "qbx-unknown-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos(),
+    )));
+    let write = |relative: &str, text: &str| {
+        let path = fixture.0.join(relative);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    };
+    write("qbxlint.toml", "[[overrides]]\nfiles = ['strict/**']\nrules = { 'no-unknown' = 'warning' }\n");
+    write("fxmanifest.lua", "fx_version 'cerulean'\ngame 'gta5'\nclient_scripts { 'strict/main.lua', 'loose.lua' }\n");
+    let text = "\
+function test(foo)
+end
+
+---@param name string
+---@param data table
+---@param scores table<string, number>
+---@param _unused any
+local function typed(name, data, scores, _unused, self)
+    for key, value in pairs(data) do
+        print(key, value)
+    end
+    for player, score in pairs(scores) do
+        print(player, score)
+    end
+    for index = 1, 3 do
+        print(index)
+    end
+    local label = name .. '!'
+    local pending
+    ---@type integer
+    local count
+    local result = Undefined()
+    ---@diagnostic disable-next-line: no-unknown
+    local quiet = Undefined()
+    print(label, pending, count, result, quiet, self)
+end
+
+CreateThread(function()
+    typed('a', {}, {})
+end)
+
+RegisterNetEvent('demo:event', function(payload)
+    print(payload)
+end)
+";
+    write("strict/main.lua", text);
+    write("loose.lua", "function other(bar) end\n");
+    let mut client = Client::start(fixture.0.clone());
+    let line = |needle: &str| pos(text, needle, 0).0 as u64;
+    let finding = |needle: &str, message: &str| ("no-unknown".to_string(), line(needle), message.to_string());
+    let expected = [
+        finding("function test(foo)", "Parameter `foo` has no type; add `---@param foo <type>`"),
+        finding("for key, value", "Loop variable `key` has no type; give the value the loop goes through one"),
+        finding("for key, value", "Loop variable `value` has no type; give the value the loop goes through one"),
+        finding("local pending", "The type of `pending` is unknown; add `---@type <type>`"),
+        finding("local result", "The type of `result` is unknown; add `---@type <type>`"),
+        finding("function(payload)", "Parameter `payload` has no type; add `---@param payload <type>`"),
+    ];
+    assert_eq!(findings(&mut client, "strict/main.lua", &["no-unknown"]), expected);
+    client.open_with("strict/main.lua", text);
+    assert_eq!(findings(&mut client, "strict/main.lua", &["no-unknown"]), expected, "the same once it is open");
+    assert!(findings(&mut client, "loose.lua", &["no-unknown"]).is_empty(), "the rule is off unless turned on");
+}
+
 /// The findings of `file` for the given codes as (code, line, message), sorted by line.
 fn findings(client: &mut Client, file: &str, codes: &[&str]) -> Vec<(String, u64, String)> {
     client.diagnostics_for(file);
