@@ -1588,6 +1588,42 @@ local unclearValue = unclear(1)
 }
 
 #[test]
+fn returns_listed_on_one_line_type_each_value() {
+    let mut client = Client::start(fixture_root());
+    let text = "\
+---@return boolean, string?
+local function getName()
+    if math.random(1, 2) == 2 then
+        return false
+    end
+    return true, 'test'
+end
+
+---@return boolean ok, integer count, string? reason # why it failed
+local function count() return true, 1 end
+
+local found, name = getName()
+local ok, amount, reason = count()
+";
+    client.open_with(CLIENT, text);
+    for (needle, expected) in [
+        ("found, name", "found: boolean"),
+        ("name = getName", "name: string?"),
+        ("ok, amount", "ok: boolean"),
+        ("amount, reason", "amount: integer"),
+        ("reason = count", "reason: string?"),
+    ] {
+        let (l, c) = pos(text, needle, 0);
+        let hover = client.hover_text(CLIENT, l, c);
+        assert!(hover.contains(expected), "{needle}: expected {expected:?} in {hover}");
+    }
+    let (l, c) = pos(text, "count() return", 0);
+    let hover = client.hover_text(CLIENT, l, c);
+    assert!(hover.contains("local function count(): boolean, integer, string?"), "{hover}");
+    assert!(findings(&mut client, CLIENT, &["return-type-mismatch", "missing-return"]).is_empty());
+}
+
+#[test]
 fn registrations_list_the_calls_that_trigger_them() {
     let mut client = Client::start(fixture_root());
     client.open_with(

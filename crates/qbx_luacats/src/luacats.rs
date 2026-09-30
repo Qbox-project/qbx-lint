@@ -307,17 +307,30 @@ pub fn parse_doc_lines(lines: &[&str]) -> DocGroup {
                 });
             }
             "return" => {
+                // One line may list several values, as in `@return boolean found, string? name`.
                 let mut parser = TypeParser::new(rest);
-                let ty = parser.parse();
-                parser.skip_ws();
-                let remainder = parser.rest();
-                let (name, desc) = match remainder.split_whitespace().next() {
-                    Some(word) if !word.starts_with('#') && word.chars().all(|c| c.is_alphanumeric() || c == '_') => {
-                        (Some(SmolStr::new(word)), &remainder[word.len()..])
+                loop {
+                    let ty = parser.parse();
+                    parser.skip_ws();
+                    let remainder = parser.rest();
+                    let word = remainder.split(|c: char| !(c.is_alphanumeric() || c == '_')).next().unwrap_or_default();
+                    let after = &remainder[word.len()..];
+                    let named = !word.is_empty() && (after.is_empty() || after.starts_with([' ', '\t', ',']));
+                    let (name, after) = if named { (Some(SmolStr::new(word)), after) } else { (None, remainder) };
+                    match after.trim_start().strip_prefix(',') {
+                        Some(next) => {
+                            group.returns.push(DocReturn { ty, name, description: String::new() });
+                            if next.trim().is_empty() {
+                                break;
+                            }
+                            parser = TypeParser::new(next);
+                        }
+                        None => {
+                            group.returns.push(DocReturn { ty, name, description: clean_description(after) });
+                            break;
+                        }
                     }
-                    _ => (None, remainder),
-                };
-                group.returns.push(DocReturn { ty, name, description: clean_description(desc) });
+                }
             }
             "type" => group.ty = Some(TypeParser::new(rest).parse()),
             "generic" => {
@@ -576,6 +589,33 @@ mod tests {
             fun.signature("spawn"),
             "function spawn(model: string|integer, coords?: vector4, ...: any): integer, string?"
         );
+    }
+
+    #[test]
+    fn returns_listed_on_one_line() {
+        let returns = |text: &str| -> Vec<(String, Option<String>, String)> {
+            let returns = parse(text).returns.into_iter();
+            returns.map(|r| (r.ty.to_string(), r.name.map(String::from), r.description)).collect()
+        };
+        let entry = |ty: &str, name: Option<&str>, description: &str| {
+            (ty.to_string(), name.map(String::from), description.to_string())
+        };
+        assert_eq!(returns("---@return boolean, string?"), [entry("boolean", None, ""), entry("string?", None, "")]);
+        assert_eq!(
+            returns("---@return boolean ok, table<string, integer> counts , string? reason # why it failed"),
+            [
+                entry("boolean", Some("ok"), ""),
+                entry("table<string, integer>", Some("counts"), ""),
+                entry("string?", Some("reason"), "why it failed"),
+            ]
+        );
+        // A comma in the description, or one that nothing follows, lists no further value.
+        assert_eq!(
+            returns("---@return boolean found # true, when it exists"),
+            [entry("boolean", Some("found"), "true, when it exists")]
+        );
+        assert_eq!(returns("---@return boolean,"), [entry("boolean", None, "")]);
+        assert_eq!(returns("---@return boolean found."), [entry("boolean", None, "found.")]);
     }
 
     #[test]
