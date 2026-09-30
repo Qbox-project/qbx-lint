@@ -234,6 +234,60 @@ fn relative_and_absolute_config_paths_apply_identical_exclusions_and_overrides()
 }
 
 #[test]
+fn configured_imports_respect_excluded_files_and_directories() {
+    let fixture = Fixture::new();
+    fixture.write("resources/lib/fxmanifest.lua", "fx_version 'cerulean'\ngame 'gta5'\nfiles { 'api.lua' }\n");
+    fixture.write("resources/lib/api.lua", "ExcludedApi = {}\n");
+    fixture.write("resources/shop/fxmanifest.lua", "fx_version 'cerulean'\ngame 'gta5'\nclient_script 'client.lua'\n");
+    fixture.write("resources/shop/client.lua", "print(ExcludedApi)\n");
+    for excluded in ["resources/lib/api.lua", "resources/lib"] {
+        for pattern in ["@lib/*.lua", "@lib/api.lua"] {
+            fixture.write("qbxlint.toml", format!("exclude = ['{excluded}']\n[imports]\nclient = ['{pattern}']\n"));
+            let output = fixture.run(&["--format", "json", "--no-fail", "resources"]);
+            assert_success(&output);
+            let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+            let reported = json["files"].as_array().unwrap().iter().any(|f| {
+                f["path"].as_str().unwrap().replace('\\', "/").ends_with("shop/client.lua")
+                    && f["diagnostics"].as_array().unwrap().iter().any(|d| d["code"] == "undefined-global")
+            });
+            assert!(reported, "{pattern} leaked a global excluded by {excluded}: {json}");
+        }
+    }
+}
+
+#[test]
+fn configured_ox_lib_imports_supply_extensions_and_cache_checks_by_side() {
+    let fixture = Fixture::new();
+    fixture.write(
+        "shop/fxmanifest.lua",
+        "fx_version 'cerulean'\ngame 'gta5'\nclient_script 'client.lua'\nserver_script 'server.lua'\n",
+    );
+    fixture.write("shop/client.lua", "print(table.contains({}, 1), PlayerPedId())\n");
+    fixture.write("shop/server.lua", "print(table.contains({}, 1))\n");
+    for side in ["shared", "client", "server"] {
+        fixture.write(
+            "qbxlint.toml",
+            format!("[rules]\n'qbox/prefer-cache' = 'warning'\n[imports]\n{side} = ['@ox_lib/init.lua']\n"),
+        );
+        let output = fixture.run(&["--format", "json", "--no-fail", "shop"]);
+        assert_success(&output);
+        let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        for file in json["files"].as_array().unwrap() {
+            let path = file["path"].as_str().unwrap().replace('\\', "/");
+            let client = path.ends_with("/client.lua");
+            if !client && !path.ends_with("/server.lua") {
+                continue;
+            }
+            let codes: Vec<&str> =
+                file["diagnostics"].as_array().unwrap().iter().map(|d| d["code"].as_str().unwrap()).collect();
+            let available = side == "shared" || side == if client { "client" } else { "server" };
+            assert_eq!(codes.contains(&"undefined-field"), !available, "{side}: {file}");
+            assert_eq!(codes.contains(&"qbox/prefer-cache"), client && available, "{side}: {file}");
+        }
+    }
+}
+
+#[test]
 fn lua_ls_settings_apply_when_no_qbxlint_toml_exists() {
     let fixture = Fixture::new();
     fixture.write(

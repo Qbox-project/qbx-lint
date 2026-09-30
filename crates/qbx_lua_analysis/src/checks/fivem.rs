@@ -18,7 +18,7 @@ const MAY_RUN_CALLBACKS: &[&str] =
 
 pub(super) fn check(input: &FileInput, sink: &mut Sink) {
     let uses_ox_lib_cache =
-        input.resource.is_some_and(|r| r.name != "ox_lib" && r.manifest.imports_path("@ox_lib/init.lua", Side::Client))
+        input.resource.is_some_and(|r| r.name != "ox_lib" && r.env.imports_path("@ox_lib/init.lua", Side::Client))
             && input.side != Some(Side::Server);
     let mut checker = FiveM {
         input,

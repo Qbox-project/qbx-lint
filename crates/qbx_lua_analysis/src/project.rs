@@ -163,6 +163,8 @@ pub struct ResourceEnv {
     file_scope: FxHashSet<SmolStr>,
     /// `@resource/file.lua` patterns the scripts load at runtime through `lib.load` or `require`.
     module_imports: FxHashSet<SmolStr>,
+    /// Manifest and configured imports, with the side they run on.
+    imports: Vec<(SmolStr, Side)>,
     pub unresolved_imports: Vec<UnresolvedImport>,
     /// Part of the resource is encrypted or unreadable, so neither what it defines nor what it
     /// uses is known; rules that need the whole picture stay quiet.
@@ -201,6 +203,13 @@ impl ResourceEnv {
         self.module_imports.contains(pattern)
     }
 
+    /// Whether a manifest or configured import loads `path` on `side`.
+    pub fn imports_path(&self, path: &str, side: Side) -> bool {
+        self.imports
+            .iter()
+            .any(|(pattern, imported_side)| pattern.eq_ignore_ascii_case(path) && imported_side.is_available_on(side))
+    }
+
     pub fn defines(&self, name: &str, side: Option<Side>) -> bool {
         match side {
             Some(Side::Client) => self.client.contains(name),
@@ -227,6 +236,7 @@ impl ResourceEnv {
     /// imports whose resource is not installed. Any other import that names no file is recorded as
     /// unresolved.
     pub fn add_import<'a>(&mut self, pattern: &str, side: Side, files: impl IntoIterator<Item = &'a FileSummary>) {
+        self.imports.push((pattern.into(), side));
         let mut resolved = false;
         for summary in files {
             self.add_summary(summary, Some(side));
@@ -299,7 +309,11 @@ impl ResourceLocator {
             let all = self.lua_files.entry(root.clone()).or_insert_with(|| lua_files_under(&root, config));
             all.iter().filter(|path| manifest_glob_match(file, &relative_slash_path(&root, path))).cloned().collect()
         } else {
-            vec![root.join(file)]
+            let path = root.join(file);
+            if config.is_excluded(&path) {
+                return Vec::new();
+            }
+            vec![path]
         };
         for path in &paths {
             self.summaries.entry(path.clone()).or_insert_with(|| {
