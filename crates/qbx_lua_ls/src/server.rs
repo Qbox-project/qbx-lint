@@ -16,7 +16,7 @@ use crate::features::{
     code_action, completion, definition, diagnostics, folding, hover, inlay, on_type, reference, references,
     semantic_tokens, signature, symbols,
 };
-use crate::index::FileOrigin;
+use crate::index::{normalize_path, FileOrigin};
 use crate::workspace::{uri_to_path, Workspace};
 
 pub type Documents = FxHashMap<Url, Document>;
@@ -389,6 +389,11 @@ impl Server {
         }
 
         let overrides = self.settings.rule_overrides();
+        // A client spells the URI of a file in its own way, as VS Code does with `file:///c%3A/...`,
+        // so the documents it has open are found by path. Reporting an open file here as well would
+        // replace what it shows with this list, which has no hints.
+        let open: FxHashMap<PathBuf, &Document> =
+            self.docs.values().map(|doc| (normalize_path(&doc.path), doc)).collect();
         let checked: FxHashSet<Url> = targets.iter().map(|(uri, ..)| uri.clone()).collect();
         let mut reported: FxHashSet<Url> = if everything {
             FxHashSet::default()
@@ -400,7 +405,7 @@ impl Server {
             FxHashMap::default();
         for (uri, path, file) in targets {
             let resource = file.and_then(|id| self.ws.index.file(id)).and_then(|f| f.resource);
-            if let Some(open) = self.docs.get(&uri) {
+            if let Some(open) = open.get(&normalize_path(&path)) {
                 if let Some(resource) = resource {
                     locale_usage.entry(resource).or_default().push(qbx_lua_analysis::locale::locale_usage(&open.chunk));
                 }
@@ -471,7 +476,8 @@ impl Server {
                 });
             }
         }
-        for uri in self.workspace_reported.difference(&reported).filter(|uri| !self.docs.contains_key(*uri)) {
+        let is_open = |uri: &Url| uri_to_path(uri).is_some_and(|path| open.contains_key(&normalize_path(&path)));
+        for uri in self.workspace_reported.difference(&reported).filter(|uri| !is_open(uri)) {
             let cleared = PublishDiagnosticsParams { uri: uri.clone(), diagnostics: Vec::new(), version: None };
             self.notify::<notif::PublishDiagnostics>(cleared);
         }
@@ -543,7 +549,20 @@ impl Server {
                 }
                 self.dirty.remove(&uri);
                 self.mark_resource_stale(&uri);
-                self.workspace_reported.insert(uri);
+                // From here on the file is reported with the files nobody has open, under the URI
+                // the index has for it. When the client spelled it differently, what the open
+                // document showed is cleared under the client's spelling.
+                let file = uri_to_path(&uri).and_then(|path| self.ws.index.file_id(&path));
+                match file.and_then(|id| self.ws.index.file(id)).map(|file| file.uri.clone()) {
+                    Some(indexed) if indexed != uri => {
+                        let cleared = PublishDiagnosticsParams { uri, diagnostics: Vec::new(), version: None };
+                        self.notify::<notif::PublishDiagnostics>(cleared);
+                        self.workspace_reported.insert(indexed);
+                    }
+                    _ => {
+                        self.workspace_reported.insert(uri);
+                    }
+                }
             }
             notif::DidChangeWatchedFiles::METHOD => {
                 let Ok(params) = serde_json::from_value::<DidChangeWatchedFilesParams>(params) else { return };
