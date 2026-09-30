@@ -40,7 +40,8 @@ Available features depend on the editor's LSP client.
   `missing-fields` and `assign-type-mismatch` for tables and assignments that leave out required
   fields of their class or store a value of the wrong type, `undeclared-field` for fields and keys
   a `---@class (strict)` does not declare, and `return-type-mismatch` and `missing-return` for
-  functions, including callback handlers, that do not return what their `@return` declares.
+  functions, including callback handlers, that do not return what their `@return` declares. The
+  opt-in `no-unknown` reports parameters, locals and loop variables that have no type.
 - Signature help, parameter hints, semantic tokens, folding and document/workspace symbols.
 - QB-Core and ESX server callback completion, navigation and payload hints from local handlers.
 - Callback systems a resource wraps itself, declared with `---@callback`, with name completion,

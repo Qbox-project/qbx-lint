@@ -23,6 +23,7 @@ pub mod semantic_tokens;
 pub mod signature;
 pub mod strict_classes;
 pub mod symbols;
+pub mod unknown_types;
 pub mod workspace_health;
 
 use crate::document::Document;

@@ -100,7 +100,7 @@ qbx-lint needs anything beyond it. `--config` also accepts these files.
 | LuaLS / EmmyLua setting | Used as |
 | --- | --- |
 | `diagnostics.globals` | `globals`, without the names qbx-lint already knows: runtime globals, natives, and globals of imports such as `@ox_lib/init.lua`, so the manifest and client/server checks still apply to them |
-| `diagnostics.disable` | `off` for `undefined-global`, `lowercase-global`, `unused-local`, `unused-function`, `unused-label`, `redefined-local`, `unreachable-code`, `empty-block`, `unbalanced-assignments`, `duplicate-index`, `missing-parameter`, `undefined-doc-name`, `missing-fields`, `assign-type-mismatch`, `return-type-mismatch` and `missing-return`; EmmyLua's `unused` covers the `unused-*` rules |
+| `diagnostics.disable` | `off` for `undefined-global`, `lowercase-global`, `unused-local`, `unused-function`, `unused-label`, `redefined-local`, `unreachable-code`, `empty-block`, `unbalanced-assignments`, `duplicate-index`, `missing-parameter`, `undefined-doc-name`, `missing-fields`, `assign-type-mismatch`, `return-type-mismatch`, `missing-return` and `no-unknown`; EmmyLua's `unused` covers the `unused-*` rules |
 | `diagnostics.severity` | Levels for the same codes (`Error`, `Warning`, `Information`, `Hint`, with or without a trailing `!`) |
 | `workspace.ignoreDir` | Exclusions. LuaLS entries are gitignore-style patterns; `.emmyrc.json` entries are directories from the root |
 | `workspace.ignoreGlobs` | Exclusions, as glob patterns |
@@ -357,6 +357,33 @@ Only clear cases count. Values whose type is not known are skipped, and so is a 
 assigned again after its declaration, since its declared type may not be what it holds. The same
 applies to the values `assign-type-mismatch` checks, where `nil` is a value like any other:
 `abc.field = nil` needs a field type that allows it, such as `string?` or `string|nil`.
+
+## Unknown types
+
+`no-unknown` is off by default. Turned on, qbx-lua-ls reports each parameter, local and loop
+variable whose type is unknown: none is declared, and none can be inferred from its value, from
+the function a callback is passed to, or from what a loop goes through.
+
+```toml
+[rules]
+"no-unknown" = "warning"
+```
+
+```lua
+function test(foo) end -- Parameter `foo` has no type; add `---@param foo <type>`
+
+---@param data table
+local function list(data)
+    for key, value in pairs(data) do end -- a plain `table` tells nothing about its keys and values
+end
+```
+
+A `---@param` or `---@type` gives the name a type, `any` included. Without one, a parameter that
+only takes `any` from the `fun(...)` its function is passed as, like the handler of
+`RegisterNetEvent`, counts as untyped. A local declared without a value needs a `---@type`, since
+later assignments are not followed. Names that start with `ignore_unused_prefix`, and `self`, are
+not reported. To check only your own resources, set the level in an `[[overrides]]` entry instead
+of `[rules]`.
 
 ## Events, exports, and locales
 
