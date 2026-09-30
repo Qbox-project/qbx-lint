@@ -726,17 +726,21 @@ impl<'c> Visitor<'c> for Finder<'_, '_, 'c> {
             StmtKind::Local { exprs, .. } if exprs.iter().any(is_table) => {
                 let doc = self.classes.infer.ctx.doc_at(stmt.span.start);
                 // `---@class Name` above a table declares the class rather than an instance of it.
-                if let (true, Some(ty)) = (doc.classes.is_empty(), &doc.ty) {
-                    for expr in exprs {
-                        self.top_table(ty, expr);
+                if doc.classes.is_empty() {
+                    for (index, expr) in exprs.iter().enumerate() {
+                        if let Some(ty) = doc.type_at(index) {
+                            self.top_table(ty, expr);
+                        }
                     }
                 }
             }
             StmtKind::Assign { targets, exprs } if exprs.iter().any(is_table) => {
                 let doc = self.classes.infer.ctx.doc_at(stmt.span.start);
                 if doc.classes.is_empty() {
-                    for (target, expr) in targets.iter().zip(exprs).filter(|(_, expr)| is_table(expr)) {
-                        let expected = doc.ty.clone().unwrap_or_else(|| self.classes.infer.expr(target));
+                    let values = targets.iter().zip(exprs).enumerate();
+                    for (index, (target, expr)) in values.filter(|(_, (_, expr))| is_table(expr)) {
+                        let declared = doc.type_at(index).cloned();
+                        let expected = declared.unwrap_or_else(|| self.classes.infer.expr(target));
                         self.top_table(&expected, expr);
                     }
                 }

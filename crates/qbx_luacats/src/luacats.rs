@@ -80,6 +80,9 @@ pub struct DocGroup {
     /// position holds across them.
     pub return_sets: Vec<Vec<Type>>,
     pub ty: Option<Type>,
+    /// The types a `@type` line lists after its first, as `---@type string, number` does for the
+    /// second name of the statement below.
+    pub ty_rest: Vec<Type>,
     pub enum_name: Option<SmolStr>,
     pub enum_keys: bool,
     pub enum_side: Option<Side>,
@@ -95,6 +98,16 @@ pub struct DocGroup {
 impl DocGroup {
     pub fn has_function_tags(&self) -> bool {
         !self.params.is_empty() || !self.returns.is_empty() || !self.overloads.is_empty()
+    }
+
+    /// The `@type` of the name at `index` of the statement below. A line that lists several types
+    /// gives each name its own, and one type covers every name.
+    pub fn type_at(&self, index: usize) -> Option<&Type> {
+        if index == 0 || self.ty_rest.is_empty() {
+            self.ty.as_ref()
+        } else {
+            self.ty_rest.get(index - 1)
+        }
     }
 
     /// Builds the function type from `@param`/`@return`, keeping the order of the real parameters.
@@ -362,7 +375,11 @@ pub fn parse_doc_lines(lines: &[&str]) -> DocGroup {
                     }
                 }
             }
-            "type" => group.ty = Some(TypeParser::new(rest).parse()),
+            "type" => {
+                let mut types = TypeParser::new(rest).parse_list().into_iter();
+                group.ty = types.next();
+                group.ty_rest = types.collect();
+            }
             "generic" => {
                 let names = rest.split(',').filter_map(|g| g.trim().split([':', ' ']).next()).filter(|g| !g.is_empty());
                 group.generics.extend(names.map(SmolStr::new));
@@ -817,7 +834,14 @@ mod tests {
     fn type_and_generics() {
         let doc = parse("---@generic T: table, K\n---@type table<string, fun(): boolean>");
         assert_eq!(doc.generics, ["T", "K"]);
+        assert_eq!(doc.type_at(1).unwrap().to_string(), "table<string, fun(): boolean>", "one type covers every name");
         assert_eq!(doc.ty.unwrap().to_string(), "table<string, fun(): boolean>");
+
+        let doc = parse("---@type boolean, table<string, number> | string");
+        let at = |index| doc.type_at(index).map(Type::to_string);
+        assert_eq!(at(0).as_deref(), Some("boolean"));
+        assert_eq!(at(1).as_deref(), Some("table<string, number>|string"));
+        assert_eq!(at(2), None, "a list types no more names than it has types");
     }
 
     #[test]
