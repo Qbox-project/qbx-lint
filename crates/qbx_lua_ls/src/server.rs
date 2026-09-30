@@ -762,6 +762,21 @@ impl Server {
                 "openDocuments": self.docs.len(),
                 "natives": qbx_fivem_data::native_count(),
             })),
+            "qbx/rules" => {
+                let rules: Vec<Value> = qbx_lua_analysis::rules::RULES
+                    .iter()
+                    .map(|rule| {
+                        json!({
+                            "code": rule.code,
+                            "category": rule.category.label(),
+                            "default": rule.default.map_or("off", qbx_lua_analysis::Severity::label),
+                            "fixable": rule.fixable,
+                            "summary": rule.summary,
+                        })
+                    })
+                    .collect();
+                Ok(json!(rules))
+            }
             "qbx/referenceSearch" => {
                 if !raw.is_null() && !raw.is_object() {
                     return Err("reference search parameters must be an object or null".into());

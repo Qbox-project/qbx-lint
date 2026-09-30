@@ -416,6 +416,27 @@ fn indexes_the_workspace_and_reports_status() {
 }
 
 #[test]
+fn lists_every_rule_with_its_default_level() {
+    let mut client = Client::start(fixture_root());
+    let rules = client.request("qbx/rules", Value::Null);
+    let rules = rules.as_array().unwrap();
+    assert_eq!(rules.len(), qbx_lua_analysis::rules::RULES.len());
+    let rule = |code: &str| rules.iter().find(|rule| rule["code"] == code).unwrap_or_else(|| panic!("{code}"));
+    assert_eq!(
+        rule("unused-local"),
+        &json!({
+            "code": "unused-local",
+            "category": "suspicious",
+            "default": "warning",
+            "fixable": false,
+            "summary": "A local variable is never read.",
+        })
+    );
+    assert_eq!(rule("shadowed-local")["default"], "off");
+    assert_eq!(rule("fivem/citizen-prefix")["category"], "fivem");
+}
+
+#[test]
 fn hover_shows_types_docs_and_natives() {
     let mut client = Client::start(fixture_root());
     let text = client.open(CLIENT);
