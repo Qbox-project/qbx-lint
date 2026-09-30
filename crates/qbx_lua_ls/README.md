@@ -224,7 +224,7 @@ Send this object directly as LSP `initializationOptions`:
 
 For `workspace/didChangeConfiguration`, put the same object in `settings.qbxLua` or directly in
 `settings`. Restart the server after changing `library`. A discovered `qbxlint.toml` supplies
-lint and formatting settings; editor rule overrides take precedence for diagnostics.
+lint and formatting settings; its rule levels take precedence over the editor's `diagnostics.rules`.
 
 The server relies on the editor for file-watch notifications. If the client does not send them,
 send a `qbx/reindex` request with `null` parameters or restart after external file or manifest

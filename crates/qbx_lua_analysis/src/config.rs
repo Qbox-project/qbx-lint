@@ -359,6 +359,11 @@ impl FileConfig {
     pub fn set(&mut self, code: &str, level: Level) {
         self.rules.insert(code.to_string(), level);
     }
+
+    /// Sets the level of a rule the configuration file leaves alone, as an editor setting does.
+    pub fn set_default(&mut self, code: &str, level: Level) {
+        self.rules.entry(code.to_string()).or_insert(level);
+    }
 }
 
 #[cfg(test)]

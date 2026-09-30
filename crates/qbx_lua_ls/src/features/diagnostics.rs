@@ -122,7 +122,7 @@ pub(crate) fn diagnostics_with_support(
     }
     let mut config = ws.lint_config.for_file(&doc.path);
     for (code, level) in rule_overrides {
-        config.set(code, *level);
+        config.set_default(code, *level);
     }
     if support.is_some_and(|support| !support.inventory_complete) {
         config.set(qbx_lua_analysis::rules::MANIFEST_MISSING_FILE, Level::Off);
