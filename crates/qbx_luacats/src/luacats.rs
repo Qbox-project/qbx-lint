@@ -430,14 +430,34 @@ fn parse_field(rest: &str, line: usize, group: &mut DocGroup) {
     let optional = parser.rest().starts_with('?');
     let mut parser = TypeParser::new(parser.rest().trim_start_matches('?'));
     let ty = parser.parse();
-    class.fields.push(DocField {
-        name: SmolStr::new(name),
-        ty,
-        optional,
-        description: clean_description(parser.rest()),
-        line,
-        side,
-    });
+    let field =
+        DocField { name: SmolStr::new(name), ty, optional, description: clean_description(parser.rest()), line, side };
+    if let Some(field) = add_signature(&mut class.fields, field) {
+        class.fields.push(field);
+    }
+}
+
+/// Adds a function field declared again under the name of an unscoped one as another signature of
+/// it, the way LuaLS reads a repeated `@field`, scoped to the side of its own line. Gives the field
+/// back when it declares something else.
+fn add_signature(fields: &mut [DocField], field: DocField) -> Option<DocField> {
+    let Some(first) = fields.iter_mut().find(|f| f.name == field.name && f.side.is_none()) else {
+        return Some(field);
+    };
+    let (Type::Fun(fun), Type::Fun(next)) = (&mut first.ty, &field.ty) else { return Some(field) };
+    let side = field.side;
+    let fun = Arc::make_mut(fun);
+    fun.overloads.push(Arc::new(FunType { overloads: Vec::new(), side, ..(**next).clone() }));
+    fun.overloads.extend(
+        next.overloads
+            .iter()
+            .map(|overload| Arc::new(FunType { side: overload.side.or(side), ..(**overload).clone() })),
+    );
+    if !field.description.is_empty() && !first.description.contains(&field.description) {
+        let separator = if first.description.is_empty() { "" } else { "\n\n" };
+        first.description = format!("{}{separator}{}", first.description, field.description);
+    }
+    None
 }
 
 fn skip_name(rest: &str) -> Option<&str> {
@@ -819,6 +839,25 @@ mod tests {
         assert!(applies_on(Some(Side::Server), Some(Side::Shared)));
         assert!(applies_on(Some(Side::Server), Some(Side::Server)));
         assert!(!applies_on(Some(Side::Server), Some(Side::Client)));
+    }
+
+    #[test]
+    fn repeated_function_fields_become_signatures() {
+        let doc = parse(
+            "---@class Phone\n---@field Has fun(self: Phone): boolean # client-side\n---@field Has fun(self: Phone, source: number): boolean # server-side\n---@field (server) Has fun(self: Phone, source: number, number: string): boolean\n---@field Count number\n---@field Count string",
+        );
+        let fields: Vec<&str> = doc.classes[0].fields.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(fields, ["Has", "Count", "Count"], "only functions gain signatures");
+        let has = &doc.classes[0].fields[0];
+        assert_eq!(has.description, "client-side\n\nserver-side");
+        let fun = has.ty.as_fun().unwrap();
+        assert_eq!(fun.params.len(), 1);
+        let overloads: Vec<(usize, Option<Side>)> = fun.overloads.iter().map(|o| (o.params.len(), o.side)).collect();
+        assert_eq!(overloads, [(2, None), (3, Some(Side::Server))]);
+
+        let doc = parse("---@class Phone\n---@field (client) Has fun(): boolean\n---@field (server) Has fun(source: number): boolean");
+        let sides: Vec<Option<Side>> = doc.classes[0].fields.iter().map(|f| f.side).collect();
+        assert_eq!(sides, [Some(Side::Client), Some(Side::Server)], "fields scoped to a side stay apart");
     }
 
     #[test]
