@@ -2935,6 +2935,39 @@ print(nano, delta, clock, trimmed, kind, entries, length)
 }
 
 #[test]
+fn colon_calls_pass_their_receiver_to_functions_defined_with_a_dot() {
+    let mut client = Client::start(fixture_root());
+    let text = "\
+---@class Base
+local Base = {}
+
+---@generic T
+---@param class T
+---@return T
+function Base.new(class, ...)
+    return class
+end
+
+---@class Stall : Base
+local Stall = {}
+
+---@return Stall
+local function open()
+    return Stall:new(string.strtrim(' a '))
+end
+
+local made = Stall:new('name')
+print(open, made)
+";
+    client.open_with(CLIENT, text);
+    // `class` is the stall, not the string: the arguments start at the second parameter.
+    let (l, c) = pos(text, "made = Stall", 0);
+    let hover = client.hover_text(CLIENT, l, c);
+    assert!(!hover.contains("made: string"), "{hover}");
+    assert_eq!(findings(&mut client, CLIENT, &["return-type-mismatch"]), []);
+}
+
+#[test]
 fn type_names_of_fivem_lls_addon_are_declared() {
     let mut client = Client::start(fixture_root());
     let text = "\

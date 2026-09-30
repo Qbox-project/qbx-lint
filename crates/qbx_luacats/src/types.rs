@@ -55,6 +55,9 @@ pub struct FunType {
     /// position has across the sets.
     pub return_sets: Vec<Vec<Type>>,
     pub is_method: bool,
+    /// The parameters are those of a function defined with `.`, or of a plain function value, so
+    /// they list every value a call passes: a `:` call gives the first one the value before the colon.
+    pub lists_receiver: bool,
     /// The names declared with `@generic`, bound from the arguments of each call.
     pub generics: Vec<SmolStr>,
     /// The `@overload` signatures, for calls the declared one does not fit.
@@ -239,9 +242,10 @@ fn push_unique(list: &mut Vec<Type>, ty: Type) {
 
 impl FunType {
     /// How a call lines up with `params`, as `(parameters to skip, arguments to skip)`. Functions
-    /// declared with `:` do not list `self`, while `fun(self, ...)` fields do.
+    /// declared with `:` do not list `self`, while `fun(self, ...)` fields and functions defined
+    /// with `.` list the receiver of a `:` call first.
     pub fn call_offsets(&self, via_colon: bool) -> (usize, usize) {
-        let explicit_self = self.params.first().is_some_and(|p| p.name == "self");
+        let explicit_self = self.lists_receiver || self.params.first().is_some_and(|p| p.name == "self");
         match (via_colon, self.is_method) {
             (true, false) if explicit_self => (1, 0),
             (false, true) => (0, 1),
