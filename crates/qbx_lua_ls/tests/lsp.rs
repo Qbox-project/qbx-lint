@@ -5661,6 +5661,25 @@ fn declared_types_describe_the_exports_of_a_resource() {
 }
 
 #[test]
+fn definition_files_outside_resources_declare_globals_for_every_resource() {
+    let root = declared_exports_root();
+    let mut client = Client::start_with_library(root.join("workspace"), &root.join("types"));
+    let text = client.open("app/server.lua");
+
+    let (l, c) = pos(&text, "rows", 0);
+    assert!(client.hover_text("app/server.lua", l, c).contains("local rows: table[]"), "a ---@meta workspace file");
+    let (l, c) = pos(&text, "value =", 0);
+    assert!(client.hover_text("app/server.lua", l, c).contains("local value: number"), "any library file");
+    let (l, c) = pos(&text, "loose =", 0);
+    let loose = client.hover_text("app/server.lua", l, c);
+    assert!(!loose.contains("number"), "a workspace file without ---@meta keeps its globals: {loose}");
+
+    let found = client.diagnostics_for("app/server.lua");
+    let undefined: Vec<u64> = found.iter().filter(|(code, _)| code == "undefined-global").map(|(_, l)| *l).collect();
+    assert_eq!(undefined, [3], "{found:?}");
+}
+
+#[test]
 fn table_hover_lists_only_the_fields_in_scope() {
     let mut client = Client::start(fixture_root());
     let text = client.open(CLIENT);

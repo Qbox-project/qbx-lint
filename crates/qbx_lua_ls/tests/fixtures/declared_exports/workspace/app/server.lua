@@ -1,2 +1,5 @@
 local inCall, callId, call = exports['phone']:IsInCall(1)
-print(inCall, callId, call)
+local rows = Sql.fetch('SELECT 1')
+local value = Plain.value()
+local loose = Loose.value()
+print(inCall, callId, call, rows, value, loose)
