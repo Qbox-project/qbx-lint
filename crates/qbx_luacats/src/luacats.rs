@@ -3,7 +3,7 @@ use std::sync::Arc;
 use qbx_fivem_data::Side;
 use smol_str::SmolStr;
 
-use crate::types::{CallbackTag, FunType, Param, Type, TypeParser};
+use crate::types::{merged_returns, CallbackTag, FunType, Param, Type, TypeParser};
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct DocParam {
@@ -68,6 +68,9 @@ pub struct DocGroup {
     pub aliases: Vec<DocAlias>,
     pub params: Vec<DocParam>,
     pub returns: Vec<DocReturn>,
+    /// The sets of values of `@return false | (string, string)`; `returns` then lists what each
+    /// position holds across them.
+    pub return_sets: Vec<Vec<Type>>,
     pub ty: Option<Type>,
     pub enum_name: Option<SmolStr>,
     pub enum_keys: bool,
@@ -113,6 +116,7 @@ impl DocGroup {
         FunType {
             params,
             returns: self.returns.iter().map(|r| r.ty.clone()).collect(),
+            return_sets: self.return_sets.clone(),
             is_method,
             generics: self.generics.clone(),
             overloads,
@@ -307,8 +311,23 @@ pub fn parse_doc_lines(lines: &[&str]) -> DocGroup {
                 });
             }
             "return" => {
-                // One line may list several values, as in `@return boolean found, string? name`.
                 let mut parser = TypeParser::new(rest);
+                // `@return false | (string, string)` lists the sets of values the function returns.
+                // They only hold when the line is the function's one `@return`.
+                if let Some(sets) = parser.parse_return_sets() {
+                    let description = clean_description(parser.rest());
+                    let merged = merged_returns(&sets);
+                    if group.returns.is_empty() {
+                        group.return_sets = sets;
+                    }
+                    for (index, ty) in merged.into_iter().enumerate() {
+                        let description = if index == 0 { description.clone() } else { String::new() };
+                        group.returns.push(DocReturn { ty, name: None, description });
+                    }
+                    continue;
+                }
+                group.return_sets.clear();
+                // One line may list several values, as in `@return boolean found, string? name`.
                 loop {
                     let ty = parser.parse();
                     parser.skip_ws();
@@ -436,6 +455,16 @@ impl<'a> TypeNames<'a> {
         self.list(rest, |names, rest| Some(names.ty(rest)));
     }
 
+    /// Records the names in the sets of values a `@return` lists, as in `false | (Name, string)`.
+    /// Returns whether the line lists such sets.
+    fn return_sets(&mut self, rest: &'a str) -> bool {
+        let start = self.line.len() - rest.len();
+        let Some(names) = TypeParser::new(rest).parse_return_set_names() else { return false };
+        let found = names.into_iter().map(|(offset, name)| FoundName { start: start + offset, name, declared: false });
+        self.found.extend(found);
+        true
+    }
+
     /// Walks a comma separated list, where `item` reads one entry and returns the text after it.
     fn list(&mut self, rest: &'a str, item: impl Fn(&mut Self, &'a str) -> Option<&'a str>) {
         let mut next = Some(rest);
@@ -530,10 +559,14 @@ fn type_names(line: &str) -> Option<(&str, Vec<FoundName<'_>>)> {
                 names.list(rest, |names, rest| Some(names.ty(rest.trim_start_matches(['+', '-']))));
             }
         }
-        "return" => names.list(rest, |names, rest| {
-            let after = names.ty(rest);
-            Some(skip_name(after).unwrap_or(after))
-        }),
+        "return" => {
+            if !names.return_sets(rest) {
+                names.list(rest, |names, rest| {
+                    let after = names.ty(rest);
+                    Some(skip_name(after).unwrap_or(after))
+                });
+            }
+        }
         "operator" => {
             if let Some(rest) = skip_name(rest).map(str::trim_start) {
                 let rest = match rest.strip_prefix('(') {
@@ -616,6 +649,42 @@ mod tests {
         );
         assert_eq!(returns("---@return boolean,"), [entry("boolean", None, "")]);
         assert_eq!(returns("---@return boolean found."), [entry("boolean", None, "found.")]);
+    }
+
+    #[test]
+    fn returns_listed_as_sets_of_values() {
+        let sets = |doc: &DocGroup| -> Vec<Vec<String>> {
+            doc.return_sets.iter().map(|set| set.iter().map(Type::to_string).collect()).collect()
+        };
+        let merged = |doc: &DocGroup| -> Vec<String> { doc.returns.iter().map(|r| r.ty.to_string()).collect() };
+
+        let doc = parse("---@return false | (string, string) # the names, when found");
+        assert_eq!(sets(&doc), [vec!["false"], vec!["string", "string"]]);
+        // Each position holds what the sets have there, and `nil` for a set that ends before it.
+        assert_eq!(merged(&doc), ["false|string", "string?"]);
+        assert_eq!(doc.returns[0].description, "the names, when found");
+        assert_eq!(doc.fun_type(&[], false, false).signature("f"), "function f(): false | (string, string)");
+
+        let doc = parse("---@return (Player, integer)|(nil, string)|nil");
+        assert_eq!(sets(&doc), [vec!["Player", "integer"], vec!["nil", "string"], vec!["nil"]]);
+        assert_eq!(merged(&doc), ["Player?", "integer|string|nil"]);
+
+        // Parentheses without a comma group a type, and further `@return` lines add values, so
+        // neither lists sets.
+        for text in [
+            "---@return (string|number)[]",
+            "---@return (fun(): string), boolean",
+            "---@return false | (string, string)\n---@return integer",
+            "---@return integer\n---@return false | (string, string)",
+        ] {
+            assert!(parse(text).return_sets.is_empty(), "{text}");
+        }
+        assert_eq!(merged(&parse("---@return (fun(): string), boolean")), ["fun(): string", "boolean"]);
+        assert_eq!(merged(&parse("---@return integer\n---@return false | (string, string)")).len(), 3);
+
+        let ty = crate::types::parse_type("fun(id: integer): false | (string, string)");
+        assert_eq!(ty.to_string(), "fun(id: integer): false | (string, string)");
+        assert_eq!(ty.as_fun().map(|fun| fun.return_sets.len()), Some(2));
     }
 
     #[test]
@@ -754,6 +823,9 @@ mod tests {
             "@param ... Gar^age",
             "@return string, Gar^age",
             "@return string name, Gar^age value",
+            "@return false | (Gar^age, string)",
+            "@return (string, integer) | Gar^age",
+            "@type fun(): false | (string, Gar^age)",
             "@field private value? Gar^age",
             "@field [Gar^age] string",
             "@field ['value'] Gar^age",

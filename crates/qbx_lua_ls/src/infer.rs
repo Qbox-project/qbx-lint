@@ -19,6 +19,9 @@ use crate::types::{CallbackRole, FunType, Param, Shape, ShapeField, Type};
 
 const MAX_DEPTH: u32 = 24;
 const MAX_SHAPE_FIELDS: usize = 96;
+/// An undocumented function that returns more different sets of values than this keeps only what
+/// each position holds across them.
+const MAX_RETURN_SETS: usize = 4;
 
 /// Bits for the kinds of Lua value a type allows, used to pick the `@overload` a call fits.
 mod kind {
@@ -67,6 +70,9 @@ impl<'e> CallArgs<'e> {
         self.types[index].get_or_init(|| infer.expr(&self.exprs[index]))
     }
 }
+
+/// The sets of values a call returns.
+type ReturnSets = Rc<Vec<Vec<Type>>>;
 
 pub enum Decl<'a> {
     Local { stmt: &'a Stmt, index: usize },
@@ -294,6 +300,9 @@ pub struct Infer<'a> {
     regions: OnceCell<SideRegions>,
     locals: RefCell<FxHashMap<LocalId, Type>>,
     in_progress: RefCell<FxHashSet<LocalId>>,
+    /// The sets of values returned by the call of each `local a, b = f()` statement read so far,
+    /// by the start of the statement.
+    linked_sets: RefCell<FxHashMap<u32, Option<ReturnSets>>>,
     depth: Cell<u32>,
 }
 
@@ -333,6 +342,7 @@ impl<'a> Infer<'a> {
             regions: OnceCell::new(),
             locals: RefCell::new(FxHashMap::default()),
             in_progress: RefCell::new(FxHashSet::default()),
+            linked_sets: RefCell::new(FxHashMap::default()),
             depth: Cell::new(0),
         }
     }
@@ -420,6 +430,7 @@ impl<'a> Infer<'a> {
     /// around the read rule out, such as the `nil` of a `string?` after `if not name then return end`.
     pub fn local_type_at(&self, id: LocalId, offset: u32) -> Type {
         let ty = self.local_type(id);
+        let ty = self.linked_type(id, offset).unwrap_or(ty);
         let mut facts = self.ctx.guards().at(id, offset).peekable();
         if facts.peek().is_none() {
             return ty;
@@ -436,6 +447,60 @@ impl<'a> Infer<'a> {
         } else {
             narrowed
         }
+    }
+
+    /// The type at `offset` of a local declared with others by one call, as `err` in
+    /// `local ok, err = f()`, when the guards on those locals rule out some of the sets of values
+    /// the call returns: what its position holds in the sets that are left.
+    fn linked_type(&self, id: LocalId, offset: u32) -> Option<Type> {
+        let guards = self.ctx.guards();
+        let members = guards.linked(id)?;
+        if !members.iter().any(|(member, _)| guards.at(*member, offset).next().is_some()) {
+            return None;
+        }
+        let Some(Decl::Local { stmt, .. }) = self.ctx.decl(self.ctx.resolution.local(id).decl.start) else {
+            return None;
+        };
+        // A `---@type` or `---@class` above the statement decides the types instead.
+        let doc = self.ctx.doc_at(stmt.span.start);
+        if doc.ty.is_some() || !doc.classes.is_empty() {
+            return None;
+        }
+        let sets = self.linked_sets(stmt)?;
+        let value = |set: &[Type], position: usize| match set.get(position) {
+            Some(ty @ Type::Named(..)) => self.resolve_alias(ty),
+            Some(ty) => ty.clone(),
+            None => Type::Nil,
+        };
+        let is_possible = |set: &&Vec<Type>| {
+            members.iter().all(|(member, position)| {
+                let value = value(set, *position);
+                guards.at(*member, offset).all(|fact| fact.apply(&value).is_some())
+            })
+        };
+        let possible: Vec<&Vec<Type>> = sets.iter().filter(is_possible).collect();
+        if possible.is_empty() || possible.len() == sets.len() {
+            return None;
+        }
+        let position = members.iter().find(|(member, _)| *member == id)?.1;
+        Some(merge_values(possible.iter().map(|set| set.get(position).cloned().unwrap_or(Type::Nil)).collect()))
+    }
+
+    /// The sets of values returned by the call that declares the locals of `stmt`, when its function
+    /// lists several.
+    fn linked_sets(&self, stmt: &Stmt) -> Option<ReturnSets> {
+        if let Some(sets) = self.linked_sets.borrow().get(&stmt.span.start) {
+            return sets.clone();
+        }
+        let StmtKind::Local { exprs, .. } = &stmt.kind else { return None };
+        let sets = self.guarded(|| match exprs.last().map(|call| &call.kind) {
+            Some(ExprKind::Call { callee, args, .. }) => self.call_values(callee, None, args).1,
+            Some(ExprKind::MethodCall { base, method, args, .. }) => self.call_values(base, Some(method), args).1,
+            _ => Vec::new(),
+        });
+        let sets = (sets.len() > 1).then(|| Rc::new(sets));
+        self.linked_sets.borrow_mut().insert(stmt.span.start, sets.clone());
+        sets
     }
 
     pub fn global_type(&self, name: &str) -> Type {
@@ -528,11 +593,12 @@ impl<'a> Infer<'a> {
             }
             let ty =
                 if is_last { self.expr_multi(expr).into_iter().next().unwrap_or_default() } else { self.expr(expr) };
-            return ty.widen();
+            // The `false|string` of a call keeps its `false`, while `local done = false` is a boolean.
+            return if expr.is_call() { ty.widen_returned() } else { ty.widen() };
         }
         match exprs.last() {
             Some(last) if last.is_multi_value() => {
-                self.expr_multi(last).into_iter().nth(index + 1 - exprs.len()).unwrap_or_default().widen()
+                self.expr_multi(last).into_iter().nth(index + 1 - exprs.len()).unwrap_or_default().widen_returned()
             }
             _ => Type::Unknown,
         }
@@ -941,36 +1007,43 @@ impl<'a> Infer<'a> {
     }
 
     fn call(&self, base: &Expr, method: Option<&Name>, args: &[Expr]) -> Vec<Type> {
+        self.call_values(base, method, args).0
+    }
+
+    /// What a call returns, and the sets of values its function returns when it lists several.
+    fn call_values(&self, base: &Expr, method: Option<&Name>, args: &[Expr]) -> (Vec<Type>, Vec<Vec<Type>>) {
+        let only = |ty: Type| (vec![ty], Vec::new());
         if method.is_none() {
             match (base.dotted_path().as_deref(), args.first()) {
                 (Some("require" | "lib.require" | "lib.load"), Some(arg)) => {
                     if let Some(path) = arg.as_string() {
                         // `require 'glm'` returns the built-in library, not a file of the resource.
                         if path == "glm" {
-                            return vec![self.global_type("glm")];
+                            return only(self.global_type("glm"));
                         }
-                        return vec![Type::Require(path.clone())];
+                        return only(Type::Require(path.clone()));
                     }
                 }
-                (Some("setmetatable"), Some(arg)) => return vec![self.expr(arg)],
-                (Some("tostring"), _) => return vec![Type::String],
-                (Some("tonumber"), _) => return vec![Type::Number.optional()],
+                (Some("setmetatable"), Some(arg)) => return only(self.expr(arg)),
+                (Some("tostring"), _) => return only(Type::String),
+                (Some("tonumber"), _) => return only(Type::Number.optional()),
                 _ => {}
             }
         }
-        let Some((fun, _)) = self.callee_fun(base, method) else { return Vec::new() };
+        let Some((fun, _)) = self.callee_fun(base, method) else { return Default::default() };
         let args = CallArgs::new(args);
         let fun = self.signature_for(&fun, &args, method.is_some(), base.span.start);
         // `AwaitServerCallback('name', ...)` returns what the handler of `name` returns.
         if let Some(wrapper) = Wrapper::of(&fun, method.is_some()).filter(|w| w.tag.role == CallbackRole::Await) {
             if let Some(handler) = self.wrapper_handler(&wrapper, args.exprs, base.span.start) {
                 if !handler.returns.is_empty() {
-                    return handler.returns.clone();
+                    return (handler.returns.clone(), handler.return_sets.clone());
                 }
             }
         }
         let generics = self.bind_generics(&fun, &args, method.is_some(), true);
-        fun.returns.iter().map(|ret| substitute(ret, &generics)).collect()
+        let bound = |types: &Vec<Type>| types.iter().map(|ret| substitute(ret, &generics)).collect();
+        (bound(&fun.returns), fun.return_sets.iter().map(bound).collect())
     }
 
     /// Binds the generics of `fun` from the arguments of a call. Function literals go last, and only
@@ -1345,9 +1418,10 @@ impl<'a> Infer<'a> {
             None => DocGroup::default().fun_type(&names, func.vararg.is_some(), is_method),
         };
         if fun.returns.is_empty() {
-            let returns = self.inferred_returns(&func.body);
+            let (returns, sets) = self.inferred_returns(&func.body);
             if returns.iter().any(|t| !t.is_unknown()) {
                 fun.returns = returns;
+                fun.return_sets = sets;
             }
         }
         fun
@@ -1355,38 +1429,43 @@ impl<'a> Infer<'a> {
 
     /// What an undocumented function returns: at each position, the union of what every `return`
     /// passes there. A `return` with fewer values, and running past the end of the body, give `nil`.
-    fn inferred_returns(&self, body: &Block) -> Vec<Type> {
+    /// With them come the sets of values its `return`s pass, when they differ and hold several
+    /// values, as `(false)` and `(string, string)` do.
+    fn inferred_returns(&self, body: &Block) -> (Vec<Type>, Vec<Vec<Type>>) {
         let mut exits: Vec<&[Expr]> = return_stmts(body).into_iter().map(|(_, exprs)| exprs).collect();
         if exits.is_empty() {
-            return Vec::new();
+            return Default::default();
         }
         if !always_exits(body) {
             exits.push(&[]);
         }
         let lists: Vec<Vec<Type>> = exits.iter().map(|exprs| self.return_values(exprs)).collect();
         let width = lists.iter().map(Vec::len).max().unwrap_or(0);
-        (0..width)
-            .map(|i| {
-                let parts: Vec<Type> = lists.iter().map(|values| values.get(i).cloned().unwrap_or(Type::Nil)).collect();
-                // Merged with `nil`, a value that cannot be inferred would read as `nil`.
-                if parts.iter().any(Type::is_unknown) {
-                    return Type::Unknown;
-                }
-                // `return 1` and `return 0.5` return numbers, not `integer|number`.
-                let has_number = parts.iter().any(|t| matches!(t.without_nil(), Type::Number));
-                Type::union(parts.into_iter().filter(|t| !(has_number && matches!(t, Type::Integer))))
-            })
-            .collect()
+        let at = |i: usize| lists.iter().map(|values| values.get(i).cloned().unwrap_or(Type::Nil)).collect();
+        let returns = (0..width).map(|i| merge_values(at(i)).widen_returned()).collect();
+        let mut sets: Vec<Vec<Type>> = Vec::new();
+        for list in &lists {
+            if !sets.contains(list) {
+                sets.push(list.clone());
+            }
+        }
+        let linked = width > 1 && (2..=MAX_RETURN_SETS).contains(&sets.len());
+        (returns, if linked { sets } else { Vec::new() })
     }
 
-    /// The values one `return` passes, the last of them spread when it is a call or `...`.
+    /// The values one `return` passes, the last of them spread when it is a call or `...`. A plain
+    /// `true` or `false` stays, so that the sets of values tell `return false` from `return name`.
     fn return_values(&self, exprs: &[Expr]) -> Vec<Type> {
+        let returned = |ty: Type| match ty {
+            Type::BooleanLit(_) => ty,
+            other => other.widen_returned(),
+        };
         let mut values = Vec::new();
         for (i, expr) in exprs.iter().enumerate() {
             if i + 1 == exprs.len() {
-                values.extend(self.expr_multi(expr).into_iter().map(|t| t.widen()));
+                values.extend(self.expr_multi(expr).into_iter().map(returned));
             } else {
-                values.push(self.expr(expr).widen());
+                values.push(returned(self.expr(expr)));
             }
         }
         values
@@ -1574,6 +1653,11 @@ fn substitute(ty: &Type, generics: &[(SmolStr, Type)]) -> Type {
         Type::Fun(fun) => Type::Fun(Arc::new(FunType {
             params: fun.params.iter().map(|p| Param { ty: substitute(&p.ty, generics), ..p.clone() }).collect(),
             returns: fun.returns.iter().map(|t| substitute(t, generics)).collect(),
+            return_sets: fun
+                .return_sets
+                .iter()
+                .map(|set| set.iter().map(|t| substitute(t, generics)).collect())
+                .collect(),
             is_method: fun.is_method,
             ..FunType::default()
         })),
@@ -1646,6 +1730,17 @@ fn may_be_literal_key(key: &Type, literal: &Type) -> bool {
         key if key.is_literal() => key == literal,
         key => *key == literal.widen(),
     }
+}
+
+/// What one position holds across several lists of returned values.
+fn merge_values(parts: Vec<Type>) -> Type {
+    // Merged with `nil`, a value that cannot be inferred would read as `nil`.
+    if parts.iter().any(Type::is_unknown) {
+        return Type::Unknown;
+    }
+    // `return 1` and `return 0.5` return numbers, not `integer|number`.
+    let has_number = parts.iter().any(|t| matches!(t.without_nil(), Type::Number));
+    Type::union(parts.into_iter().filter(|t| !(has_number && matches!(t, Type::Integer))))
 }
 
 /// The `return` statements of a function body with the values each passes, leaving out those of

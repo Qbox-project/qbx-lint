@@ -5,6 +5,9 @@
 //! its values too, except in a `---@meta` file, whose functions only declare their signatures.
 //! Returned tables typed as a class are checked like other class tables, by `missing-fields`,
 //! `assign-type-mismatch` and `undeclared-field`.
+//!
+//! A function that lists sets of values, as `@return false | (string, string)` does, has to return
+//! one of them: each `return` is compared with the set it comes closest to.
 
 use qbx_lua_syntax::ast::*;
 use qbx_lua_syntax::visit::{self, Visitor};
@@ -19,20 +22,39 @@ use crate::types::Type;
 pub fn mismatched_returns(infer: &Infer, chunk: &Chunk) -> Vec<(Span, String)> {
     let classes = Classes::new(infer);
     let mut out = Vec::new();
-    for (func, returns) in documented(infer, chunk) {
-        for (_, exprs) in return_stmts(&func.body) {
-            for (i, (given, span)) in returned_values(infer, &classes, exprs).into_iter().enumerate() {
-                let Some(expected) = expected_at(&returns, i) else { break };
-                if classes.rejects(expected, classes.file(), &given) {
-                    let shown =
-                        if classes.literal_mismatch(expected, classes.file(), &given) { given } else { given.widen() };
-                    let message = format!("Cannot return `{shown}` as return value #{} of type `{expected}`", i + 1);
-                    out.push((span, message));
-                }
-            }
+    for function in documented(infer, chunk) {
+        for (_, exprs) in return_stmts(&function.func.body) {
+            let values = returned_values(infer, &classes, exprs);
+            out.extend(mismatches(&classes, function.closest(&classes, exprs, &values), &values));
         }
     }
     out
+}
+
+/// Each of `values` that the `@return` type at its position does not take.
+fn mismatches(classes: &Classes, returns: &[Type], values: &[(Type, Span)]) -> Vec<(Span, String)> {
+    let mut out = Vec::new();
+    for (i, (given, span)) in values.iter().enumerate() {
+        let Some(expected) = expected_at(returns, i) else { break };
+        if classes.rejects(expected, classes.file(), given) {
+            let shown =
+                if classes.literal_mismatch(expected, classes.file(), given) { given.clone() } else { given.widen() };
+            out.push((*span, format!("Cannot return `{shown}` as return value #{} of type `{expected}`", i + 1)));
+        }
+    }
+    out
+}
+
+/// How many values `returns` requires: up to the last whose type does not allow `nil`.
+fn required_values(classes: &Classes, returns: &[Type]) -> usize {
+    let is_required = |ty: &Type| !matches!(ty, Type::Variadic(_)) && !classes.admits_nil(ty, classes.file());
+    returns.iter().rposition(is_required).map_or(0, |last| last + 1)
+}
+
+/// Whether a `return` passes fewer values than `required`. A call or `...` at its end passes as
+/// many values as it gives.
+fn is_short(exprs: &[Expr], required: usize) -> bool {
+    exprs.len() < required && !exprs.last().is_some_and(Expr::is_multi_value)
 }
 
 /// Each `return` that gives fewer values than its function's `@return` requires, and the `end` of
@@ -41,21 +63,28 @@ pub fn missing_returns(infer: &Infer, chunk: &Chunk) -> Vec<(Span, String)> {
     let classes = Classes::new(infer);
     let is_meta = is_meta_file(infer.ctx.source, chunk);
     let mut out = Vec::new();
-    for (func, returns) in documented(infer, chunk) {
-        let is_required = |ty: &Type| !matches!(ty, Type::Variadic(_)) && !classes.admits_nil(ty, classes.file());
-        let required = returns.iter().rposition(is_required).map_or(0, |last| last + 1);
-        if required == 0 || (is_meta && func.body.stmts.is_empty()) {
+    for function in documented(infer, chunk) {
+        let Documented { func, returns, sets } = &function;
+        let required = required_values(&classes, returns);
+        if (required == 0 && sets.is_empty()) || (is_meta && func.body.stmts.is_empty()) {
             continue;
         }
         for (stmt, exprs) in return_stmts(&func.body) {
-            // A call or `...` at the end passes as many values as it gives.
-            if exprs.len() < required && !exprs.last().is_some_and(Expr::is_multi_value) {
+            // With several sets of values, the one this `return` comes closest to decides.
+            let required = match sets.is_empty() {
+                true => required,
+                false => {
+                    let values = returned_values(infer, &classes, exprs);
+                    required_values(&classes, function.closest(&classes, exprs, &values))
+                }
+            };
+            if is_short(exprs, required) {
                 let message =
                     format!("`@return` requires {}, but this returns {}", values(required), values(exprs.len()));
                 out.push((stmt.span, message));
             }
         }
-        if !always_exits(&func.body) {
+        if required > 0 && !always_exits(&func.body) {
             let types: Vec<String> = returns[..required].iter().map(|ty| format!("`{ty}`")).collect();
             let message = format!(
                 "The function can reach its end without returning, but `@return` requires {}",
@@ -110,26 +139,49 @@ fn returned_values(infer: &Infer, classes: &Classes, exprs: &[Expr]) -> Vec<(Typ
     values
 }
 
-/// The functions of `chunk` documented with `@return`, with the types it lists.
-fn documented<'c>(infer: &Infer, chunk: &'c Chunk) -> Vec<(&'c FuncBody, Vec<Type>)> {
-    let mut finder = Documented { infer, out: Vec::new() };
+/// A function documented with `@return`.
+struct Documented<'c> {
+    func: &'c FuncBody,
+    /// The type of each value it returns.
+    returns: Vec<Type>,
+    /// The sets of values of `@return false | (string, string)`, which `returns` then merges.
+    sets: Vec<Vec<Type>>,
+}
+
+impl Documented<'_> {
+    /// The types a `return` passing `values` is compared with: `returns`, or of several sets the
+    /// one that takes the most of the values, then one the `return` is not short for, then the one
+    /// nearest in length.
+    fn closest(&self, classes: &Classes, exprs: &[Expr], values: &[(Type, Span)]) -> &[Type] {
+        let distance = |set: &&Vec<Type>| {
+            let rejected = mismatches(classes, set, values).len();
+            (rejected, is_short(exprs, required_values(classes, set)), set.len().abs_diff(values.len()))
+        };
+        self.sets.iter().min_by_key(distance).unwrap_or(&self.returns)
+    }
+}
+
+/// The functions of `chunk` documented with `@return`.
+fn documented<'c>(infer: &Infer, chunk: &'c Chunk) -> Vec<Documented<'c>> {
+    let mut finder = Finder { infer, out: Vec::new() };
     finder.visit_block(&chunk.block);
     finder.out
 }
 
-struct Documented<'a, 'b, 'c> {
+struct Finder<'a, 'b, 'c> {
     infer: &'a Infer<'b>,
-    out: Vec<(&'c FuncBody, Vec<Type>)>,
+    out: Vec<Documented<'c>>,
 }
 
-impl<'c> Visitor<'c> for Documented<'_, '_, 'c> {
+impl<'c> Visitor<'c> for Finder<'_, '_, 'c> {
     fn visit_stmt(&mut self, stmt: &'c Stmt) {
         let functions = documented_functions(stmt);
         if !functions.is_empty() {
             let doc = self.infer.ctx.doc_at(stmt.span.start);
             if !doc.returns.is_empty() {
                 let returns: Vec<Type> = doc.returns.iter().map(|r| r.ty.clone()).collect();
-                self.out.extend(functions.into_iter().map(|func| (func, returns.clone())));
+                let documented = |func| Documented { func, returns: returns.clone(), sets: doc.return_sets.clone() };
+                self.out.extend(functions.into_iter().map(documented));
             }
         }
         visit::walk_stmt(self, stmt);

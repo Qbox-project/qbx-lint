@@ -33,7 +33,9 @@ Available features depend on the editor's LSP client.
   keys such as `Config['name']` and supported `---@field` declarations.
 - Hover and definitions for the classes, aliases and enums named in LuaCATS annotations.
 - Type guards: after `if not name then return end`, inside `if name then`, and in the other
-  [guarded code](#type-guards), a local is no longer `nil` or `false`.
+  [guarded code](#type-guards), a local is no longer `nil` or `false`. A guard on one value of
+  `local ok, err = f()` also narrows the others, for functions that return
+  [sets of values](#sets-of-returned-values) such as `false | (string, string)`.
 - Diagnostics and quick fixes with resource and client/server context, plus LuaCATS type checks:
   `missing-fields` and `assign-type-mismatch` for tables and assignments that leave out required
   fields of their class or store a value of the wrong type, `undeclared-field` for fields and keys
@@ -101,6 +103,38 @@ other branches all end in `return`, `error(...)`, `break` or `goto`, to the body
 the right side of `and` and `or`, and to the code after `assert(name)`. A local that is assigned
 again after its declaration is not narrowed, since a guard says nothing about the new value, and
 neither are globals and fields.
+
+### Sets of returned values
+
+A function often returns either one set of values or another: `false` when it fails, and
+otherwise two names. `@return` lists such sets separated by `|`, with the values of a set in
+parentheses:
+
+```lua
+---@return false | (string, string)
+local function GetName()
+    if math.random(1, 2) == 2 then
+        return false
+    end
+    return "Joe", "Doe"
+end
+
+local firstname, lastname = GetName() -- false|string, string?
+if not firstname then
+    return -- lastname is nil here
+end
+print(firstname, lastname) -- string, string
+```
+
+The locals that one call declares are narrowed together: a guard on one of them rules out the
+sets that do not fit it, and the others are read from the sets that are left. Without the guard,
+each holds what its position has across the sets, and `nil` for a set that ends before it.
+
+An undocumented function gets its sets from its `return` statements, so the example works
+without the annotation as well. The syntax is also accepted after the `:` of a `fun(...)` type. A
+function lists its sets on one `@return` line; further `@return` lines add values and turn the
+line into an ordinary list of types. This notation is an extension: LuaLS reads parentheses as
+grouping one type.
 
 ## Framework callbacks
 

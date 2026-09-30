@@ -82,8 +82,7 @@ fn information(
     let labels: Vec<String> = params.iter().map(|p| p.to_string()).collect();
     let mut label = format!("{name}({})", labels.join(", "));
     if !fun.returns.is_empty() {
-        let returns: Vec<String> = fun.returns.iter().map(|r| r.to_string()).collect();
-        label.push_str(&format!(": {}", returns.join(", ")));
+        label.push_str(&format!(": {}", fun.returns_text()));
     }
 
     let mut active = argument.saturating_sub(skip_args);

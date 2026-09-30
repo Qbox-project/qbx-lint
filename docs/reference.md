@@ -339,6 +339,20 @@ leaves. An empty body runs past its end too, except in a definition file marked 
 functions only declare their signatures. Returned tables typed as a class get the same checks as
 `---@type` tables: `missing-fields`, `assign-type-mismatch` and `undeclared-field`.
 
+A function that returns either one set of values or another lists them on its `@return` line,
+separated by `|`, with the values of a set in parentheses:
+
+```lua
+---@return false | (string, string)
+local function GetName() ... end
+```
+
+Each `return` then has to be one of the sets: `return false` and `return "Joe", "Doe"` are, while
+`return "Joe"` is a `missing-return` and `return 1, "Doe"` a `return-type-mismatch`. A `return` is
+compared with the set it comes closest to. This notation is a qbx extension of LuaCATS, which
+qbx-lua-ls also uses to narrow the locals a call declares; see its
+[type guards](../crates/qbx_lua_ls/README.md#type-guards).
+
 Only clear cases count. Values whose type is not known are skipped, and so is a local that is
 assigned again after its declaration, since its declared type may not be what it holds. The same
 applies to the values `assign-type-mismatch` checks, where `nil` is a value like any other:

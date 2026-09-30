@@ -65,6 +65,10 @@ type Facts = Vec<(LocalId, Fact)>;
 #[derive(Debug, Default)]
 pub struct Guards {
     facts: FxHashMap<LocalId, Vec<(Span, Fact)>>,
+    /// The locals that one call declares together, as in `local ok, err = f()`, each with the
+    /// position of its value among those the call returns.
+    links: Vec<Vec<(LocalId, usize)>>,
+    link_of: FxHashMap<LocalId, usize>,
 }
 
 impl Guards {
@@ -78,6 +82,13 @@ impl Guards {
     pub fn at(&self, local: LocalId, offset: u32) -> impl Iterator<Item = &Fact> {
         let facts = self.facts.get(&local).map(Vec::as_slice).unwrap_or_default();
         facts.iter().filter(move |(span, _)| span.start <= offset && offset < span.end).map(|(_, fact)| fact)
+    }
+
+    /// The locals declared by the same call as `local`, itself included, each with the position of
+    /// its value among those the call returns. A guard on one of them also tells which of the sets
+    /// of values the call can return the others come from.
+    pub fn linked(&self, local: LocalId) -> Option<&[(LocalId, usize)]> {
+        self.link_of.get(&local).map(|link| self.links[*link].as_slice())
     }
 }
 
@@ -125,6 +136,29 @@ impl Finder<'_> {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// Links the locals that take the values of the call ending a `local` statement. Those assigned
+    /// again later are left out, as they are not narrowed.
+    fn link(&mut self, names: &[AttribName], exprs: &[Expr]) {
+        let Some(first) = exprs.len().checked_sub(1).filter(|_| exprs.last().is_some_and(Expr::is_call)) else {
+            return;
+        };
+        let members: Vec<(LocalId, usize)> = names
+            .iter()
+            .enumerate()
+            .skip(first)
+            .filter_map(|(index, name)| {
+                let Some(Resolved::Local(id)) = self.resolution.resolve_at(name.name.span.start) else { return None };
+                (!self.resolution.local(id).refs.iter().any(|r| r.write)).then_some((id, index - first))
+            })
+            .collect();
+        if members.len() > 1 {
+            for (local, _) in &members {
+                self.guards.link_of.insert(*local, self.guards.links.len());
+            }
+            self.guards.links.push(members);
         }
     }
 
@@ -204,6 +238,7 @@ impl<'ast> Visitor<'ast> for Finder<'_> {
                     self.record(Span { start, end: stmt.span.end }, failed);
                 }
             }
+            StmtKind::Local { names, exprs, in_unpack: false } => self.link(names, exprs),
             StmtKind::While { cond, .. } => {
                 let mut facts = Facts::new();
                 self.facts(cond, true, &mut facts);
