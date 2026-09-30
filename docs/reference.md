@@ -329,7 +329,9 @@ keeps it loose.
 
 A function documented with `@return` has to return values of those types. That includes a
 function passed to the call below the doc comment, such as the handler of
-`RegisterServerCallback('name', function(source) ... end)`. qbx-lua-ls reports:
+`RegisterServerCallback('name', function(source) ... end)`, also when the statement assigns what
+the call returns, as `local handler = RegisterNetEvent('name', function() ... end)` does.
+qbx-lua-ls reports:
 
 - `return-type-mismatch` for a returned value that clearly is not of its `@return` type: a
   different kind of value, such as `return 5` for `---@return string`, or a literal the type does
@@ -385,7 +387,9 @@ end
 
 A `---@param` or `---@type` gives the name a type, `any` included. Without one, a parameter that
 only takes `any` from the `fun(...)` its function is passed as, like the handler of
-`RegisterNetEvent`, counts as untyped. A local declared without a value needs a `---@type`, since
+`RegisterNetEvent`, counts as untyped. Its `---@param` goes above the statement that makes the
+call, whether that is the call alone or `handlers[name] = RegisterNetEvent(name, function(id) end)`.
+A local declared without a value needs a `---@type`, since
 later assignments are not followed. Names that start with `ignore_unused_prefix`, and `self`, are
 not reported. To check only your own resources, set the level in an `[[overrides]]` entry instead
 of `[rules]`.

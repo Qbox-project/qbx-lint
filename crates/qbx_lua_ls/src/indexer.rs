@@ -648,10 +648,14 @@ impl<'a> Indexer<'a> {
     }
 
     /// The handler a framework or `@callback` registration passes: a function literal typed by the
-    /// doc comment above the call at `offset`, or a local function that is never reassigned.
+    /// doc comment above the statement of the call at `offset`, or a local function that is never
+    /// reassigned.
     fn handler_type(&self, arg: &Expr, offset: u32) -> Option<Arc<FunType>> {
         match &arg.kind {
-            ExprKind::Function(func) => Some(Arc::new(self.infer.fun_type(func, Some(offset), false))),
+            ExprKind::Function(func) => {
+                let anchor = self.ctx.call_doc_anchor(offset);
+                Some(Arc::new(self.infer.fun_type(func, Some(anchor), false)))
+            }
             ExprKind::Name(name) => {
                 let Some(Resolved::Local(id)) = self.ctx.resolution.resolve_at(name.span.start) else {
                     return None;
