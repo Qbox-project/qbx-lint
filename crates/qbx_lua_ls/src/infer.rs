@@ -617,7 +617,7 @@ impl<'a> Infer<'a> {
         if let Some(class) = doc.classes.last() {
             return Type::Named(class.name.clone(), Vec::new());
         }
-        if let Some(ty) = &doc.ty {
+        if let Some(ty) = doc.type_at(index) {
             return ty.clone();
         }
         if *in_unpack {

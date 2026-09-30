@@ -106,17 +106,20 @@ impl<'c> Visitor<'c> for Finder<'_, '_> {
             }
         }
         match &stmt.kind {
-            StmtKind::Local { exprs, .. } if exprs.iter().any(|expr| self.is_value(expr)) => {
-                let doc = self.infer.ctx.doc_at(stmt.span.start);
-                // `---@class Name` above a table declares the class rather than an instance of it.
-                if doc.classes.is_empty() {
-                    self.found = doc.ty.clone().map(ExpectedValue::stored);
+            StmtKind::Local { exprs, .. } => {
+                if let Some(index) = exprs.iter().position(|expr| self.is_value(expr)) {
+                    let doc = self.infer.ctx.doc_at(stmt.span.start);
+                    // `---@class Name` above a table declares the class rather than an instance of it.
+                    if doc.classes.is_empty() {
+                        self.found = doc.type_at(index).cloned().map(ExpectedValue::stored);
+                    }
                 }
             }
             StmtKind::Assign { targets, exprs } => {
                 if let Some(index) = exprs.iter().position(|expr| self.is_value(expr)) {
                     let doc = self.infer.ctx.doc_at(stmt.span.start);
-                    let ty = doc.ty.clone().or_else(|| targets.get(index).map(|target| self.declared.of(target)));
+                    let declared = doc.type_at(index).cloned();
+                    let ty = declared.or_else(|| targets.get(index).map(|target| self.declared.of(target)));
                     self.found = ty.map(ExpectedValue::stored);
                 }
             }

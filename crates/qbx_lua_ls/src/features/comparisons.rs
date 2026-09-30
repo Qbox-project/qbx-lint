@@ -126,7 +126,7 @@ impl<'a, 'b> Declared<'a, 'b> {
     /// Whether a `---@type` above its declaration or a `@param` line types the local.
     fn is_annotated(&self, local: &Local) -> bool {
         match self.infer.ctx.decl(local.decl.start) {
-            Some(Decl::Local { stmt, .. }) => self.infer.ctx.doc_at(stmt.span.start).ty.is_some(),
+            Some(Decl::Local { stmt, index }) => self.infer.ctx.doc_at(stmt.span.start).type_at(*index).is_some(),
             Some(Decl::Param { .. }) => has_param_line(self.infer, local),
             _ => false,
         }
@@ -138,7 +138,7 @@ impl<'a, 'b> Declared<'a, 'b> {
     fn local_value(&self, id: LocalId, stmt: &Stmt, index: usize, depth: u32) -> Type {
         let StmtKind::Local { exprs, in_unpack: false, .. } = &stmt.kind else { return Type::Unknown };
         let doc = self.infer.ctx.doc_at(stmt.span.start);
-        if doc.ty.is_some() || !doc.classes.is_empty() {
+        if doc.type_at(index).is_some() || !doc.classes.is_empty() {
             return self.infer.local_type(id);
         }
         match exprs.get(index) {
