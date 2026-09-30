@@ -114,6 +114,9 @@ fn check_read(input: &FileInput, global: &GlobalRef, regions: &SideRegions, sink
             );
             return;
         }
+        if resource.env.declares(name) {
+            return;
+        }
         if let Some(import) = resource.env.has_unresolved_import_for(input.side) {
             sink.report(
                 rules::UNDEFINED_GLOBAL,

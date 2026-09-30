@@ -79,7 +79,19 @@ pub fn index_file(
     }
     let mut out = indexer.out;
     out.summary = summarize(source, chunk, resolution);
+    let first_stmt = chunk.block.stmts.first().map_or(u32::MAX, |stmt| stmt.span.start);
+    out.meta = chunk
+        .comments
+        .iter()
+        .take_while(|comment| comment.span.start < first_stmt)
+        .any(|comment| is_meta_comment(comment.span.text(source)));
     out
+}
+
+/// Whether a comment is the `---@meta` line of a definition file.
+pub fn is_meta_comment(text: &str) -> bool {
+    let doc = text.strip_prefix("---").unwrap_or_default();
+    doc.trim_start().strip_prefix("@meta").is_some_and(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace))
 }
 
 struct Indexer<'a> {

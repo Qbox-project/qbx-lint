@@ -162,6 +162,8 @@ pub struct FileIndex {
     pub state_keys: Vec<SmolStr>,
     /// The file registers exports under names computed at runtime, so the listed ones are not all.
     pub dynamic_exports: bool,
+    /// A `---@meta` line above the first statement marks a definition file.
+    pub meta: bool,
     pub summary: FileSummary,
 }
 
@@ -180,6 +182,19 @@ pub struct FileEntry {
     pub resource: Option<ResourceId>,
     pub side: Option<Side>,
     pub index: FileIndex,
+}
+
+impl FileEntry {
+    /// A definition file outside any resource: one from a `library` folder, as LuaLS reads its
+    /// library, or a workspace file marked `---@meta`. Every resource sees its globals. Built-in
+    /// stubs are visible anyway and their globals are known to the rules.
+    pub fn defines_for_all(&self) -> bool {
+        match self.origin {
+            FileOrigin::Stub => false,
+            FileOrigin::Library => self.resource.is_none(),
+            FileOrigin::Workspace => self.resource.is_none() && self.index.meta,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -345,7 +360,7 @@ impl Index {
         if !sides_match {
             return false;
         }
-        if other.origin == FileOrigin::Stub {
+        if other.origin == FileOrigin::Stub || other.defines_for_all() {
             return true;
         }
         match (source.resource, other.resource) {

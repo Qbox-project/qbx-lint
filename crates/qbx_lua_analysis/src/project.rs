@@ -174,6 +174,9 @@ pub struct ResourceEnv {
     /// Every assignment to a global or global table field by dotted path, with the side of its file.
     functions: FxHashMap<SmolStr, Vec<SidedSignature>>,
     aliases: FxHashMap<SmolStr, Type>,
+    /// Globals that definition files outside any resource describe, such as type libraries. They
+    /// exist at runtime without the resource defining them, unless they come from an import it lacks.
+    declared: FxHashSet<SmolStr>,
     pub unresolved_imports: Vec<UnresolvedImport>,
     /// Part of the resource is encrypted or unreadable, so neither what it defines nor what it
     /// uses is known; rules that need the whole picture stay quiet.
@@ -256,6 +259,15 @@ impl ResourceEnv {
             Some(Side::Shared) => self.client.contains(name) || self.server.contains(name),
             None => self.client.contains(name) || self.server.contains(name),
         }
+    }
+
+    /// Adds the globals of a definition file that belongs to no resource.
+    pub fn add_declarations(&mut self, summary: &FileSummary) {
+        self.declared.extend(summary.global_defs.iter().map(|def| def.name.clone()));
+    }
+
+    pub fn declares(&self, name: &str) -> bool {
+        self.declared.contains(name)
     }
 
     pub fn declared_at_file_scope(&self, name: &str) -> bool {
