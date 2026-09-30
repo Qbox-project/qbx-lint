@@ -6,6 +6,7 @@ pub mod index;
 pub mod indexer;
 pub mod infer;
 pub mod locate;
+pub mod narrow;
 mod nui_callbacks;
 pub mod server;
 pub mod workspace;

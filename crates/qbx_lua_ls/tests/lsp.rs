@@ -1624,6 +1624,96 @@ local ok, amount, reason = count()
 }
 
 #[test]
+fn guards_narrow_the_locals_they_test() {
+    let mut client = Client::start(fixture_root());
+    let text = "\
+---@class Guarded
+---@field job string
+
+---@return string?
+local function getName()
+    if math.random(1, 2) == 2 then
+        return
+    end
+    return 'Joe'
+end
+
+---@param player Guarded?
+---@param flag boolean
+---@param label string?
+---@param count integer?
+local function check(player, flag, label, count)
+    if player then
+        print(player.job) -- held
+    else
+        print(player) -- missing
+    end
+    if flag == false then
+        return flag -- off
+    end
+    print(flag) -- on
+    local shown = label and label:upper() -- and
+    if label == nil or count == nil then
+        return shown
+    end
+    print(label, count) -- both
+    for _ = 1, 2 do
+        local item = getName()
+        if not item then
+            goto continue
+        end
+        print(item) -- item held
+        ::continue::
+        print(item) -- item skipped
+    end
+    local again = getName()
+    assert(again, 'no name')
+    print(again) -- asserted
+    local changed = getName()
+    if not changed then
+        changed = getName()
+    end
+    if not changed then
+        return
+    end
+    print(changed) -- reassigned
+end
+
+local name = getName()
+if not name then
+    print(name) -- inside
+    return check()
+end
+print(name) -- after
+local copy = name
+";
+    client.open_with(CLIENT, text);
+    for (needle, expected) in [
+        ("name = getName()\nif", "name: string?\n"),
+        ("name) -- inside", "name: nil\n"),
+        ("name) -- after", "name: string\n"),
+        ("copy = name", "copy: string\n"),
+        ("player.job) -- held", "player: Guarded {"),
+        ("player) -- missing", "player: nil\n"),
+        ("flag -- off", "flag: false\n"),
+        ("flag) -- on", "flag: true\n"),
+        ("label:upper() -- and", "label: string\n"),
+        ("label, count) -- both", "label: string\n"),
+        ("count) -- both", "count: integer\n"),
+        ("item) -- item held", "item: string\n"),
+        // A `goto` that skipped the guard reaches the code after its label.
+        ("item) -- item skipped", "item: string?\n"),
+        ("again) -- asserted", "again: string\n"),
+        // Something assigns to it after its declaration, so a guard says nothing about it.
+        ("changed) -- reassigned", "changed: string?\n"),
+    ] {
+        let (l, c) = pos(text, needle, 0);
+        let hover = client.hover_text(CLIENT, l, c);
+        assert!(hover.contains(expected), "{needle}: expected {expected:?} in {hover}");
+    }
+}
+
+#[test]
 fn registrations_list_the_calls_that_trigger_them() {
     let mut client = Client::start(fixture_root());
     client.open_with(
