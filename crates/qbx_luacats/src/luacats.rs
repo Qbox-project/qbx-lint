@@ -110,7 +110,8 @@ impl DocGroup {
             .map(|overload| {
                 let lists_self = overload.params.first().is_some_and(|p| p.name == "self");
                 let is_method = is_method && !lists_self;
-                Arc::new(FunType { is_method, generics: self.generics.clone(), ..(**overload).clone() })
+                let lists_receiver = !is_method;
+                Arc::new(FunType { is_method, lists_receiver, generics: self.generics.clone(), ..(**overload).clone() })
             })
             .collect();
         FunType {
@@ -118,6 +119,7 @@ impl DocGroup {
             returns: self.returns.iter().map(|r| r.ty.clone()).collect(),
             return_sets: self.return_sets.clone(),
             is_method,
+            lists_receiver: !is_method,
             generics: self.generics.clone(),
             overloads,
             side: None,
