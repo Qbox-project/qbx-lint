@@ -1636,6 +1636,41 @@ local ok, amount, reason = count()
 }
 
 #[test]
+fn locals_keep_the_type_of_the_call_that_declares_them() {
+    let mut client = Client::start(fixture_root());
+    let text = "---@return 'active'|'busy'|'ready'
+local function GetState()
+    return 'active'
+end
+
+---@return 1|2 level, 'low'|'high' label
+local function GetLevel()
+    return 1, 'low'
+end
+
+local state = GetState()
+local level, label = GetLevel()
+local changed = GetState()
+changed = 'other'
+local mode = 'dev'
+print(state, level, label, changed, mode)
+";
+    client.open_with(CLIENT, text);
+    for (needle, expected) in [
+        ("state = GetState", "local state: \"active\"|\"busy\"|\"ready\""),
+        ("level, label", "local level: 1|2"),
+        ("label = GetLevel", "local label: \"low\"|\"high\""),
+        // One that is assigned again may hold other values of that kind.
+        ("changed = GetState", "local changed: string"),
+        ("mode = 'dev'", "local mode: string"),
+    ] {
+        let (l, c) = pos(text, needle, 0);
+        let hover = client.hover_text(CLIENT, l, c);
+        assert!(hover.contains(expected), "{needle}: expected {expected:?} in {hover}");
+    }
+}
+
+#[test]
 fn guards_narrow_the_locals_they_test() {
     let mut client = Client::start(fixture_root());
     let text = "\
