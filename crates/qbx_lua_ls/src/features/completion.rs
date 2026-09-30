@@ -790,7 +790,7 @@ fn string_items(ws: &Workspace, doc: &Document, offset: u32, token_index: usize)
         && tokens[token_index - 1].kind == TokenKind::LBracket
         && tokens[token_index - 2].span.text(&doc.text) == "exports";
     if indexes_exports {
-        return resource_items(ws);
+        return resource_items(ws, doc);
     }
     if doc.is_manifest() {
         return manifest_path_items(ws, doc);
@@ -910,7 +910,7 @@ fn string_items(ws: &Workspace, doc: &Document, offset: u32, token_index: usize)
         return module_items(ws, doc);
     }
     if arg_index == 0 && RESOURCE_NAME_CALLS.contains(&path) {
-        return resource_items(ws);
+        return resource_items(ws, doc);
     }
     literals()
 }
@@ -1093,8 +1093,16 @@ fn on_cache_item(mut keys: Vec<String>, prefix: &str, quote: char) -> Completion
     snippet_item("onCache", &body, &format!("React to an ox_lib cache change ({})", keys.join(", ")))
 }
 
-fn resource_items(ws: &Workspace) -> Vec<CompletionItem> {
-    ws.index.resources.iter().map(|r| item(&r.name, CompletionItemKind::MODULE, 0)).collect()
+/// The resources of the workspace, then those that only a declared exports type names.
+fn resource_items(ws: &Workspace, doc: &Document) -> Vec<CompletionItem> {
+    let mut seen = FxHashSet::default();
+    let workspace = ws.index.resources.iter().map(|r| &r.name);
+    let declared = ws.index.declared_exports(doc.file).into_iter().map(|(_, symbol)| &symbol.name);
+    workspace
+        .chain(declared)
+        .filter(|name| seen.insert(*name))
+        .map(|name| item(name, CompletionItemKind::MODULE, 0))
+        .collect()
 }
 
 fn module_items(ws: &Workspace, doc: &Document) -> Vec<CompletionItem> {

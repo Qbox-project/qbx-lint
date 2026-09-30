@@ -515,6 +515,23 @@ impl Index {
             .flat_map(|(id, file)| file.index.globals.iter().map(move |s| (id, s)))
     }
 
+    /// Types declared for the exports of resources, as `---@type PhoneExports` above
+    /// `exports['phone'] = {}`, that code in `from` sees. Exports cross resources, so these are
+    /// looked up in every file whose side fits, like registered exports are.
+    pub fn declared_exports(&self, from: FileId) -> Vec<(FileId, &Symbol)> {
+        let side = self.file(from).and_then(|f| f.side);
+        let Some(slots) = self.members.get("exports") else { return Vec::new() };
+        slots
+            .iter()
+            .filter_map(|(file, i)| Some((*file, self.file(*file)?, i)))
+            .filter(|(_, entry, _)| match (side, entry.side) {
+                (Some(side), Some(declared)) => declared.is_available_on(side),
+                _ => true,
+            })
+            .filter_map(|(id, entry, i)| Some((id, &entry.index.members.get(*i as usize)?.symbol)))
+            .collect()
+    }
+
     pub fn exports_of(&self, resource: &str) -> Vec<(FileId, &Symbol)> {
         let Some((_, entry)) = self.resource_by_name(resource) else { return Vec::new() };
         entry

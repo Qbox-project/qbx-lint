@@ -33,6 +33,14 @@ impl Client {
     }
 
     fn start_with_capabilities(root: PathBuf, capabilities: Value) -> Self {
+        Self::start_with_options(root, capabilities, Value::Null)
+    }
+
+    fn start_with_library(root: PathBuf, library: &Path) -> Self {
+        Self::start_with_options(root, json!({}), json!({ "library": [library] }))
+    }
+
+    fn start_with_options(root: PathBuf, capabilities: Value, options: Value) -> Self {
         let (server_side, client_side) = Connection::memory();
         let server = std::thread::Builder::new()
             .stack_size(16 * 1024 * 1024)
@@ -50,7 +58,7 @@ impl Client {
         let root_uri = Url::from_file_path(&client.root).unwrap();
         let result = client.request(
             "initialize",
-            json!({ "processId": null, "rootUri": root_uri, "capabilities": capabilities, "workspaceFolders": [{ "uri": root_uri, "name": "fixture" }] }),
+            json!({ "processId": null, "rootUri": root_uri, "capabilities": capabilities, "initializationOptions": options, "workspaceFolders": [{ "uri": root_uri, "name": "fixture" }] }),
         );
         assert!(result["capabilities"]["completionProvider"].is_object());
         client.notify("initialized", json!({}));
@@ -5607,6 +5615,49 @@ fn completes_resources_and_exports_in_both_spellings() {
     client.change(CLIENT, 4, &format!("{text}exports.mylib:GetPlayer(1)"));
     let hover = client.hover_text(CLIENT, line, 16);
     assert!(hover.contains("GetPlayer(source: integer)") && hover.contains("Looks a player up"), "{hover}");
+}
+
+fn declared_exports_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/declared_exports")
+}
+
+#[test]
+fn declared_types_describe_the_exports_of_a_resource() {
+    let root = declared_exports_root();
+    let mut client = Client::start_with_library(root.join("workspace"), &root.join("types"));
+    let text = client.open("app/client.lua");
+
+    let (l, c) = pos(&text, "local config", 6);
+    assert!(client.hover_text("app/client.lua", l, c).contains("local config: PhoneConfig"), "the declared type wins");
+    let (l, c) = pos(&text, "local extra", 6);
+    let extra = client.hover_text("app/client.lua", l, c);
+    assert!(extra.contains("local extra: string"), "registered exports the type leaves out stay: {extra}");
+    let (l, c) = pos(&text, "Ring(2)", 0);
+    let ring = client.hover_text("app/client.lua", l, c);
+    assert!(
+        ring.contains("Ring(self: TabletExports, times: number): boolean"),
+        "a resource the workspace lacks: {ring}"
+    );
+    let (l, c) = pos(&text, "IsInCall()", 0);
+    let in_call = client.hover_text("app/client.lua", l, c);
+    assert!(in_call.contains("IsInCall(self: PhoneExports): boolean"), "{in_call}");
+
+    let line = text.lines().count() as u32;
+    client.change("app/client.lua", 2, &format!("{text}exports['']"));
+    let mut resources = client.completion_labels("app/client.lua", line, 9);
+    resources.sort();
+    assert_eq!(resources, ["app", "phone", "tablet"]);
+    client.change("app/client.lua", 3, &format!("{text}exports.tablet:"));
+    assert_eq!(client.completion_labels("app/client.lua", line, 15), ["Ring"]);
+
+    let server = client.open("app/server.lua");
+    let (l, c) = pos(&server, "callId", 0);
+    assert!(
+        client.hover_text("app/server.lua", l, c).contains("local callId: number?"),
+        "a server call picks its signature"
+    );
+    let (l, c) = pos(&server, "call =", 0);
+    assert!(client.hover_text("app/server.lua", l, c).contains("local call: PhoneCall?"));
 }
 
 #[test]
