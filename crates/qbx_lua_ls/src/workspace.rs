@@ -73,8 +73,20 @@ impl Workspace {
             let resolution = resolve(&chunk);
             let uri = Url::parse(&format!("qbx-stub:///{}", stub.name)).expect("static url");
             let side = (stub.side != Side::Shared).then_some(stub.side);
+            let entry = |index| FileEntry {
+                path: path.clone(),
+                uri: uri.clone(),
+                origin: FileOrigin::Stub,
+                resource: None,
+                side,
+                index,
+            };
+            // Globals are only visible from files the index knows. A stub needs its entry before it is
+            // indexed to see the stubs loaded before it, so that `function os.nanotime()` of the CfxLua
+            // stub lands on the `os` that the Lua stub declares.
+            self.index.set_file(id, entry(FileIndex::default()));
             let index = index_file(id, stub.source, &chunk, &resolution, &self.index, side);
-            self.index.set_file(id, FileEntry { path, uri, origin: FileOrigin::Stub, resource: None, side, index });
+            self.index.set_file(id, entry(index));
         }
     }
 
