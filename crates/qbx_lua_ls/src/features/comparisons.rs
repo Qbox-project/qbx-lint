@@ -10,7 +10,7 @@
 //! it is deliberate.
 
 use qbx_fivem_data::native;
-use qbx_lua_analysis::scope::{LocalId, Resolved};
+use qbx_lua_analysis::scope::{Local, LocalId, Resolved};
 use qbx_lua_syntax::ast::*;
 use qbx_lua_syntax::visit::{self, Visitor};
 use qbx_lua_syntax::Span;
@@ -25,19 +25,41 @@ const MAX_DEPTH: u32 = 16;
 /// Each `==` and `~=` of `chunk` whose sides share no value, with a message naming both types and
 /// the answer the comparison always gives.
 pub fn impossible_comparisons(infer: &Infer, chunk: &Chunk) -> Vec<(Span, String)> {
-    let mut finder = Finder { infer, classes: Classes::new(infer), out: Vec::new() };
+    let mut finder = Finder { declared: Declared::new(infer), out: Vec::new() };
     finder.visit_block(&chunk.block);
     finder.out
 }
 
 struct Finder<'a, 'b> {
-    infer: &'a Infer<'b>,
-    classes: Classes<'a, 'b>,
+    declared: Declared<'a, 'b>,
     out: Vec<(Span, String)>,
 }
 
-impl Finder<'_, '_> {
+/// Reads the types that expressions are declared to have.
+pub struct Declared<'a, 'b> {
+    infer: &'a Infer<'b>,
+    classes: Classes<'a, 'b>,
+    /// Whether a local that is assigned again keeps the type its annotation gives it.
+    keeps_annotations: bool,
+}
+
+impl<'a, 'b> Declared<'a, 'b> {
+    pub fn new(infer: &'a Infer<'b>) -> Self {
+        Self { infer, classes: Classes::new(infer), keeps_annotations: false }
+    }
+
+    /// Takes the `---@type` or `@param` of a local at its word, also where the local is assigned
+    /// again. Completion reads the values to offer for it from there, which no diagnostic can
+    /// rely on.
+    pub fn keeping_annotations(infer: &'a Infer<'b>) -> Self {
+        Self { keeps_annotations: true, ..Self::new(infer) }
+    }
+
     /// The type of `expr` as far as it is declared, and `unknown` beyond that.
+    pub fn of(&self, expr: &Expr) -> Type {
+        self.declared(expr, 0)
+    }
+
     fn declared(&self, expr: &Expr, depth: u32) -> Type {
         if depth > MAX_DEPTH {
             return Type::Unknown;
@@ -85,7 +107,7 @@ impl Finder<'_, '_> {
     /// declaration is `unknown`, since its declared type may not be what it holds.
     fn local(&self, id: LocalId, offset: u32, depth: u32) -> Type {
         let local = self.infer.ctx.resolution.local(id);
-        if local.refs.iter().any(|r| r.write) {
+        if local.refs.iter().any(|r| r.write) && !(self.keeps_annotations && self.is_annotated(local)) {
             return Type::Unknown;
         }
         let ty = match self.infer.ctx.decl(local.decl.start) {
@@ -99,6 +121,15 @@ impl Finder<'_, '_> {
             return ty;
         }
         self.infer.narrowed(id, offset, ty)
+    }
+
+    /// Whether a `---@type` above its declaration or a `@param` line types the local.
+    fn is_annotated(&self, local: &Local) -> bool {
+        match self.infer.ctx.decl(local.decl.start) {
+            Some(Decl::Local { stmt, .. }) => self.infer.ctx.doc_at(stmt.span.start).ty.is_some(),
+            Some(Decl::Param { .. }) => has_param_line(self.infer, local),
+            _ => false,
+        }
     }
 
     /// What the `local` statement `stmt` gives the name at `index`: its `---@type`, or the declared
@@ -190,8 +221,8 @@ impl Finder<'_, '_> {
 impl<'c> Visitor<'c> for Finder<'_, '_> {
     fn visit_expr(&mut self, expr: &'c Expr) {
         if let ExprKind::Binary { op: op @ (BinOp::Eq | BinOp::Ne), lhs, rhs, .. } = &expr.kind {
-            let (left, right) = (self.declared(lhs, 0), self.declared(rhs, 0));
-            if self.classes.never_equal(&left, &right) {
+            let (left, right) = (self.declared.of(lhs), self.declared.of(rhs));
+            if self.declared.classes.never_equal(&left, &right) {
                 let answer = if *op == BinOp::Eq { "false" } else { "true" };
                 self.out.push((expr.span, format!("Comparing `{left}` with `{right}` is always {answer}")));
             }

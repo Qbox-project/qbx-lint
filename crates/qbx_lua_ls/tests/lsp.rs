@@ -4875,6 +4875,243 @@ function Emitter:on(event, mode) end
 }
 
 #[test]
+fn values_offer_what_their_declared_type_lists() {
+    let mut client = Client::start(fixture_root());
+    let defs = "\
+---@alias State \"busy\" | \"working\" | \"ready\"
+---@alias Level 1 | 2 | 3
+---@alias Volume \"mute\" | 0 | 100
+
+---@class Machine
+---@field state State
+---@field mode \"auto\"|\"manual\"
+---@field fallback? State
+---@field label string
+---@field level Level
+---@field enabled boolean
+---@field onStop? fun(reason: string)
+
+---@alias Handler fun(id: integer, name: string)
+
+---@param level Level
+---@param volume? Volume
+function SetLevel(level, volume) end
+
+---@param enabled boolean
+---@param mode? \"auto\"|\"manual\"|false
+function SetEnabled(enabled, mode) end
+";
+    client.open_with("myresource/shared/config.lua", defs);
+    // `|` marks the cursor; `trigger` is the character typed to ask for completions. Items come back
+    // in the order their `sortText` lists them, as label and inserted text.
+    let mut values = |typed: &str, trigger: Option<&str>| -> Option<Vec<(String, String)>> {
+        let (line, column) = pos(typed, "|", 0);
+        client.open_with(CLIENT, &typed.replace('|', ""));
+        let mut params = client.position_params(CLIENT, line, column);
+        if let Some(trigger) = trigger {
+            params["context"] = json!({ "triggerKind": 2, "triggerCharacter": trigger });
+        }
+        let result = client.request("textDocument/completion", params);
+        let mut items = result["items"].as_array()?.clone();
+        items.sort_by_key(|item| item["sortText"].as_str().unwrap_or_default().to_string());
+        Some(
+            items
+                .iter()
+                // The listed values are numbered, and a function literal sorts ahead of them.
+                .filter(|item| {
+                    let sort = item["sortText"].as_str().unwrap_or_default();
+                    (sort.len() == 4 && sort.bytes().all(|b| b.is_ascii_digit())) || sort.starts_with(".function(")
+                })
+                .map(|item| {
+                    let label = item["label"].as_str().unwrap().to_string();
+                    let text = item["insertText"].as_str().or(item["textEdit"]["newText"].as_str());
+                    (label.clone(), text.map_or(label, str::to_string))
+                })
+                .collect(),
+        )
+    };
+    let quoted = |values: &[&str], space: &str| -> Option<Vec<(String, String)>> {
+        Some(values.iter().map(|value| (format!("'{value}'"), format!("{space}'{value}'"))).collect())
+    };
+    let plain = |values: &[&str]| -> Option<Vec<(String, String)>> {
+        Some(values.iter().map(|value| (value.to_string(), value.to_string())).collect())
+    };
+    let pairs = |pairs: &[(&str, &str)]| -> Option<Vec<(String, String)>> {
+        Some(pairs.iter().map(|(label, text)| (label.to_string(), text.to_string())).collect())
+    };
+    let states = ["busy", "working", "ready"];
+    let state = "---@type State\nlocal state = 'busy'\n";
+    let machine = "---@type Machine\nlocal machine = GetMachine()\n";
+
+    // A `---@type` above a `local` lists the values when the `=` is typed, with a space, again when
+    // the space is, and when asked.
+    assert_eq!(values("---@type State\nlocal state =|", Some("=")), quoted(&states, " "));
+    assert_eq!(values("---@type State\nlocal state = |", Some(" ")), quoted(&states, ""));
+    assert_eq!(values("---@type State\nlocal state = |", None), quoted(&states, ""));
+    // Strings take the quote most of the document's strings use.
+    assert_eq!(
+        values("local label = \"x\"\n---@type Machine\nlocal machine = { mode = | }", None),
+        Some(vec![
+            ("\"auto\"".to_string(), "\"auto\"".to_string()),
+            ("\"manual\"".to_string(), "\"manual\"".to_string())
+        ])
+    );
+    // An assignment takes what its target is declared as: a local that is assigned again keeps
+    // its annotation, and a field has the type of its `@field`.
+    assert_eq!(values(&format!("{state}state = |"), Some(" ")), quoted(&states, ""));
+    assert_eq!(values(&format!("{state}if state == 'busy' then\n\tstate = |\nend"), None), quoted(&states, ""));
+    assert_eq!(values(&format!("{state}state = 'ready'\nif state == |"), None), quoted(&states, ""));
+    assert_eq!(values(&format!("{machine}machine.state = |"), Some(" ")), quoted(&states, ""));
+    assert_eq!(values(&format!("{machine}machine.mode =|"), Some("=")), quoted(&["auto", "manual"], " "));
+    assert_eq!(values("---@type State\nCurrent = |", None), quoted(&states, ""));
+    // A table typed as a class takes them for the field being set.
+    assert_eq!(values("---@type Machine\nlocal machine = { state = | }", Some(" ")), quoted(&states, ""));
+    assert_eq!(
+        values("---@type Machine\nlocal machine = {\n\tstate = 'busy',\n\tmode = |\n}", None),
+        quoted(&["auto", "manual"], "")
+    );
+    // A `return` takes the `@return` of its function.
+    let returns = "---@return State\nlocal function current()\n\treturn |\nend";
+    assert_eq!(values(returns, Some(" ")), quoted(&states, ""));
+    // A comparison takes what its other side is declared as.
+    let handle = "---@param state State\nlocal function handle(state)\n\t";
+    assert_eq!(values(&format!("{handle}if state == | then\n\tend\nend"), Some(" ")), quoted(&states, ""));
+    assert_eq!(values(&format!("{handle}if state ~=| then\n\tend\nend"), Some("=")), quoted(&states, " "));
+    assert_eq!(values(&format!("{handle}return state == |\nend"), None), quoted(&states, ""));
+    assert_eq!(
+        values(&format!("{handle}if state == 'busy' then\n\telseif state == | then\n\tend\nend"), None),
+        quoted(&states, "")
+    );
+    assert_eq!(values(&format!("{machine}if machine.state == |"), Some(" ")), quoted(&states, ""));
+    assert_eq!(values(&format!("{state}if ready and state == |"), None), quoted(&states, ""));
+    // The statement on the next line is no value of the `=` that is still without one.
+    assert_eq!(values(&format!("{state}state = |\nprint(state)"), None), quoted(&states, ""));
+    // Inside a string, the values replace its contents.
+    assert_eq!(values("---@type State\nlocal state = '|'", None), plain(&states));
+    assert_eq!(values("---@type State\nlocal state = '|", Some("'")), plain(&states));
+    assert_eq!(values(&format!("{state}state = \"bu|\""), None), plain(&states));
+    assert_eq!(values("---@type Machine\nlocal machine = { state = '|' }", None), plain(&states));
+    assert_eq!(values(&format!("{handle}if state == '|' then\n\tend\nend"), None), plain(&states));
+    assert_eq!(values(&format!("{handle}if 'busy|' ~= state then\n\tend\nend"), None), plain(&states));
+    assert_eq!(values("---@return State\nlocal function current()\n\treturn '|'\nend", None), plain(&states));
+
+    // Integers are written as they are, in the order the type lists them beside its strings, and
+    // stay out of a string.
+    let levels = plain(&["1", "2", "3"]);
+    assert_eq!(values("---@type Level\nlocal level = |", Some(" ")), levels);
+    assert_eq!(values("---@type Level\nlocal level =|", Some("=")), pairs(&[("1", " 1"), ("2", " 2"), ("3", " 3")]));
+    assert_eq!(values(&format!("{machine}machine.level = |"), None), levels);
+    assert_eq!(values(&format!("{machine}if machine.level ~= | then\nend"), Some(" ")), levels);
+    assert_eq!(values("---@return Level\nlocal function current()\n\treturn |\nend", None), levels);
+    let volumes = pairs(&[("'mute'", "'mute'"), ("0", "0"), ("100", "100")]);
+    assert_eq!(values("---@type Volume\nlocal volume = |", None), volumes);
+    assert_eq!(values("---@type Volume\nlocal volume = '|'", None), plain(&["mute"]));
+    assert_eq!(values("---@type Level\nlocal level = '|'", None), Some(Vec::new()));
+    // So are those of an argument.
+    assert_eq!(values("SetLevel(|)", Some("(")), levels);
+    assert_eq!(values("SetLevel(1,|)", Some(",")), pairs(&[("'mute'", " 'mute'"), ("0", " 0"), ("100", " 100")]));
+    assert_eq!(values("SetLevel('|')", None), Some(Vec::new()));
+    assert_eq!(values("SetLevel(1, '|')", None), plain(&["mute"]));
+
+    // A `boolean` lists `true` and `false`, and a type that lists values also lists the `nil` it
+    // allows, last.
+    let booleans = plain(&["true", "false"]);
+    assert_eq!(values("---@type boolean\nlocal enabled = |", Some(" ")), booleans);
+    assert_eq!(
+        values("---@type boolean\nlocal enabled =|", Some("=")),
+        pairs(&[("true", " true"), ("false", " false")])
+    );
+    assert_eq!(values("---@type boolean?\nlocal enabled = |", None), plain(&["true", "false", "nil"]));
+    assert_eq!(values(&format!("{machine}machine.enabled = |"), Some(" ")), booleans);
+    assert_eq!(values(&format!("{machine}if machine.enabled == | then\nend"), Some(" ")), booleans);
+    assert_eq!(values("---@return boolean\nlocal function ok()\n\treturn |\nend", Some(" ")), booleans);
+    let optional_states =
+        pairs(&[("'busy'", "'busy'"), ("'working'", "'working'"), ("'ready'", "'ready'"), ("nil", "nil")]);
+    assert_eq!(values("---@type State?\nlocal state = |", Some(" ")), optional_states);
+    assert_eq!(
+        values("---@param state? State\nlocal function handle(state)\n\tif state ~= | then\n\tend\nend", None),
+        optional_states
+    );
+    assert_eq!(values(&format!("{machine}machine.fallback = |"), None), optional_states);
+    assert_eq!(values("---@type boolean\nlocal enabled = '|'", None), Some(Vec::new()));
+    // A typed `(` or `,` opens the list for strings and integers, not for booleans alone, which
+    // are listed when asked for.
+    assert_eq!(values("SetEnabled(|)", Some("(")), None);
+    assert_eq!(values("SetEnabled(|)", None), booleans);
+    assert_eq!(
+        values("SetEnabled(true,|)", Some(",")),
+        pairs(&[("'auto'", " 'auto'"), ("'manual'", " 'manual'"), ("false", " false")])
+    );
+
+    // A value that is stored or returned as a function gets a function literal with the
+    // parameters its type names, but one that is compared with a function does not.
+    let on_stop = pairs(&[("function(reason)", "function(${1:reason})\n\t$0\nend")]);
+    assert_eq!(values("---@type Machine\nlocal machine = { onStop = | }", Some(" ")), on_stop);
+    assert_eq!(values(&format!("{machine}machine.onStop = |"), None), on_stop);
+    assert_eq!(
+        values("---@type Handler\nlocal handler =|", Some("=")),
+        pairs(&[("function(id, name)", " function(${1:id, name})\n\t$0\nend")])
+    );
+    assert_eq!(
+        values("---@return fun()\nlocal function make()\n\treturn |\nend", Some(" ")),
+        pairs(&[("function()", "function()\n\t$0\nend")])
+    );
+    assert_eq!(values("---@type function\nlocal run = |", None), pairs(&[("function()", "function($1)\n\t$0\nend")]));
+    assert_eq!(values(&format!("{machine}if machine.onStop == | then\nend"), Some(" ")), None);
+
+    // A typed `=` or space asks for nothing else, and for nothing where no type lists values.
+    for (typed, trigger) in [
+        ("local state = |", " "),
+        ("local state =|", "="),
+        ("local |", " "),
+        ("print(1, |)", " "),
+        ("---@type string\nlocal label = |", " "),
+        // `nil` alone tells that a value may be missing, not what it can be.
+        ("---@type string?\nlocal label = |", " "),
+        ("---@type Machine\nlocal machine = { label = | }", " "),
+        ("---@type State\nlocal state = 'busy'\nlocal ready = state >= |", " "),
+        ("---@type State\nlocal state = 'busy'\nlocal ready = state >=|", "="),
+        ("---@type State\nlocal state = 'busy' -- state = |", " "),
+        ("---@type State\nlocal state = 'a = |'", " "),
+        // The value after the cursor is already written.
+        ("---@type State\nlocal state = | 'busy'", " "),
+        // What the code assigns tells what a local holds today, not what it may.
+        ("local mode = 'dev'\nmode = |", " "),
+    ] {
+        let found = values(typed, Some(trigger));
+        assert!(found.is_none(), "{typed}: {found:?}");
+    }
+
+    // A typed word filters them by the value, beside the names in scope.
+    let (line, column) = pos("local bucket = 1\n---@type State\nlocal state = bu|", "|", 0);
+    client.open_with(CLIENT, "local bucket = 1\n---@type State\nlocal state = bu");
+    let result = client.request("textDocument/completion", client.position_params(CLIENT, line, column));
+    let items = result["items"].as_array().unwrap();
+    let busy = items.iter().find(|item| item["label"] == "'busy'");
+    assert_eq!(busy.map(|item| &item["filterText"]), Some(&json!("busy")), "{result}");
+    assert_eq!(busy.map(|item| &item["detail"]), Some(&json!("State")), "{result}");
+    assert!(items.iter().any(|item| item["label"] == "bucket"), "{result}");
+    // `true` is listed once, as the value, and not again as a keyword.
+    let (line, column) = pos("---@type boolean\nlocal enabled = t|", "|", 0);
+    client.open_with(CLIENT, "---@type boolean\nlocal enabled = t");
+    let result = client.request("textDocument/completion", client.position_params(CLIENT, line, column));
+    let listed: Vec<&Value> =
+        result["items"].as_array().unwrap().iter().filter(|item| item["label"] == "true").collect();
+    assert_eq!(listed.len(), 1, "{result}");
+    assert_eq!(listed[0]["sortText"], "0000", "{result}");
+    assert_eq!(listed[0]["detail"], "boolean", "{result}");
+
+    // A call snippet writes quotes only around a stop whose parameter lists strings.
+    let (line, column) = pos("SetLev|", "|", 0);
+    client.open_with(CLIENT, "SetLev");
+    let result = client.request("textDocument/completion", client.position_params(CLIENT, line, column));
+    let items = result["items"].as_array().unwrap();
+    let snippets: Vec<&Value> =
+        items.iter().filter(|item| item["label"] == "SetLevel" && item["insertTextFormat"] == 2).collect();
+    assert!(snippets.is_empty(), "{snippets:?}");
+}
+
+#[test]
 fn call_snippets_leave_listed_values_to_the_list() {
     let defs = "\
 ---@alias Actions \"playerLoaded\"|\"playerUnloaded\"|string

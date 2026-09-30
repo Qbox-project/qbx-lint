@@ -1260,26 +1260,42 @@ impl<'a> Infer<'a> {
         fits.into_iter().filter(|(_, fit)| *fit != Fit::No).map(|(signature, fit)| (signature, fit == best)).collect()
     }
 
-    /// The string literals a type lists, through aliases and unions: `"a"` and `"b"` of `"a"|"b"|string`.
-    pub fn string_literals(&self, ty: &Type) -> Vec<SmolStr> {
+    /// The values a type lists, through aliases and unions: `"a"` and `"b"` of `"a"|"b"|string`, `1`
+    /// and `2` of `1|2`, and `true` and `false` of `boolean`. A type that lists any also lists the
+    /// `nil` it allows, last; alone, `nil` tells that a value may be missing, not what it can be.
+    pub fn listed_literals(&self, ty: &Type) -> Vec<Type> {
         let mut out = Vec::new();
-        self.collect_string_literals(ty, 0, &mut out);
+        self.collect_listed_literals(ty, 0, &mut out);
+        let listed = out.len();
+        out.retain(|value| !matches!(value, Type::Nil));
+        if listed > out.len() && !out.is_empty() {
+            out.push(Type::Nil);
+        }
         out
     }
 
-    fn collect_string_literals(&self, ty: &Type, depth: u32, out: &mut Vec<SmolStr>) {
+    fn collect_listed_literals(&self, ty: &Type, depth: u32, out: &mut Vec<Type>) {
         if depth > 8 {
             return;
         }
         match ty {
-            Type::StringLit(value) if !out.contains(value) => out.push(value.clone()),
+            Type::StringLit(_) | Type::IntLit(_) | Type::BooleanLit(_) | Type::Nil if !out.contains(ty) => {
+                out.push(ty.clone())
+            }
+            Type::Boolean => {
+                for value in [Type::BooleanLit(true), Type::BooleanLit(false)] {
+                    if !out.contains(&value) {
+                        out.push(value);
+                    }
+                }
+            }
             Type::Named(..) => match self.resolve_alias(ty) {
                 Type::Named(..) => {}
-                resolved => self.collect_string_literals(&resolved, depth + 1, out),
+                resolved => self.collect_listed_literals(&resolved, depth + 1, out),
             },
             Type::Union(types) => {
                 for part in types {
-                    self.collect_string_literals(part, depth + 1, out);
+                    self.collect_listed_literals(part, depth + 1, out);
                 }
             }
             _ => {}
