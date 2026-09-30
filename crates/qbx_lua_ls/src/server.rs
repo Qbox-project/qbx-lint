@@ -108,6 +108,8 @@ pub fn capabilities() -> ServerCapabilities {
                 "{".into(),
                 "(".into(),
                 ",".into(),
+                "=".into(),
+                " ".into(),
             ]),
             ..CompletionOptions::default()
         }),

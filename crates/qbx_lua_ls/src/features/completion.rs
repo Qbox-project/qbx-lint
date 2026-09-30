@@ -15,6 +15,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use serde_json::json;
 
 use super::class_tables::{class_table_at, named_field, Classes};
+use super::expected::{expected_type, Place};
 use super::hover::{event_handler_signature, event_string_context};
 use super::{lua_block, markdown, with_infer};
 use crate::callback_wrappers::{families, takes_function, Wrapper};
@@ -289,7 +290,9 @@ fn call_snippet_item(
     let signatures = infer.open_call_signatures(fun, &[], via_colon, options.at);
     let listed: Vec<Listed> = (0..fun.params.len())
         .map(|i| {
-            let literals = argument_literals(infer, &signatures, i, via_colon, "");
+            // The stop of a listed value is written between quotes, which only strings take.
+            let mut literals = argument_literals(infer, &signatures, i, via_colon, "");
+            literals.retain(|literal| literal.string().is_some());
             match literals.iter().any(|literal| !literal.taken_alone_by.is_empty()) {
                 true => Listed::Deciding,
                 false if literals.is_empty() => Listed::Nothing,
@@ -443,7 +446,16 @@ pub fn completion(
         if comment.is_some() || in_string.is_some() {
             return None;
         }
-        let items = with_infer(ws, doc, |infer| argument_items(infer, doc, offset, before, snippets, quote));
+        let items = with_infer(ws, doc, |infer| argument_items(infer, doc, offset, before, snippets, quote, true));
+        return (!items.is_empty()).then(|| respond(items, false));
+    }
+    // A typed `=` or space only asks for the values that what follows it can be, so that no other
+    // space opens a list.
+    if matches!(trigger_character, Some("=" | " ")) {
+        if comment.is_some() || in_string.is_some() {
+            return None;
+        }
+        let items = value_items(ws, doc, offset, before, snippets, quote);
         return (!items.is_empty()).then(|| respond(items, false));
     }
 
@@ -494,21 +506,29 @@ pub fn completion(
             return Some(respond(fields, false));
         }
     }
-    let mut items = with_infer(ws, doc, |infer| argument_items(infer, doc, offset, before, snippets, quote));
+    let mut items = with_infer(ws, doc, |infer| argument_items(infer, doc, offset, before, snippets, quote, false));
+    items.extend(value_items(ws, doc, offset, before, snippets, quote));
     if prefix.is_empty() {
         return (!items.is_empty()).then(|| respond(items, false));
     }
-    let (scope, incomplete) =
+    let (mut scope, incomplete) =
         with_infer(ws, doc, |infer| scope_items(ws, infer, doc, offset, prefix, snippet_quote, call_snippets));
+    // `true`, `false` and `nil` are listed once, as the values they are.
+    let is_keyword = |item: &CompletionItem| item.kind == Some(CompletionItemKind::KEYWORD);
+    scope.retain(|name| !is_keyword(name) || !items.iter().any(|value| is_keyword(value) && value.label == name.label));
     items.extend(scope);
     Some(respond(items, incomplete))
 }
 
 /// What the argument that the cursor starts can be, right after the `(` or `,` in front of it: the
-/// string values its parameter lists, quoted, and a function literal when it takes one, such as
-/// `function(${1:source})\n\t$0\nend` after `OnAction("playerUnloaded", `. Both come from the
+/// values its parameter lists, the strings quoted, and a function literal when it takes one, such
+/// as `function(${1:source})\n\t$0\nend` after `OnAction("playerUnloaded", `. Both come from the
 /// signatures that fit the arguments before it, the function from those that fit them best, with one
 /// item for each list of parameters they give it. Function literals are snippets.
+///
+/// `typed`: the `(` or `,` was just typed. That lists the values of a parameter that names strings
+/// or integers, and not the `true` and `false` that so many parameters take, which are left to a
+/// request for them.
 fn argument_items(
     infer: &Infer,
     doc: &Document,
@@ -516,6 +536,7 @@ fn argument_items(
     before: &str,
     snippets: bool,
     quote: char,
+    typed: bool,
 ) -> Vec<CompletionItem> {
     let prefix = identifier_prefix(before);
     let head = before[..before.len() - prefix.len()].trim_end();
@@ -544,17 +565,12 @@ fn argument_items(
     let space = if before[..before.len() - prefix.len()].ends_with(',') { " " } else { "" };
     let signatures = infer.open_call_signatures(&fun, args, via_method, site.base.span.start);
     let name = callee_name(site.base, site.method);
-    let mut items: Vec<CompletionItem> = argument_literals(infer, &signatures, argument, via_method, &name)
-        .into_iter()
-        .enumerate()
-        .map(|(i, literal)| {
-            let quoted = format!("{quote}{}{quote}", escaped_string(&literal.value, quote));
-            let mut out = literal.item(i, &quoted);
-            out.filter_text = Some(literal.value.to_string());
-            out.insert_text = Some(format!("{space}{quoted}"));
-            out
-        })
-        .collect();
+    let mut literals = argument_literals(infer, &signatures, argument, via_method, &name);
+    if typed && !literals.iter().any(|literal| matches!(literal.value, Type::StringLit(_) | Type::IntLit(_))) {
+        literals.clear();
+    }
+    let mut items: Vec<CompletionItem> =
+        literals.iter().enumerate().map(|(i, literal)| literal.written_item(i, quote, space)).collect();
     if !snippets {
         return items;
     }
@@ -563,31 +579,94 @@ fn argument_items(
         let Some(param) = best.then(|| param_for_argument(&signature, argument, via_method)).flatten() else {
             continue;
         };
-        if !takes_function(&param.ty) {
-            continue;
+        let Some(out) = function_literal_item(&param.ty, &param.to_string(), space) else { continue };
+        if seen.insert(out.insert_text.clone()) {
+            items.push(out);
         }
-        let names = param.ty.as_fun().map(|callback| {
-            let names: Vec<&str> = callback.params.iter().map(|p| p.name.as_str()).collect();
-            names.join(", ")
-        });
-        let stop = match names.as_deref() {
-            Some("") => String::new(),
-            Some(names) => format!("${{1:{names}}}"),
-            None => "$1".to_string(),
-        };
-        let body = format!("{space}function({stop})\n\t$0\nend");
-        if !seen.insert(body.clone()) {
-            continue;
-        }
-        let label = format!("function({})", names.unwrap_or_default());
-        let mut out = snippet_item(&label, &body, &param.to_string());
-        out.kind = Some(CompletionItemKind::FUNCTION);
-        // Ahead of the `function name()` declaration snippet too.
-        out.sort_text = Some(format!(".{label}"));
-        out.filter_text = Some("function".to_string());
-        items.push(out);
     }
     items
+}
+
+/// A function literal for a value of type `ty` that takes a function: `function(source) ... end`
+/// with the parameters `ty` names, written after `space`. `description` is shown beside it.
+fn function_literal_item(ty: &Type, description: &str, space: &str) -> Option<CompletionItem> {
+    if !takes_function(ty) {
+        return None;
+    }
+    let names = ty.as_fun().map(|callback| {
+        let names: Vec<&str> = callback.params.iter().map(|p| p.name.as_str()).collect();
+        names.join(", ")
+    });
+    let stop = match names.as_deref() {
+        Some("") => String::new(),
+        Some(names) => format!("${{1:{names}}}"),
+        None => "$1".to_string(),
+    };
+    let body = format!("{space}function({stop})\n\t$0\nend");
+    let label = format!("function({})", names.unwrap_or_default());
+    let mut out = snippet_item(&label, &body, description);
+    out.kind = Some(CompletionItemKind::FUNCTION);
+    // Ahead of the `function name()` declaration snippet too.
+    out.sort_text = Some(format!(".{label}"));
+    out.filter_text = Some("function".to_string());
+    Some(out)
+}
+
+/// What the value that the cursor starts can be, right after the `=`, `==`, `~=` or `return` in
+/// front of it: the values that its type lists, the strings quoted, such as `"busy"` and `"ready"`
+/// after `local state = ` under a `---@type "busy"|"ready"`, and a function literal where a
+/// function is stored or returned. The type is the one [`expected_type`] finds. Function literals
+/// are snippets.
+fn value_items(
+    ws: &Workspace,
+    doc: &Document,
+    offset: u32,
+    before: &str,
+    snippets: bool,
+    quote: char,
+) -> Vec<CompletionItem> {
+    let prefix = identifier_prefix(before);
+    let typed = &before[..before.len() - prefix.len()];
+    let head = typed.trim_end();
+    let line_end = doc.text[offset as usize..].find('\n').map_or(doc.text.len(), |i| offset as usize + i);
+    let rest = doc.text[offset as usize..line_end].trim_start_matches(|c: char| c.is_ascii_alphanumeric() || c == '_');
+    if !takes_value(head) || !leaves_value_open(rest) {
+        return Vec::new();
+    }
+    let at = offset - (before.len() - head.len()) as u32;
+    let space = if typed.len() == head.len() { " " } else { "" };
+    with_infer(ws, doc, |infer| {
+        let Some(expected) = expected_type(infer, &doc.chunk, Place::After(at)) else { return Vec::new() };
+        let values = listed_values(infer, &expected.ty);
+        let mut items: Vec<CompletionItem> =
+            values.iter().enumerate().map(|(i, value)| value.written_item(i, quote, space)).collect();
+        if snippets && !expected.compared {
+            let ty = infer.resolve_alias(&expected.ty.without_nil());
+            items.extend(function_literal_item(&ty, &expected.ty.to_string(), space));
+        }
+        items
+    })
+}
+
+/// Whether `head`, the text in front of a value, ends in what takes one: `=`, `==`, `~=` or `return`.
+fn takes_value(head: &str) -> bool {
+    match head.strip_suffix("return") {
+        Some(before) => !before.ends_with(|c: char| c.is_ascii_alphanumeric() || c == '_'),
+        None => head.ends_with('=') && !head.ends_with("<=") && !head.ends_with(">="),
+    }
+}
+
+/// Whether `rest`, the text after the cursor on its line, has no value that an inserted one would
+/// end up in front of: it is empty, a comment, or what closes or follows a value, like the `then`
+/// of `if state == then`.
+fn leaves_value_open(rest: &str) -> bool {
+    let rest = rest.trim_start();
+    let word = rest.trim_start_matches(|c: char| c.is_ascii_alphanumeric() || c == '_');
+    let word = &rest[..rest.len() - word.len()];
+    rest.is_empty()
+        || rest.starts_with([')', '}', ']', ',', ';'])
+        || rest.starts_with("--")
+        || matches!(word, "then" | "do" | "and" | "or" | "end" | "else" | "elseif" | "until")
 }
 
 /// The quote that inserted strings use: the formatter's `quote_style`, or else the one that most
@@ -716,17 +795,28 @@ fn string_items(ws: &Workspace, doc: &Document, offset: u32, token_index: usize)
     }
 
     let located = locate(&doc.chunk, offset);
-    let Some((_, Some((call, arg_index)))) = located.string else { return Vec::new() };
-    let path = match &call.kind {
-        ExprKind::Call { callee, .. } => callee.dotted_path(),
-        _ => None,
-    };
+    let Some((string, argument)) = located.string else { return Vec::new() };
     // Event names and literal values contain punctuation. Give clients the whole string content so a
     // `:` retrigger keeps filtering from the opening quote and accepting does not duplicate it.
     let token = &tokens[token_index];
     let content =
         string_content_span(token.span, &doc.text).unwrap_or_else(|| Span::new(token.span.start + 1, token.span.end));
     let range = doc.range(content);
+    let quote = if token.span.text(&doc.text).starts_with('"') { '"' } else { '\'' };
+    // A string that is no argument lists the values that its place takes.
+    let Some((call, arg_index)) = argument else {
+        return with_infer(ws, doc, |infer| {
+            let Some(expected) = expected_type(infer, &doc.chunk, Place::String(string.span)) else {
+                return Vec::new();
+            };
+            let values = listed_values(infer, &expected.ty);
+            values.iter().enumerate().filter_map(|(i, value)| value.content_item(i, range, quote)).collect()
+        });
+    };
+    let path = match &call.kind {
+        ExprKind::Call { callee, .. } => callee.dotted_path(),
+        _ => None,
+    };
     let context = with_infer(ws, doc, |infer| event_string_context(infer, Some((call, arg_index))));
     if let Some(context) = context {
         if !context.active {
@@ -782,7 +872,6 @@ fn string_items(ws: &Workspace, doc: &Document, offset: u32, token_index: usize)
         };
         return candidates(target_side.is_some());
     }
-    let quote = if token.span.text(&doc.text).starts_with('"') { '"' } else { '\'' };
     let literals = || with_infer(ws, doc, |infer| literal_items(infer, call, arg_index, range, quote));
     let Some(path) = path else { return literals() };
     let path = path.as_str();
@@ -824,21 +913,36 @@ fn string_items(ws: &Workspace, doc: &Document, offset: u32, token_index: usize)
     literals()
 }
 
-/// A string value that an argument can take.
-struct ArgumentLiteral {
-    value: SmolStr,
-    /// The type of the first parameter that lists it, such as the alias `Actions`.
+/// A value that an argument, or a value written elsewhere, can take.
+struct ListedValue {
+    /// A string, integer or boolean literal, or `nil`.
+    value: Type,
+    /// The type that lists it, such as the alias `Actions`: for an argument, that of the first
+    /// parameter that does.
     ty: Type,
     /// The signatures that take it alone, which a call passing it picks.
     taken_alone_by: Vec<String>,
 }
 
-impl ArgumentLiteral {
+impl ListedValue {
+    /// The value when it is a string.
+    fn string(&self) -> Option<&SmolStr> {
+        match &self.value {
+            Type::StringLit(value) => Some(value),
+            _ => None,
+        }
+    }
+
     /// The item for the `index`th value, in the order the values are declared.
     fn item(&self, index: usize, label: &str) -> CompletionItem {
-        let mut out = item(label, CompletionItemKind::ENUM_MEMBER, 0);
+        // `true`, `false` and `nil` look the way they do among the names in scope.
+        let kind = match self.value {
+            Type::BooleanLit(_) | Type::Nil => CompletionItemKind::KEYWORD,
+            _ => CompletionItemKind::ENUM_MEMBER,
+        };
+        let mut out = item(label, kind, 0);
         out.sort_text = Some(format!("{index:04}"));
-        if !matches!(self.ty, Type::StringLit(_)) {
+        if !self.ty.is_literal() {
             out.detail = Some(self.ty.to_string());
         }
         if !self.taken_alone_by.is_empty() {
@@ -847,33 +951,67 @@ impl ArgumentLiteral {
         }
         out
     }
+
+    /// The item that writes the value, a string in quotes, after `space`, where no quote is typed
+    /// yet.
+    fn written_item(&self, index: usize, quote: char, space: &str) -> CompletionItem {
+        let (written, filter) = match self.string() {
+            Some(value) => (format!("{quote}{}{quote}", escaped_string(value, quote)), value.to_string()),
+            None => (self.value.to_string(), self.value.to_string()),
+        };
+        let mut out = self.item(index, &written);
+        out.filter_text = Some(filter);
+        out.insert_text = Some(format!("{space}{written}"));
+        out
+    }
+
+    /// The item that replaces the contents of the string at `range` with the value, when the value
+    /// is a string.
+    fn content_item(&self, index: usize, range: Range, quote: char) -> Option<CompletionItem> {
+        let value = self.string()?;
+        let mut out = self.item(index, value);
+        let value = escaped_string(value, quote);
+        if range.start.line == range.end.line {
+            out.text_edit = Some(TextEdit { range, new_text: value }.into());
+        } else {
+            out.insert_text = Some(value);
+        }
+        Some(out)
+    }
 }
 
-/// The string values that the parameter of the argument at `arg_index` lists in `signatures`, in the
-/// order they are declared: the `"playerLoaded"` of `action: "playerLoaded"|"playerUnloaded"|string`
-/// or of an alias, and the `"keyPressed"` of an `@overload` that takes `action: "keyPressed"`. The
-/// signatures that take a value alone are shown under `name`.
+/// The values that `ty` lists, in the order they are declared.
+fn listed_values(infer: &Infer, ty: &Type) -> Vec<ListedValue> {
+    let values = infer.listed_literals(ty).into_iter();
+    values.map(|value| ListedValue { value, ty: ty.clone(), taken_alone_by: Vec::new() }).collect()
+}
+
+/// The values that the parameter of the argument at `arg_index` lists in `signatures`, in the
+/// order they are declared, with the `nil` that any of them allows last: the `"playerLoaded"` of
+/// `action: "playerLoaded"|"playerUnloaded"|string` or of an alias, and the `"keyPressed"` of an
+/// `@overload` that takes `action: "keyPressed"`. The signatures that take a value alone are shown
+/// under `name`.
 fn argument_literals(
     infer: &Infer,
     signatures: &[(Arc<FunType>, bool)],
     arg_index: usize,
     via_method: bool,
     name: &str,
-) -> Vec<ArgumentLiteral> {
-    let mut literals: Vec<ArgumentLiteral> = Vec::new();
+) -> Vec<ListedValue> {
+    let mut literals: Vec<ListedValue> = Vec::new();
     for (signature, _) in signatures {
         let Some(param) = param_for_argument(signature, arg_index, via_method) else { continue };
         let pinned = infer.pinned_literal(&param.ty);
-        for value in infer.string_literals(&param.ty) {
+        for value in infer.listed_literals(&param.ty) {
             let index = match literals.iter().position(|known| known.value == value) {
                 Some(index) => index,
                 None => {
                     let ty = param.ty.clone();
-                    literals.push(ArgumentLiteral { value: value.clone(), ty, taken_alone_by: Vec::new() });
+                    literals.push(ListedValue { value: value.clone(), ty, taken_alone_by: Vec::new() });
                     literals.len() - 1
                 }
             };
-            if pinned.as_ref().is_some_and(|pinned| *pinned == Type::StringLit(value.clone())) {
+            if pinned.as_ref() == Some(&value) {
                 literals[index].taken_alone_by.push(signature.signature(name));
             }
         }
@@ -892,18 +1030,9 @@ fn literal_items(infer: &Infer, call: &Expr, arg_index: usize, range: Range, quo
     let via_method = method.is_some();
     let signatures = infer.open_call_signatures(&fun, &args[..arg_index.min(args.len())], via_method, base.span.start);
     argument_literals(infer, &signatures, arg_index, via_method, &callee_name(base, method))
-        .into_iter()
+        .iter()
         .enumerate()
-        .map(|(i, literal)| {
-            let mut out = literal.item(i, &literal.value);
-            let value = escaped_string(&literal.value, quote);
-            if range.start.line == range.end.line {
-                out.text_edit = Some(TextEdit { range, new_text: value }.into());
-            } else {
-                out.insert_text = Some(value);
-            }
-            out
-        })
+        .filter_map(|(i, literal)| literal.content_item(i, range, quote))
         .collect()
 }
 

@@ -8,6 +8,7 @@ pub mod definition;
 pub mod diagnostics;
 pub mod doc_names;
 pub mod event_call;
+pub mod expected;
 pub mod folding;
 pub mod hover;
 pub mod inlay;
