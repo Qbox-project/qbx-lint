@@ -32,6 +32,8 @@ Available features depend on the editor's LSP client.
 - Definitions, references and rename for locals, globals and fields, including static string
   keys such as `Config['name']` and supported `---@field` declarations.
 - Hover and definitions for the classes, aliases and enums named in LuaCATS annotations.
+- Type guards: after `if not name then return end`, inside `if name then`, and in the other
+  [guarded code](#type-guards), a local is no longer `nil` or `false`.
 - Diagnostics and quick fixes with resource and client/server context, plus LuaCATS type checks:
   `missing-fields` and `assign-type-mismatch` for tables and assignments that leave out required
   fields of their class or store a value of the wrong type, `undeclared-field` for fields and keys
@@ -79,6 +81,26 @@ guards. Classes, fields, aliases and enums follow the manifest side of the file.
 and files of an unknown side see both sides. A `side` in a `qbxlint.toml` override gives a side
 to files a loader runs without a manifest entry. Naming a type in a script of a side that only
 the other side declares is reported as `undefined-doc-name`.
+
+## Type guards
+
+A condition narrows the type of the locals it tests in the code that only runs when it held or
+failed:
+
+```lua
+local name = GetName() -- string?
+if not name then
+    return -- name is nil here
+end
+print(name) -- string
+```
+
+Guards are `name`, `not name`, comparisons with `nil`, `true` and `false`, and those joined by
+`and` and `or`. They apply to the branches of an `if` or `elseif`, to the code after an `if` whose
+other branches all end in `return`, `error(...)`, `break` or `goto`, to the body of a `while`, to
+the right side of `and` and `or`, and to the code after `assert(name)`. A local that is assigned
+again after its declaration is not narrowed, since a guard says nothing about the new value, and
+neither are globals and fields.
 
 ## Framework callbacks
 

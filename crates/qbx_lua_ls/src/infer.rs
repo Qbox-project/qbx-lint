@@ -14,6 +14,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::callback_wrappers::{self, Wrapper};
 use crate::index::{FileId, Index, SymbolKind};
 use crate::luacats::{applies_on, parse_doc_lines, DocGroup};
+use crate::narrow::Guards;
 use crate::types::{CallbackRole, FunType, Param, Shape, ShapeField, Type};
 
 const MAX_DEPTH: u32 = 24;
@@ -90,13 +91,27 @@ pub struct FileContext<'a> {
     pub resolution: &'a Resolution,
     decls: FxHashMap<u32, Decl<'a>>,
     docs: RefCell<FxHashMap<u32, Rc<DocGroup>>>,
+    guards: OnceCell<Guards>,
 }
 
 impl<'a> FileContext<'a> {
     pub fn new(file: FileId, source: &'a str, chunk: &'a Chunk, resolution: &'a Resolution) -> Self {
         let mut collector = DeclCollector { decls: FxHashMap::default() };
         collector.block(&chunk.block);
-        Self { file, source, chunk, resolution, decls: collector.decls, docs: RefCell::new(FxHashMap::default()) }
+        Self {
+            file,
+            source,
+            chunk,
+            resolution,
+            decls: collector.decls,
+            docs: RefCell::new(FxHashMap::default()),
+            guards: OnceCell::new(),
+        }
+    }
+
+    /// What the conditions of the file tell about the locals they test.
+    pub fn guards(&self) -> &Guards {
+        self.guards.get_or_init(|| Guards::of(self.chunk, self.resolution))
     }
 
     pub fn decl(&self, decl_start: u32) -> Option<&Decl<'a>> {
@@ -396,8 +411,30 @@ impl<'a> Infer<'a> {
 
     fn name(&self, name: &Name) -> Type {
         match self.ctx.resolution.resolve_at(name.span.start) {
-            Some(Resolved::Local(id)) => self.local_type(id),
+            Some(Resolved::Local(id)) => self.local_type_at(id, name.span.start),
             _ => self.global_type(&name.text),
+        }
+    }
+
+    /// The type of a local where it is read at `offset`: its own type without what the guards
+    /// around the read rule out, such as the `nil` of a `string?` after `if not name then return end`.
+    pub fn local_type_at(&self, id: LocalId, offset: u32) -> Type {
+        let ty = self.local_type(id);
+        let mut facts = self.ctx.guards().at(id, offset).peekable();
+        if facts.peek().is_none() {
+            return ty;
+        }
+        // An alias such as `Name = string|nil` is narrowed through what it stands for.
+        let declared = match &ty {
+            Type::Named(..) => self.resolve_alias(&ty),
+            _ => ty.clone(),
+        };
+        // A guard that the type rules out altogether, like `if not name` for a `string`, is skipped.
+        let narrowed = facts.fold(declared.clone(), |narrowed, fact| fact.apply(&narrowed).unwrap_or(narrowed));
+        if narrowed == declared {
+            ty
+        } else {
+            narrowed
         }
     }
 

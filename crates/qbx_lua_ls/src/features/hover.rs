@@ -181,9 +181,10 @@ fn alias_expansions(infer: &Infer, ty: &Type) -> Vec<(SmolStr, Type)> {
     out
 }
 
-fn local_hover(infer: &Infer, id: LocalId, called: Option<Type>) -> String {
+/// `offset` is where the name is written, which decides what the guards around it rule out.
+fn local_hover(infer: &Infer, id: LocalId, offset: u32, called: Option<Type>) -> String {
     let local = infer.ctx.resolution.local(id);
-    let ty = called.unwrap_or_else(|| infer.local_type(id));
+    let ty = called.unwrap_or_else(|| infer.local_type_at(id, offset));
     let prefix = match local.kind {
         LocalKind::Param => "(parameter) ",
         LocalKind::ImplicitSelf => "(self) ",
@@ -503,7 +504,7 @@ pub fn hover(ws: &Workspace, doc: &Document, position: Position) -> Option<Hover
         };
         let called = called_overload(infer, doc, offset);
         let text = match &target {
-            Target::Local(id, _) => Some(local_hover(infer, *id, called)),
+            Target::Local(id, span) => Some(local_hover(infer, *id, span.start, called)),
             Target::Global(name, _) => global_hover(ws, infer, name, called),
             Target::Member { info, owner, .. } => match called {
                 Some(ty) => Some(member_hover(infer, &MemberInfo { ty, ..info.clone() }, owner)),

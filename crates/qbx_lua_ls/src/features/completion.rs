@@ -1041,7 +1041,7 @@ fn type_of_path(infer: &Infer, text: &str, offset: u32) -> Type {
     let mut segments = text[start..].split(['.', ':']).filter(|s| !s.is_empty());
     let Some(root) = segments.next() else { return Type::Unknown };
     let mut ty = match infer.ctx.resolution.lookup_local_at(root, offset) {
-        Some(id) => infer.local_type(id),
+        Some(id) => infer.local_type_at(id, offset),
         None => infer.global_type(root),
     };
     for segment in segments {
@@ -1127,7 +1127,7 @@ fn scope_items(
         if local.name.is_empty() || !seen.insert(local.name.to_string()) {
             continue;
         }
-        let ty = infer.local_type(id);
+        let ty = infer.local_type_at(id, offset);
         let kind = match local.kind {
             _ if ty.as_fun().is_some() => CompletionItemKind::FUNCTION,
             LocalKind::Param => CompletionItemKind::VARIABLE,
