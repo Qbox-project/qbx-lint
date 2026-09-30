@@ -365,6 +365,40 @@ assigned again after its declaration, since its declared type may not be what it
 applies to the values `assign-type-mismatch` checks, where `nil` is a value like any other:
 `abc.field = nil` needs a field type that allows it, such as `string?` or `string|nil`.
 
+## Impossible comparisons
+
+`impossible-comparison` reports an `==` or `~=` whose two sides can never be equal, so that the
+comparison always gives the same answer. Either the sides are different kinds of value, such as a
+string and a number, or they list literals and none is on both sides:
+
+```lua
+---@return "active" | "busy" | "ready"
+local function GetState() ... end
+
+if GetState() == "invalid_state" then end -- Comparing `"active"|"busy"|"ready"` with `"invalid_state"` is always false
+if GetState() == 5 then end               -- Comparing `"active"|"busy"|"ready"` with `5` is always false
+if not name == "admin" then end           -- Comparing `boolean` with `"admin"` is always false
+if type(value) == "tabel" then end        -- Comparing `lua_type` with `"tabel"` is always false
+```
+
+A side has a type when something declares it: a literal, an operator such as `not` or `..`, a
+`@param`, `@type` or `@return`, a `@field` of a class, an alias or enum, a stub or a native. A
+local that is never assigned again has the type of the value it is declared with, so
+`local state = GetState()` is checked like the call.
+
+Only clear cases count, and the rest is left alone:
+
+- Types that are inferred from assigned values. `Config.Webhook = ''` tells what the config holds
+  today, not that `Config.Webhook == false` cannot be true once someone edits it, and
+  `local mode = 'dev'` is a setting like it. The same goes for what an undocumented function
+  returns, and for the value of `a or b` and `a and b`.
+- Comparisons with `nil`. Annotations often leave out the `?` of a value that may be missing, and
+  the check for it is deliberate.
+- A local that is assigned again after its declaration, since its declared type may not be what
+  it holds.
+- Natives documented as `boolean` compared with a number. Scripts can get `1` instead of `true`
+  from them, so `IsPedInAnyVehicle(ped) == 1` is valid.
+
 ## Unknown types
 
 `no-unknown` is off by default. Turned on, qbx-lua-ls reports each parameter, local and loop

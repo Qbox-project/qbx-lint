@@ -46,7 +46,7 @@ pub fn unknown_types(infer: &Infer, ignored_prefix: &str) -> Vec<(Span, String)>
 
 /// Whether a `@param` line documents the parameter: above its function, or above the call its
 /// function is passed to.
-fn has_param_line(infer: &Infer, param: &Local) -> bool {
+pub(super) fn has_param_line(infer: &Infer, param: &Local) -> bool {
     let Some(Decl::Param { doc_anchor, expected, .. }) = infer.ctx.decl(param.decl.start) else { return false };
     let anchor = doc_anchor.or_else(|| expected.as_ref().map(|expected| expected.call.span.start));
     anchor.is_some_and(|anchor| infer.ctx.doc_at(anchor).params.iter().any(|doc| doc.name == param.name))

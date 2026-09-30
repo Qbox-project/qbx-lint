@@ -54,6 +54,8 @@ pub struct FunType {
     /// `(string, string)` for `@return false | (string, string)`. `returns` then holds what each
     /// position has across the sets.
     pub return_sets: Vec<Vec<Type>>,
+    /// `returns` were inferred from the `return`s of the function's body, not declared with `@return`.
+    pub returns_inferred: bool,
     pub is_method: bool,
     /// The parameters are those of a function defined with `.`, or of a plain function value, so
     /// they list every value a call passes: a `:` call gives the first one the value before the colon.

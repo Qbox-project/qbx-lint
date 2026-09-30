@@ -74,6 +74,18 @@ impl<'e> CallArgs<'e> {
 /// The sets of values a call returns.
 type ReturnSets = Rc<Vec<Vec<Type>>>;
 
+/// What a call returns.
+#[derive(Default)]
+struct Returned {
+    values: Vec<Type>,
+    /// The sets of values its function returns, when it lists several.
+    sets: Vec<Vec<Type>>,
+    /// The function declares the values: with `@return`, in a stub or as a native. Those inferred
+    /// from the `return`s of a body, or bound from the arguments of a generic, tell what the code
+    /// passes today, not what it may.
+    declared: bool,
+}
+
 pub enum Decl<'a> {
     Local { stmt: &'a Stmt, index: usize },
     LocalFunction { stmt: &'a Stmt, func: &'a FuncBody },
@@ -444,7 +456,11 @@ impl<'a> Infer<'a> {
     /// The type of a local where it is read at `offset`: its own type without what the guards
     /// around the read rule out, such as the `nil` of a `string?` after `if not name then return end`.
     pub fn local_type_at(&self, id: LocalId, offset: u32) -> Type {
-        let ty = self.local_type(id);
+        self.narrowed(id, offset, self.local_type(id))
+    }
+
+    /// `ty`, the type of the local `id`, without what the guards around a read at `offset` rule out.
+    pub fn narrowed(&self, id: LocalId, offset: u32, ty: Type) -> Type {
         let ty = self.linked_type(id, offset).unwrap_or(ty);
         let mut facts = self.ctx.guards().at(id, offset).peekable();
         if facts.peek().is_none() {
@@ -509,8 +525,8 @@ impl<'a> Infer<'a> {
         }
         let StmtKind::Local { exprs, .. } = &stmt.kind else { return None };
         let sets = self.guarded(|| match exprs.last().map(|call| &call.kind) {
-            Some(ExprKind::Call { callee, args, .. }) => self.call_values(callee, None, args).1,
-            Some(ExprKind::MethodCall { base, method, args, .. }) => self.call_values(base, Some(method), args).1,
+            Some(ExprKind::Call { callee, args, .. }) => self.call_values(callee, None, args).sets,
+            Some(ExprKind::MethodCall { base, method, args, .. }) => self.call_values(base, Some(method), args).sets,
             _ => Vec::new(),
         });
         let sets = (sets.len() > 1).then(|| Rc::new(sets));
@@ -1025,26 +1041,39 @@ impl<'a> Infer<'a> {
     }
 
     fn call(&self, base: &Expr, method: Option<&Name>, args: &[Expr]) -> Vec<Type> {
-        self.call_values(base, method, args).0
+        self.call_values(base, method, args).values
     }
 
-    /// What a call returns, and the sets of values its function returns when it lists several.
-    fn call_values(&self, base: &Expr, method: Option<&Name>, args: &[Expr]) -> (Vec<Type>, Vec<Vec<Type>>) {
-        let only = |ty: Type| (vec![ty], Vec::new());
+    /// What `call` returns when its function declares it, and `None` when the values are inferred
+    /// or `call` is no call.
+    pub fn declared_returns(&self, call: &Expr) -> Option<Vec<Type>> {
+        self.guarded(|| {
+            let returned = match &call.kind {
+                ExprKind::Call { callee, args, .. } => self.call_values(callee, None, args),
+                ExprKind::MethodCall { base, method, args, .. } => self.call_values(base, Some(method), args),
+                _ => return None,
+            };
+            returned.declared.then_some(returned.values)
+        })
+    }
+
+    /// What calling `base`, or its `method`, with `args` returns.
+    fn call_values(&self, base: &Expr, method: Option<&Name>, args: &[Expr]) -> Returned {
+        let only = |ty: Type, declared: bool| Returned { values: vec![ty], sets: Vec::new(), declared };
         if method.is_none() {
             match (base.dotted_path().as_deref(), args.first()) {
                 (Some("require" | "lib.require" | "lib.load"), Some(arg)) => {
                     if let Some(path) = arg.as_string() {
                         // `require 'glm'` returns the built-in library, not a file of the resource.
                         if path == "glm" {
-                            return only(self.global_type("glm"));
+                            return only(self.global_type("glm"), false);
                         }
-                        return only(Type::Require(path.clone()));
+                        return only(Type::Require(path.clone()), false);
                     }
                 }
-                (Some("setmetatable"), Some(arg)) => return only(self.expr(arg)),
-                (Some("tostring"), _) => return only(Type::String),
-                (Some("tonumber"), _) => return only(Type::Number.optional()),
+                (Some("setmetatable"), Some(arg)) => return only(self.expr(arg), false),
+                (Some("tostring"), _) => return only(Type::String, true),
+                (Some("tonumber"), _) => return only(Type::Number.optional(), true),
                 _ => {}
             }
         }
@@ -1055,13 +1084,21 @@ impl<'a> Infer<'a> {
         if let Some(wrapper) = Wrapper::of(&fun, method.is_some()).filter(|w| w.tag.role == CallbackRole::Await) {
             if let Some(handler) = self.wrapper_handler(&wrapper, args.exprs, base.span.start) {
                 if !handler.returns.is_empty() {
-                    return (handler.returns.clone(), handler.return_sets.clone());
+                    return Returned {
+                        values: handler.returns.clone(),
+                        sets: handler.return_sets.clone(),
+                        declared: !handler.returns_inferred,
+                    };
                 }
             }
         }
         let generics = self.bind_generics(&fun, &args, method.is_some(), true);
         let bound = |types: &Vec<Type>| types.iter().map(|ret| substitute(ret, &generics)).collect();
-        (bound(&fun.returns), fun.return_sets.iter().map(bound).collect())
+        Returned {
+            values: bound(&fun.returns),
+            sets: fun.return_sets.iter().map(bound).collect(),
+            declared: !fun.returns_inferred && fun.generics.is_empty(),
+        }
     }
 
     /// Binds the generics of `fun` from the arguments of a call. Function literals go last, and only
@@ -1440,6 +1477,7 @@ impl<'a> Infer<'a> {
             if returns.iter().any(|t| !t.is_unknown()) {
                 fun.returns = returns;
                 fun.return_sets = sets;
+                fun.returns_inferred = true;
             }
         }
         fun
@@ -1677,6 +1715,7 @@ fn substitute(ty: &Type, generics: &[(SmolStr, Type)]) -> Type {
                 .map(|set| set.iter().map(|t| substitute(t, generics)).collect())
                 .collect(),
             is_method: fun.is_method,
+            returns_inferred: fun.returns_inferred,
             ..FunType::default()
         })),
         Type::Shape(shape) => Type::Shape(Arc::new(Shape {

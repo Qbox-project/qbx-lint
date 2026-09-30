@@ -87,6 +87,7 @@ fn bad_resource_reports_every_rule() {
                 | "return-type-mismatch"
                 | "missing-return"
                 | "no-unknown"
+                | "impossible-comparison"
         );
         assert!(exercised || covered_elsewhere, "rule {} is not exercised by the bad_resource fixture", rule.code);
     }

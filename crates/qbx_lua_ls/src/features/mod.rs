@@ -2,6 +2,7 @@ pub mod assistant;
 pub mod callback_payloads;
 pub mod class_tables;
 pub mod code_action;
+pub mod comparisons;
 pub mod completion;
 pub mod definition;
 pub mod diagnostics;
