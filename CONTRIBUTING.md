@@ -25,11 +25,22 @@ cargo run --locked -p qbx_lint -- fmt --check path/to/resource
 | `qbx_fivem_data` | Native data, runtime stubs, and known manifest imports. |
 | `qbx_lua_analysis` | Scopes, resource models, rules, configuration, and suppressions. |
 | `qbx_lint` | Command-line interface and report formats. |
+| `qbx_lua_ls` | Language server, editor features, and LSP protocol. |
 | `xtask` | Native data generation. |
 
-The [language server](https://github.com/Qbox-project/qbx-lua-ls) uses sibling path dependencies
-on these crates. When changing a shared API, keep the two repositories side by side and run the
-language server's tests too.
+The [language server](crates/qbx_lua_ls) shares the workspace's parser, formatter, analysis and
+FiveM data crates. `cargo test --workspace --locked` checks both tools; shared API changes belong
+in the same pull request. See its [contribution guide](crates/qbx_lua_ls/CONTRIBUTING.md) for LSP
+checks and manual probes. Editor adapters live in [qbx-editor](https://github.com/Qbox-project/qbx-editor).
+
+Release builds use separate Cargo invocations so the linter does not enable the server's `docs`
+features. The server uses the `release` profile with panic unwinding for request recovery;
+the CLI keeps its abort-on-panic behavior in `lint-release`:
+
+```sh
+cargo build --profile lint-release --locked -p qbx_lint
+cargo build --release --locked -p qbx_lua_ls
+```
 
 ## Tests and fixtures
 

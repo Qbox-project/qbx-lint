@@ -4,9 +4,13 @@ A Lua linter and formatter for FiveM resources. It parses CfxLua syntax, reads r
 and checks code against bundled native definitions, runtime globals, and client/server context.
 
 It reports Lua mistakes, missing manifest imports, event and export mismatches, and common Qbox
-patterns. The parser and analysis crates are also used by
-[qbx-lua-ls](https://github.com/Qbox-project/qbx-lua-ls), the server behind the
+patterns. The same workspace contains the parser, formatter, analysis crates and
+[qbx-lua-ls](crates/qbx_lua_ls), the server behind the
 [Qbox Lua editor integrations](https://github.com/Qbox-project/qbx-editor).
+
+Shared analysis and language-server changes can be developed and tested in one pull request.
+See the [language-server guide](crates/qbx_lua_ls/README.md) for features and setup, and the
+[migration notes](docs/repository-migration.md) for Git history and release compatibility.
 
 ## Install
 
@@ -15,13 +19,13 @@ Build from a checkout with a stable Rust toolchain and Cargo:
 ```sh
 git clone https://github.com/Qbox-project/qbx-lint.git
 cd qbx-lint
-cargo install --path crates/qbx_lint --locked
+cargo install --path crates/qbx_lint --locked --profile lint-release
 qbx-lint --version
 ```
 
 Cargo installs the executable into its `bin` directory, which must be on your `PATH`.
-For a local build without installation, run `cargo build --release --locked -p qbx_lint`.
-The executable is then in `target/release` (`qbx-lint.exe` on Windows).
+For a local build without installation, run `cargo build --profile lint-release --locked -p qbx_lint`.
+The executable is then in `target/lint-release` (`qbx-lint.exe` on Windows).
 
 Download the archive for your platform from the
 [releases page](https://github.com/Qbox-project/qbx-lint/releases), extract it, and put the

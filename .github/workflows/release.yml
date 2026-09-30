@@ -25,31 +25,42 @@ jobs:
       - run: rustup default stable
       - if: contains(matrix.target, 'musl')
         run: sudo apt-get update && sudo apt-get install -y musl-tools
-      - run: cargo build --release --locked -p qbx_lint --target ${{ matrix.target }}
+      # Build separately to keep server-only documentation out of the CLI.
+      - run: cargo build --profile lint-release --locked -p qbx_lint --target ${{ matrix.target }}
+      - run: cargo build --release --locked -p qbx_lua_ls --target ${{ matrix.target }}
       - name: Check version and package
         shell: bash
         run: |
           set -euo pipefail
-          cd target/${{ matrix.target }}/release
-          binary="qbx-lint"
-          if [ "${{ runner.os }}" = "Windows" ]; then binary="${binary}.exe"; fi
-          actual="$(./"${binary}" --version)"
-          expected="qbx-lint ${GITHUB_REF_NAME#v}"
-          if [ "${actual}" != "${expected}" ]; then
-            echo "Tag ${GITHUB_REF_NAME} does not match built version: ${actual}" >&2
-            exit 1
-          fi
-          cp ../../../LICENSE LICENSE
-          name="qbx-lint-${{ matrix.target }}"
-          if [ "${{ matrix.archive }}" = "zip" ]; then
-            7z a "../../../${name}.zip" "${binary}" LICENSE
-          else
-            tar -czf "../../../${name}.tar.gz" "${binary}" LICENSE
-          fi
+          root="$PWD"
+          for tool in qbx-lint qbx-lua-ls; do
+            profile=release
+            if [ "$tool" = qbx-lint ]; then profile=lint-release; fi
+            (
+              cd "target/${{ matrix.target }}/${profile}"
+              binary="$tool"
+              if [ "${{ runner.os }}" = "Windows" ]; then binary="${binary}.exe"; fi
+              actual="$(./"${binary}" --version)"
+              expected="$tool ${GITHUB_REF_NAME#v}"
+              if [ "$actual" != "$expected" ]; then
+                echo "Tag ${GITHUB_REF_NAME} does not match built version: ${actual}" >&2
+                exit 1
+              fi
+              cp "$root/LICENSE" LICENSE
+              name="$tool-${{ matrix.target }}"
+              if [ "${{ matrix.archive }}" = "zip" ]; then
+                7z a "$root/${name}.zip" "$binary" LICENSE
+              else
+                tar -czf "$root/${name}.tar.gz" "$binary" LICENSE
+              fi
+            )
+          done
       - uses: actions/upload-artifact@v4
         with:
           name: binary-${{ matrix.target }}
-          path: qbx-lint-${{ matrix.target }}.${{ matrix.archive }}
+          path: |
+            qbx-lint-${{ matrix.target }}.${{ matrix.archive }}
+            qbx-lua-ls-${{ matrix.target }}.${{ matrix.archive }}
           if-no-files-found: error
 
   publish:
