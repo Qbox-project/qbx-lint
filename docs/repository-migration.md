@@ -4,6 +4,31 @@
 The editor adapters remain in `Qbox-project/qbx-editor`. A change to shared analysis and LSP
 behavior now belongs in one pull request, checked by the workspace CI on Windows and Linux.
 
+The migration completed on **30 September 2026**. The
+[workspace import](https://github.com/Qbox-project/qbx-lint/pull/8),
+[shared release preparation](https://github.com/Qbox-project/qbx-lint/pull/9), and
+[editor integration update](https://github.com/Qbox-project/qbx-editor/pull/3) are merged.
+[Tooling v1.0.5](https://github.com/Qbox-project/qbx-lint/releases/tag/v1.0.5) is the first release
+containing both binaries. [Editor v1.0.5](https://github.com/Qbox-project/qbx-editor/releases/tag/v1.0.5)
+uses the combined workspace and is published to VS Code Marketplace and Open VSX.
+The [old server repository](https://github.com/Qbox-project/qbx-lua-ls) is archived.
+
+## What moved
+
+| Component | Current home |
+| --- | --- |
+| Command-line linter and formatter | `qbx-lint/crates/qbx_lint` |
+| Language server, its tests, scripts and protocol docs | `qbx-lint/crates/qbx_lua_ls` |
+| Shared parser, formatter, analysis and FiveM data | Other crates in `qbx-lint/crates` |
+| Editor adapters and interfaces | `Qbox-project/qbx-editor` |
+
+Clone only `qbx-lint` to work on either Rust tool. Open linter, formatter, analysis and LSP
+issues and pull requests in [qbx-lint](https://github.com/Qbox-project/qbx-lint/issues);
+editor adapter and UI issues belong in [qbx-editor](https://github.com/Qbox-project/qbx-editor/issues).
+See the [main README](../README.md) for installation and usage, the
+[server guide](../crates/qbx_lua_ls/README.md) for LSP features and setup, and
+[CONTRIBUTING.md](../CONTRIBUTING.md) for workspace checks.
+
 ## Preserved history
 
 The language server was imported into `crates/qbx_lua_ls` with a full-history subtree merge,
@@ -12,21 +37,20 @@ without squashing or rewriting its commits. The import joins the two existing co
 - Linter source tip: `6cdc955`.
 - Language-server source tip: `3957972`.
 
-All commits reachable from those tips retain their original IDs, authors, committers,
+All 103 commits reachable from those tips retain their original IDs, authors, committers,
 timestamps and messages. Workspace integration is recorded in subsequent commits. Historical
 server commits still describe paths at their original repository root; use `git log --follow -m`
 for the history of an individual moved file.
 
-The migration pull request must be merged with **Create a merge commit**. Squashing or rebasing
-the migration would not retain the imported commit graph on the default branch.
+The migration was merged with **Create a merge commit**, retaining both original commit graphs
+on `main`.
 
-The original repositories both used `v1.0.x` tags. Keep the linter tags unchanged and preserve
-the server's historical tag objects under `lua-ls/v1.0.x`, avoiding collisions:
+The original repositories both used `v1.0.x` tags. The linter's tags are unchanged, and the
+server's original tag objects and targets are published under `lua-ls/v1.0.0` through
+`lua-ls/v1.0.4`, avoiding collisions. To view a moved file's history:
 
 ```sh
-git fetch --no-tags https://github.com/Qbox-project/qbx-lua-ls.git \
-  'refs/tags/*:refs/tags/lua-ls/*'
-git push origin 'refs/tags/lua-ls/*:refs/tags/lua-ls/*'
+git log --follow -m -- crates/qbx_lua_ls/src/server.rs
 ```
 
 These names do not trigger the release workflow's `v*` tag filter. Old GitHub release pages
@@ -46,16 +70,15 @@ The root `action.yml` and `Qbox-project/qbx-lint@<tag>` action address remain av
 Existing linter tags and their release assets are unchanged. Existing server releases remain
 downloadable from `Qbox-project/qbx-lua-ls`; future releases are published here.
 
-## Cutover order
+## Download and editor compatibility
 
-1. Merge the workspace migration with a merge commit and publish the namespaced historical
-   server tags. Do not recreate or move existing `v1.0.x` tags.
-2. Bump the workspace to the next unused version and publish a new shared release, such as
-   `v1.0.5`. Check that it contains both tools for all five platforms and their checksums.
-3. Merge the companion `qbx-editor` migration. Its CI and development scripts use this
-   workspace, its release builds use the matching workspace tag, and Zed downloads server
-   archives from this repository. Publish the editor using the new shared server version.
-4. Add a migration notice to `Qbox-project/qbx-lua-ls` and archive it after the editor cutover.
-   Keep its historical releases available for existing editor versions and download links.
+Use [qbx-lint releases](https://github.com/Qbox-project/qbx-lint/releases) for both tools from
+`v1.0.5` onward. Select `qbx-lint-<target>` for command-line use or `qbx-lua-ls-<target>` for an
+LSP client; each archive contains that tool and its license. Shared releases include checksums
+for both sets of archives.
 
-Do not publish an editor release using an old linter tag: those tags predate the server import.
+`qbx-editor` CI and development scripts now use the combined workspace. Its release builds use
+the matching workspace tag, and its Zed adapter downloads server archives from `qbx-lint`.
+An editor release must use `v1.0.5` or a later shared tooling tag; older linter tags predate
+the server import. Historical standalone server releases through `v1.0.4` remain available
+in the archived repository for existing editor versions and download links.

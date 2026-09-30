@@ -1,5 +1,10 @@
 # Configuration and analysis reference
 
+The `qbx-lint` CLI and `qbx-lua-ls` language server share the parser, analysis rules and
+`qbxlint.toml` formatting settings described here. Command-line options apply to the CLI;
+for editor settings and LSP requests, see the
+[language-server protocol reference](../crates/qbx_lua_ls/docs/protocol.md).
+
 ## Syntax
 
 The parser handles Lua 5.4 and CfxLua extensions, including backtick hash literals, optional

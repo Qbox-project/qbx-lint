@@ -1,5 +1,5 @@
 name: Feature request
-description: Suggest a change or a new feature.
+description: Suggest a change to the linter, formatter, language server, or shared analysis.
 body:
   - type: textarea
     id: problem
@@ -11,6 +11,6 @@ body:
     id: suggestion
     attributes:
       label: What would help?
-      description: Describe the change, with an example if possible.
+      description: Name the affected tool or shared behavior and describe the change, with an example if possible.
     validations:
       required: true

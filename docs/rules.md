@@ -1,5 +1,9 @@
 # Rules
 
+These analysis rules power both the `qbx-lint` CLI and `qbx-lua-ls` editor diagnostics.
+Configure them through `qbxlint.toml`; language-server clients can also supply
+[diagnostic rule overrides](../crates/qbx_lua_ls/README.md#configuration).
+
 Use `qbx-lint --list-rules` to inspect the rules in your installed version. Levels below are the
 defaults; `hint` findings require `--min-severity hint` to appear in CLI output. Configuration can
 set any rule to `off`, `hint`, `info`, `warning`, or `error`.
