@@ -1695,6 +1695,18 @@ impl<'a> Infer<'a> {
                         location: None,
                     });
                 }
+                // Resources the workspace lacks, such as escrowed ones, may still have typed exports.
+                for (file, symbol) in self.index.declared_exports(self.ctx.file) {
+                    if wanted(&symbol.name) && !out.iter().any(|m| m.name == symbol.name) {
+                        let mut member = member_from_symbol(file, symbol);
+                        member.ty = Type::Exports(Some(symbol.name.clone()));
+                        member.kind = SymbolKind::Table;
+                        member.doc = member
+                            .doc
+                            .or_else(|| Some(Arc::from(format!("Exports of the `{}` resource.", symbol.name))));
+                        out.push(member);
+                    }
+                }
                 if let Some(name) = filter.filter(|_| out.is_empty()) {
                     out.push(MemberInfo {
                         name: SmolStr::new(name),
@@ -1708,8 +1720,16 @@ impl<'a> Infer<'a> {
                 }
             }
             Type::Exports(Some(resource)) => {
+                // A declared type describes the exports on purpose, so it wins over the type
+                // inferred from the function a resource registers under the same name.
+                for (_, symbol) in self.index.declared_exports(self.ctx.file) {
+                    if symbol.name == *resource {
+                        out.extend(self.guarded(|| self.members_matching(&symbol.ty, filter)));
+                    }
+                }
+                let declared: FxHashSet<SmolStr> = out.iter().map(|m| m.name.clone()).collect();
                 for (file, symbol) in self.index.exports_of(resource) {
-                    if wanted(&symbol.name) {
+                    if wanted(&symbol.name) && !declared.contains(&symbol.name) {
                         out.push(member_from_symbol(file, symbol));
                     }
                 }

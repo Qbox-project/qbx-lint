@@ -1,0 +1,5 @@
+local config = exports['phone']:GetConfig()
+local inCall = exports.phone:IsInCall()
+local extra = exports.phone:Extra()
+local rang = exports['tablet']:Ring(2)
+print(config, inCall, extra, rang)
