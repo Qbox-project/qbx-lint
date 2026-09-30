@@ -13,7 +13,7 @@ inputs:
     default: ""
   version:
     description: Release tag to download, or "latest"
-    default: v1.0.5
+    default: v1.0.6
   fail-on-error:
     description: Fail the job when errors are found
     default: "true"
@@ -44,9 +44,9 @@ runs:
         dest="${RUNNER_TEMP}/qbx-lint"
         mkdir -p "${dest}"
         if [ "${VERSION}" = "latest" ]; then
-          gh release download --repo Qbox-project/qbx-lint --pattern "${asset}" --dir "${dest}"
+          gh release download --repo Qbox-project/qbx-lua --pattern "${asset}" --dir "${dest}"
         else
-          gh release download "${VERSION}" --repo Qbox-project/qbx-lint --pattern "${asset}" --dir "${dest}"
+          gh release download "${VERSION}" --repo Qbox-project/qbx-lua --pattern "${asset}" --dir "${dest}"
         fi
         case "${asset}" in
           *.zip) unzip -q "${dest}/${asset}" -d "${dest}" ;;

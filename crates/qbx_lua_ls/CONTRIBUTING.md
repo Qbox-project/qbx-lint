@@ -2,12 +2,12 @@
 
 ## Set up
 
-Install stable Rust and clone [qbx-lint](https://github.com/Qbox-project/qbx-lint). The language
+Install stable Rust and clone [qbx-lua](https://github.com/Qbox-project/qbx-lua). The language
 server is a member of the same Cargo workspace as the parser, formatter, analysis and FiveM data
 crates:
 
 ```text
-qbx-lint/
+qbx-lua/
   Cargo.toml
   crates/
     qbx_lua_ls/

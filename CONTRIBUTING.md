@@ -1,5 +1,7 @@
 # Contributing
 
+`qbx-lua` is the Qbox Lua tooling workspace, formerly hosted as `qbx-lint`.
+
 This repository accepts changes to both `qbx-lint` and `qbx-lua-ls`, including their shared
 parser, formatter, analysis and FiveM data. The former standalone server repository is archived;
 use this repository for language-server issues and pull requests. Editor adapters remain in
@@ -104,7 +106,7 @@ ordinary tests use the checked-in data.
 ## Reporting a bug
 
 Report linter, formatter and language-server bugs in
-[this repository](https://github.com/Qbox-project/qbx-lint/issues). Include the affected tool
+[this repository](https://github.com/Qbox-project/qbx-lua/issues). Include the affected tool
 and its version (`qbx-lint --version` or `qbx-lua-ls --version`), your platform, expected and actual
 behavior, and a minimal Lua example. For CLI bugs, include the command you ran. For LSP bugs,
 include the editor/LSP client, settings, server logs and the editor action that triggered the
