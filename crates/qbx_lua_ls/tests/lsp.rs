@@ -2443,6 +2443,59 @@ end)
     assert!(findings(&mut client, "loose.lua", &["no-unknown"]).is_empty(), "the rule is off unless turned on");
 }
 
+#[test]
+fn open_files_keep_their_hints_when_the_client_spells_uris_its_own_way() {
+    struct Fixture(PathBuf);
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            if let (Ok(root), Ok(temp)) = (self.0.canonicalize(), std::env::temp_dir().canonicalize()) {
+                if root.parent() == Some(temp.as_path()) {
+                    let _ = std::fs::remove_dir_all(root);
+                }
+            }
+        }
+    }
+    let fixture = Fixture(std::env::temp_dir().join(format!(
+        "qbx-uris-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos(),
+    )));
+    std::fs::create_dir_all(&fixture.0).unwrap();
+    let text = "function test(foo)\nend\n";
+    std::fs::write(fixture.0.join("fxmanifest.lua"), "fx_version 'cerulean'\ngame 'gta5'\nclient_script 'main.lua'\n")
+        .unwrap();
+    std::fs::write(fixture.0.join("main.lua"), text).unwrap();
+    let mut client = Client::start(fixture.0.clone());
+    let codes = |client: &Client, uri: &str| -> Option<Vec<String>> {
+        let list = client.diagnostics.get(uri)?.as_array().unwrap();
+        Some(list.iter().map(|d| d["code"].as_str().unwrap().to_string()).collect())
+    };
+
+    // The same file, as a client such as VS Code may write its URI: `%61` is `a`, the way VS Code
+    // sends `c%3A` for `c:`.
+    let indexed = client.uri("main.lua").to_string();
+    let spelled = indexed.replace("main.lua", "m%61in.lua");
+    assert_ne!(indexed, spelled);
+    client.diagnostics_for("main.lua");
+    assert_eq!(codes(&client, &indexed).unwrap(), ["lowercase-global"], "closed files are reported without hints");
+
+    client.notify(
+        "textDocument/didOpen",
+        json!({ "textDocument": { "uri": spelled, "languageId": "lua", "version": 1, "text": text } }),
+    );
+    // A save has the files nobody has open checked again.
+    client.notify("textDocument/didSave", json!({ "textDocument": { "uri": spelled } }));
+    client.diagnostics.clear();
+    client.diagnostics_for("main.lua");
+    assert_eq!(codes(&client, &spelled).unwrap(), ["lowercase-global", "unused-argument"]);
+    assert_eq!(codes(&client, &indexed), None, "an open file is not reported a second time, without its hints");
+
+    client.notify("textDocument/didClose", json!({ "textDocument": { "uri": spelled } }));
+    client.diagnostics_for("main.lua");
+    assert_eq!(codes(&client, &spelled).unwrap(), Vec::<String>::new(), "what the open file showed is cleared");
+    assert_eq!(codes(&client, &indexed).unwrap(), ["lowercase-global"]);
+}
+
 /// The findings of `file` for the given codes as (code, line, message), sorted by line.
 fn findings(client: &mut Client, file: &str, codes: &[&str]) -> Vec<(String, u64, String)> {
     client.diagnostics_for(file);
