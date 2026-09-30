@@ -40,6 +40,12 @@ function Citizen.Trace(text) end
 ---@return any ...
 function Citizen.InvokeNative(hash, ...) end
 
+---Calls a game native by hash like `Citizen.InvokeNative`, with the same arguments and marker values.
+---@param hash integer|string
+---@param ... any
+---@return any ...
+function Citizen.InvokeNative2(hash, ...) end
+
 ---Returns a directly callable function for the native with the given hash, or nil when it cannot be resolved.
 ---@param hash integer|string
 ---@return function? native
@@ -114,6 +120,12 @@ function Citizen.ResultAsVector() end
 ---@nodiscard
 function Citizen.ResultAsObject() end
 
+---Marker requesting the native result as a msgpack-serialised object that `unpacker`, usually `msgpack.unpack`, decodes.
+---@param unpacker fun(data: string): any
+---@return any marker
+---@nodiscard
+function Citizen.ResultAsObject2(unpacker) end
+
 ---Runtime internal: marks the start of a scheduler boundary used to stitch stack traces across resources.
 ---@param boundaryId integer
 ---@param co? thread
@@ -151,9 +163,12 @@ function ClearTimeout(timerId) end
 
 ---Handle returned by `AddEventHandler`; pass it to `RemoveEventHandler` to unregister the handler.
 ---@class EventHandlerData
----@field key string
----@field name integer
+---@field key integer
+---@field name string
 local EventHandlerData = {}
+
+---The name fivem-lls-addon gives the handle of `AddEventHandler`.
+---@alias EventHandler EventHandlerData
 
 ---While a network event handler runs: the server id of the player that triggered it (server side), or 65535 for server-sent events (client side).
 ---@type integer
@@ -194,6 +209,32 @@ function TriggerEvent(eventName, ...) end
 ---@field [string] table<string, function>
 exports = {}
 
+---The options of `json.getoption` and `json.setoption`, which `json.encode` also takes in its state table.
+---@alias json_options "indent"|"pretty"|"sort_keys"|"null"|"nesting"|"unsigned"|"nan"|"inf"|"bit32"|"lua_format_float"|"lua_round_float"|"vectorarray"|"single_line"|"empty_table_as_array"|"with_hole"|"decoder_preset"|"max_depth"|"indent_char"|"indent_count"|"level"|"decimal_count"
+
+---Options for one `json.encode` call.
+---@class json_encode_state
+---@field indent? boolean Write newlines and indentation.
+---@field pretty? boolean Same as `indent`.
+---@field sort_keys? boolean Write the keys of objects in sorted order.
+---@field empty_table_as_array? boolean Encode an empty table as `[]`.
+---@field with_hole? boolean Encode a table whose keys are all positive integers as an array, with `null` for its gaps.
+---@field single_line? boolean Keep arrays on one line when indenting.
+---@field max_depth? integer Deepest table nesting to encode.
+---@field indent_char? integer
+---@field indent_count? integer Indent characters per level.
+---@field level? integer Same as `indent_count`.
+---@field decimal_count? integer Most decimal places written for a number.
+---@field nan? boolean Write `NaN` and `Infinity`.
+---@field inf? boolean Same as `nan`.
+---@field null? boolean
+---@field nesting? boolean
+---@field unsigned? boolean
+---@field bit32? boolean
+---@field indent_amt? integer
+---@field keyorder? table
+---@field exception? fun(reason: string, value: any): string?, string?
+
 ---@class jsonlib
 json = {}
 
@@ -203,7 +244,7 @@ json.null = {}
 
 ---Serialises a Lua value to a JSON string. The optional state table tweaks output (for example `indent = true`).
 ---@param value any
----@param state? table
+---@param state? json_encode_state
 ---@return string encoded
 ---@nodiscard
 function json.encode(value, state) end
@@ -218,8 +259,52 @@ function json.encode(value, state) end
 ---@nodiscard
 function json.decode(str, pos, nullval) end
 
+---Returns the value of a global encoding/decoding option.
+---@param option json_options
+---@return any value
+---@nodiscard
+function json.getoption(option) end
+
+---Sets a global encoding/decoding option.
+---@param option json_options
+---@param value any
+function json.setoption(option, value) end
+
+---Marks `t`, or a new table, to be encoded as a JSON object and returns it.
+---@param t? table
+---@return table
+function json.object(t) end
+
+---Marks `t`, or a new table, to be encoded as a JSON array and returns it.
+---@param t? table
+---@return table
+function json.array(t) end
+
+---Whether the table is marked as a JSON object.
+---@param value any
+---@return boolean
+---@nodiscard
+function json.isobject(value) end
+
+---Whether the table is marked as a JSON array.
+---@param value any
+---@return boolean
+---@nodiscard
+function json.isarray(value) end
+
+---The options of `msgpack.getoption` and `msgpack.setoption`.
+---@alias msgpack_options "unsigned"|"integer"|"float"|"double"|"string_compat"|"string_binary"|"empty_table_as_array"|"without_hole"|"with_hole"|"always_as_map"|"small_lua"|"full64bits"|"long_double"|"sentinel"|"ignore_invalid"
+
 ---@class msgpacklib
 msgpack = {}
+
+---Sentinel value that stands for MessagePack `nil` inside Lua tables.
+---@type any
+msgpack.null = {}
+
+---Same value as `msgpack.null`.
+---@type any
+msgpack.sentinel = msgpack.null
 
 ---Serialises the given values into one MessagePack byte string.
 ---@param ... any
@@ -239,10 +324,80 @@ function msgpack.pack_args(...) end
 ---@nodiscard
 function msgpack.unpack(data) end
 
+---Decodes up to `limit` values starting at `position` and returns where decoding stopped, 0 at the end of the string, followed by the values.
+---@param data string
+---@param position? integer
+---@param limit? integer
+---@param endPosition? integer
+---@return integer position
+---@return any ...
+---@nodiscard
+function msgpack.next(data, position, limit, endPosition) end
+
+---Creates a packer object that serialises the values passed to it.
+---@return userdata packer
+---@nodiscard
+function msgpack.new() end
+
+---Returns the value of a global encoding/decoding option.
+---@param option msgpack_options
+---@return any value
+---@nodiscard
+function msgpack.getoption(option) end
+
+---Sets a global encoding/decoding option.
+---@param option msgpack_options
+---@param value any
+function msgpack.setoption(option, value) end
+
+---Sets one of the string options: "string", "string_compat" or "string_binary".
+---@param value string
+function msgpack.set_string(value) end
+
+---Sets one of the array options: "without_hole", "with_hole" or "always_as_map".
+---@param value string
+function msgpack.set_array(value) end
+
+---Sets one of the integer options: "signed" or "unsigned".
+---@param value string
+function msgpack.set_integer(value) end
+
+---Sets one of the number options: "float" or "double".
+---@param value string
+function msgpack.set_number(value) end
+
+---Registers an extension type from a table with its type id and its pack and unpack functions.
+---@param encoder table
+function msgpack.extend(encoder) end
+
+---Returns the definition of the extension type with the given id.
+---@param extId integer
+---@return table? encoder
+---@nodiscard
+function msgpack.extend_get(extId) end
+
+---Removes the extension types with the given ids.
+---@param ... integer
+function msgpack.extend_clear(...) end
+
+---Associates the name of a Lua type with an extension type.
+---@param typeName string
+---@param extId? integer
+function msgpack.settype(typeName, extId) end
+
+---Returns the extension definition associated with the name of a Lua type.
+---@param typeName string
+---@return table? encoder
+---@nodiscard
+function msgpack.gettype(typeName) end
+
 ---Deferred/promise object. `state` is 0 pending, 1 resolving, 2 rejecting, 3 resolved, 4 rejected; `value` holds the settled value.
 ---@class promise
 ---@field state integer
 ---@field value any
+---@field queue promise[] The promises chained on this one with `next`.
+---@field success? fun(value: any)
+---@field failure? fun(value: any)
 promise = {}
 
 ---Creates a new pending promise.
@@ -289,6 +444,10 @@ function promise:next(onFulfilled, onRejected) end
 ---@class vector2
 ---@field x number
 ---@field y number
+---@field r number Same as `x`.
+---@field g number Same as `y`.
+---@field xy vector2
+---@field n integer Number of components.
 ---@operator add(vector2): vector2
 ---@operator sub(vector2): vector2
 ---@operator mul(number): vector2
@@ -303,7 +462,12 @@ function promise:next(onFulfilled, onRejected) end
 ---@field x number
 ---@field y number
 ---@field z number
+---@field r number Same as `x`.
+---@field g number Same as `y`.
+---@field b number Same as `z`.
 ---@field xy vector2
+---@field xyz vector3
+---@field n integer Number of components.
 ---@operator add(vector3): vector3
 ---@operator sub(vector3): vector3
 ---@operator mul(number): vector3
@@ -319,8 +483,14 @@ function promise:next(onFulfilled, onRejected) end
 ---@field y number
 ---@field z number
 ---@field w number
+---@field r number Same as `x`.
+---@field g number Same as `y`.
+---@field b number Same as `z`.
+---@field a number Same as `w`.
 ---@field xy vector2
 ---@field xyz vector3
+---@field xyzw vector4
+---@field n integer Number of components.
 ---@operator add(vector4): vector4
 ---@operator sub(vector4): vector4
 ---@operator mul(number): vector4
@@ -329,6 +499,9 @@ function promise:next(onFulfilled, onRejected) end
 ---@operator div(vector4): vector4
 ---@operator unm: vector4
 ---@operator len: number
+
+---A vector of any size.
+---@alias vector vector2|vector3|vector4
 
 ---Quaternion value type. Multiplying by a vector3 rotates that vector.
 ---@class quat
@@ -438,6 +611,7 @@ GlobalState = {}
 
 ---@class EntityInterface
 ---@field state StateBag
+---@field __data integer The entity handle the wrapper was created for.
 local EntityInterface = {}
 
 ---@class PlayerInterface
@@ -549,3 +723,232 @@ function vector(...) end
 ---@param fn fun()
 ---@return table
 function defer(fn) end
+
+---Builds a one-component vector, which is a plain number.
+---@param x number
+---@return number
+---@nodiscard
+function vec1(x) end
+
+---Same as `vec1`.
+---@param x number
+---@return number
+---@nodiscard
+function vector1(x) end
+
+---Builds a vector from its arguments converted to integers; its size follows how many are passed.
+---@param ... number
+---@return vector2|vector3|vector4|integer
+---@nodiscard
+function ivec(...) end
+
+---Builds a one-component integer vector, which is a plain integer.
+---@param x number
+---@return integer
+---@nodiscard
+function ivec1(x) end
+
+---Builds a vector2 from its arguments converted to integers.
+---@param x number
+---@param y number
+---@return vector2
+---@nodiscard
+function ivec2(x, y) end
+
+---Builds a vector3 from its arguments converted to integers.
+---@param x number
+---@param y number
+---@param z number
+---@return vector3
+---@nodiscard
+function ivec3(x, y, z) end
+
+---Builds a vector4 from its arguments converted to integers.
+---@param x number
+---@param y number
+---@param z number
+---@param w number
+---@return vector4
+---@nodiscard
+function ivec4(x, y, z, w) end
+
+---Builds a vector from its arguments converted to booleans; its size follows how many are passed.
+---@param ... any
+---@return vector2|vector3|vector4|boolean
+---@nodiscard
+function bvec(...) end
+
+---Builds a one-component boolean vector, which is a plain boolean.
+---@param x any
+---@return boolean
+---@nodiscard
+function bvec1(x) end
+
+---Builds a vector2 from its arguments converted to booleans.
+---@param x any
+---@param y any
+---@return vector2
+---@nodiscard
+function bvec2(x, y) end
+
+---Builds a vector3 from its arguments converted to booleans.
+---@param x any
+---@param y any
+---@param z any
+---@return vector3
+---@nodiscard
+function bvec3(x, y, z) end
+
+---Builds a vector4 from its arguments converted to booleans.
+---@param x any
+---@param y any
+---@param z any
+---@param w any
+---@return vector4
+---@nodiscard
+function bvec4(x, y, z, w) end
+
+---Builds a quaternion; same as `quat`.
+---@param w number
+---@param x number
+---@param y number
+---@param z number
+---@return quat q
+---@nodiscard
+function qua(w, x, y, z) end
+
+---Builds a matrix from numbers, vectors or another matrix; its size follows the arguments.
+---@param ... number|vector2|vector3|vector4|quat|matrix
+---@return matrix
+---@nodiscard
+function mat(...) end
+
+---Builds a matrix of 2 columns and 2 rows.
+---@param ... number|vector2|vector3|vector4|quat|matrix
+---@return matrix
+---@nodiscard
+function mat2x2(...) end
+
+---Same as `mat2x2`.
+---@param ... number|vector2|vector3|vector4|quat|matrix
+---@return matrix
+---@nodiscard
+function mat2(...) end
+
+---Builds a matrix of 2 columns and 3 rows.
+---@param ... number|vector2|vector3|vector4|quat|matrix
+---@return matrix
+---@nodiscard
+function mat2x3(...) end
+
+---Builds a matrix of 2 columns and 4 rows.
+---@param ... number|vector2|vector3|vector4|quat|matrix
+---@return matrix
+---@nodiscard
+function mat2x4(...) end
+
+---Builds a matrix of 3 columns and 2 rows.
+---@param ... number|vector2|vector3|vector4|quat|matrix
+---@return matrix
+---@nodiscard
+function mat3x2(...) end
+
+---Builds a matrix of 3 columns and 3 rows.
+---@param ... number|vector2|vector3|vector4|quat|matrix
+---@return matrix
+---@nodiscard
+function mat3x3(...) end
+
+---Same as `mat3x3`.
+---@param ... number|vector2|vector3|vector4|quat|matrix
+---@return matrix
+---@nodiscard
+function mat3(...) end
+
+---Builds a matrix of 3 columns and 4 rows.
+---@param ... number|vector2|vector3|vector4|quat|matrix
+---@return matrix
+---@nodiscard
+function mat3x4(...) end
+
+---Builds a matrix of 4 columns and 2 rows.
+---@param ... number|vector2|vector3|vector4|quat|matrix
+---@return matrix
+---@nodiscard
+function mat4x2(...) end
+
+---Builds a matrix of 4 columns and 3 rows.
+---@param ... number|vector2|vector3|vector4|quat|matrix
+---@return matrix
+---@nodiscard
+function mat4x3(...) end
+
+---Builds a matrix of 4 columns and 4 rows.
+---@param ... number|vector2|vector3|vector4|quat|matrix
+---@return matrix
+---@nodiscard
+function mat4x4(...) end
+
+---Same as `mat4x4`.
+---@param ... number|vector2|vector3|vector4|quat|matrix
+---@return matrix
+---@nodiscard
+function mat4(...) end
+
+---Returns the dot product of two vectors or quaternions of the same kind.
+---@generic T: vector2|vector3|vector4|quat
+---@param a T
+---@param b T
+---@return number
+---@nodiscard
+function dot(a, b) end
+
+---Returns the cross product of two vector3 values, or of two quaternions.
+---@generic T: vector3|quat
+---@param a T
+---@param b T
+---@return T
+---@nodiscard
+function cross(a, b) end
+
+---Returns the inverse of a quaternion or a matrix.
+---@generic T: quat|matrix
+---@param v T
+---@return T inverse
+---@nodiscard
+function inv(v) end
+
+---Interpolates between two quaternions, or two vectors of the same size, along the shortest arc.
+---@generic T: vector2|vector3|vector4|quat
+---@param a T
+---@param b T
+---@param t number
+---@return T
+---@nodiscard
+function slerp(a, b, t) end
+
+---Iterates `t` through its `__iter` metamethod, or like `pairs` when it has none. CfxLua extension.
+---@generic K, V
+---@param t table<K, V>
+---@return fun(t: table<K, V>, index?: K): K, V iterator
+---@return table<K, V> t
+---@return nil index
+function each(t) end
+
+---Returns its arguments with every table, function, thread and userdata replaced by nil. CfxLua extension.
+---@param ... any
+---@return any ...
+function scrub(...) end
+
+---Returns the number of UTF-8 characters in `s`. CfxLua extension.
+---@param s string
+---@return integer
+---@nodiscard
+function utf8.strlenutf8(s) end
+
+---Compares two UTF-8 strings without regard to case: negative, zero or positive as `a` sorts before, with or after `b`. CfxLua extension.
+---@param a string
+---@param b string
+---@return integer
+---@nodiscard
+function utf8.strcmputf8i(a, b) end

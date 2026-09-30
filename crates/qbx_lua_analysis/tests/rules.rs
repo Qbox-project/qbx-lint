@@ -374,6 +374,13 @@ fn clean_snippets_stay_clean() {
         "for i = 1, 3 do\n    if i == 2 then goto continue end\n    print(i)\n    ::continue::\nend",
         "local x = 1\nlocal function get() return x end\nx = 2\nprint(get())",
         "print(N_0xdeadbeef(1), vector3(1, 2, 3).x, json.encode({}), string.strtrim(' a '))",
+        // What CfxLua registers beside the vector constructors.
+        "local a, q = vec3(1, 2, 3), qua(1, 0, 0, 0)\nprint(dot(a, a), cross(a, a), inv(q), slerp(q, q, 0.5), vec1(1), ivec3(1, 2, 3), bvec2(true, false))",
+        "print(mat(1), mat2(1), mat2x3(1), mat3x3(1), mat4(1), mat4x4(1), scrub(1, {}), utf8.strlenutf8('a'), utf8.strcmputf8i('a', 'A'))",
+        "for k, v in each({}) do print(k, v) end",
+        "print(json.isarray({}), json.array(), json.object(), json.isobject({}), json.getoption('indent'))\njson.setoption('indent', true)",
+        "print(msgpack.null, msgpack.new(), msgpack.next('', 1), msgpack.getoption('float'), msgpack.gettype('x'))\nmsgpack.setoption('float', true)",
+        "print(Citizen.InvokeNative2(0x1), Citizen.ResultAsObject2(msgpack.unpack))",
         "Global = Global or {}\nfunction Global.helper() end",
         "local function mayWait() end\nwhile true do\n    mayWait()\nend",
         "repeat\n    local line = io.read()\nuntil line == nil",
