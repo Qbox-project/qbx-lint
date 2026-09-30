@@ -671,7 +671,9 @@ impl<'a> Infer<'a> {
         let Some(first) = exprs.first() else { return Type::Unknown };
         let iterated = match &first.kind {
             ExprKind::Call { callee, args, .. } => match (callee.dotted_path().as_deref(), args.first()) {
-                (Some(iterator @ ("pairs" | "ipairs" | "next")), Some(arg)) => Some((arg, iterator == "ipairs")),
+                (Some(iterator @ ("pairs" | "ipairs" | "next" | "each")), Some(arg)) => {
+                    Some((arg, iterator == "ipairs"))
+                }
                 _ => None,
             },
             // `for k, v in next, t`

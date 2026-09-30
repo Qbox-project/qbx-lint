@@ -2903,6 +2903,65 @@ end
 }
 
 #[test]
+fn type_names_of_fivem_lls_addon_are_declared() {
+    let mut client = Client::start(fixture_root());
+    let text = "\
+---@type EventHandler
+local handler = AddEventHandler('demo', function() end)
+local key, name = handler.key, handler.name
+
+---@param size vector
+---@param transform matrix<vector3>
+---@param state json_encode_state
+---@param option json_options
+---@param packing msgpack_options
+---@param entity EntityInterface
+---@param pending promise
+local function addon(size, transform, state, option, packing, entity, pending)
+    local position = vec3(1, 2, 3)
+    local red, swizzle, count = position.r, position.xyz, position.n
+    local data, queue = entity.__data, pending.queue
+    local product, normal = dot(position, position), cross(position, position)
+    local rotation = inv(quat(1, 0, 0, 0))
+    local identity = mat4(1)
+    for index, value in each({ 'a', 'b' }) do
+        print(index, value)
+    end
+    local text = json.encode({}, { indent = true, sort_keys = true })
+    print(size, transform, state, option, packing, red, swizzle, count, data, queue)
+    print(product, normal, rotation, identity, text, json.getoption('indent'), msgpack.getoption('float'))
+end
+
+print(addon, key, name)
+";
+    client.open_with(CLIENT, text);
+    for (needle, expected) in [
+        ("handler = Add", "handler: EventHandler {"),
+        ("key, name", "key: integer\n"),
+        ("name = handler", "name: string\n"),
+        ("size, transform, state, option", "size: vector {"),
+        ("transform, state, option", "transform: matrix<vector3>\n"),
+        ("red, swizzle", "red: number\n"),
+        ("swizzle, count", "swizzle: vector3 {"),
+        ("count = position", "count: integer\n"),
+        ("data, queue", "data: integer\n"),
+        ("queue = entity", "queue: promise[]\n"),
+        ("product, normal", "product: number\n"),
+        ("normal = dot", "normal: vector3 {"),
+        ("rotation = inv", "rotation: quat {"),
+        ("identity = mat4", "identity: matrix\n"),
+        ("index, value in", "index: integer\n"),
+        ("value in each", "value: \"a\"|\"b\"\n"),
+    ] {
+        let (l, c) = pos(text, needle, 0);
+        let hover = client.hover_text(CLIENT, l, c);
+        assert!(hover.contains(expected), "{needle}: expected {expected:?} in {hover}");
+    }
+    let codes = ["undefined-doc-name", "undefined-global", "undefined-field", "assign-type-mismatch"];
+    assert_eq!(findings(&mut client, CLIENT, &codes), []);
+}
+
+#[test]
 fn hover_shows_annotation_type_details_and_ranges() {
     let mut client = Client::start(fixture_root());
     let declarations = "\

@@ -112,6 +112,11 @@ the language server, the editor's indentation settings still apply. Discovery sk
 exclusion pattern it cannot read and says so on stderr; pass the file with `--config` to make that
 an error.
 
+Annotations written for [fivem-lls-addon](https://github.com/overextended/fivem-lls-addon) keep
+their meaning: the type names of its runtime library, `EventHandler`, `vector`, `json_options`,
+`json_encode_state` and `msgpack_options`, are declared beside the runtime's own, and the classes
+the two share carry its fields.
+
 ## Suppressing findings
 
 Use a rule code to keep the suppression specific:
