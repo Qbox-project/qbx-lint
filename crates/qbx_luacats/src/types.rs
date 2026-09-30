@@ -50,6 +50,10 @@ pub struct Param {
 pub struct FunType {
     pub params: Vec<Param>,
     pub returns: Vec<Type>,
+    /// The sets of values the function returns when it lists more than one, as `(false)` and
+    /// `(string, string)` for `@return false | (string, string)`. `returns` then holds what each
+    /// position has across the sets.
+    pub return_sets: Vec<Vec<Type>>,
     pub is_method: bool,
     /// The names declared with `@generic`, bound from the arguments of each call.
     pub generics: Vec<SmolStr>,
@@ -194,6 +198,19 @@ impl Type {
         }
     }
 
+    /// Widens what a call returns like `widen`, except that a `false` or `true` beside values of
+    /// another kind stays: the `false|string` of a function that returns `false` or a name says
+    /// more than `boolean|string`.
+    pub fn widen_returned(&self) -> Type {
+        let Type::Union(types) = self else { return self.widen() };
+        let has = |flag: bool| types.contains(&Type::BooleanLit(flag));
+        let mixed = types.iter().any(|t| !matches!(t, Type::Nil | Type::Boolean | Type::BooleanLit(_)));
+        if !mixed || types.contains(&Type::Boolean) || (has(true) && has(false)) {
+            return self.widen();
+        }
+        Type::union(types.iter().map(|t| if matches!(t, Type::BooleanLit(_)) { t.clone() } else { t.widen() }))
+    }
+
     pub fn as_fun(&self) -> Option<&Arc<FunType>> {
         match self {
             Type::Fun(fun) => Some(fun),
@@ -205,6 +222,13 @@ impl Type {
     pub fn first_return(&self) -> Type {
         self.as_fun().and_then(|f| f.returns.first().cloned()).unwrap_or_default()
     }
+}
+
+/// What each position holds across the sets of values a function returns. A set that ends before
+/// a position gives `nil` there.
+pub fn merged_returns(sets: &[Vec<Type>]) -> Vec<Type> {
+    let width = sets.iter().map(Vec::len).max().unwrap_or(0);
+    (0..width).map(|i| Type::union(sets.iter().map(|set| set.get(i).cloned().unwrap_or(Type::Nil)))).collect()
 }
 
 fn push_unique(list: &mut Vec<Type>, ty: Type) {
@@ -229,11 +253,24 @@ impl FunType {
         let params: Vec<String> = self.params.iter().map(Param::to_string).collect();
         let mut out = format!("function {name}({})", params.join(", "));
         if !self.returns.is_empty() {
-            let returns: Vec<String> = self.returns.iter().map(Type::to_string).collect();
             out.push_str(": ");
-            out.push_str(&returns.join(", "));
+            out.push_str(&self.returns_text());
         }
         out
+    }
+
+    /// The returned values as written after the `:` of a signature: `integer, string?`, or the
+    /// sets of `false | (string, string)`.
+    pub fn returns_text(&self) -> String {
+        let list = |types: &[Type]| types.iter().map(Type::to_string).collect::<Vec<_>>().join(", ");
+        if self.return_sets.is_empty() {
+            return list(&self.returns);
+        }
+        let sets = self.return_sets.iter().map(|set| match set.as_slice() {
+            [only] => only.to_string(),
+            values => format!("({})", list(values)),
+        });
+        sets.collect::<Vec<_>>().join(" | ")
     }
 }
 
@@ -298,8 +335,7 @@ impl fmt::Display for Type {
                 let params: Vec<String> = fun.params.iter().map(Param::to_string).collect();
                 write!(f, "fun({})", params.join(", "))?;
                 if !fun.returns.is_empty() {
-                    let returns: Vec<String> = fun.returns.iter().map(Type::to_string).collect();
-                    write!(f, ": {}", returns.join(", "))?;
+                    write!(f, ": {}", fun.returns_text())?;
                 }
                 Ok(())
             }
@@ -415,6 +451,67 @@ impl<'a> TypeParser<'a> {
         }
         self.depth -= 1;
         Type::union(types)
+    }
+
+    /// The sets of values a function returns, written `false | (string, string)`: alternatives
+    /// separated by `|`, where a parenthesized list holds the values of one set. `None`, leaving the
+    /// parser where it was, when no alternative lists several values, so the text is a plain type.
+    pub fn parse_return_sets(&mut self) -> Option<Vec<Vec<Type>>> {
+        let start = (self.pos, self.names.as_ref().map(Vec::len));
+        let mut sets = Vec::new();
+        loop {
+            self.skip_ws();
+            sets.push(match self.value_list() {
+                Some(values) => values,
+                None => vec![self.postfix()],
+            });
+            self.skip_ws();
+            if self.peek() != b'|' {
+                break;
+            }
+            self.pos += 1;
+        }
+        if sets.iter().all(|set| set.len() == 1) {
+            self.rewind(start);
+            return None;
+        }
+        Some(sets)
+    }
+
+    /// Like `parse_return_sets`, for the class and alias names in the sets with their byte offsets.
+    pub fn parse_return_set_names(&mut self) -> Option<Vec<(usize, &'a str)>> {
+        self.names = Some(Vec::new());
+        let sets = self.parse_return_sets();
+        let names = self.names.take().unwrap_or_default();
+        sets.map(|_| names)
+    }
+
+    /// The types of a parenthesized list with a comma in it, such as `(string, string)`. A
+    /// parenthesized type like `(string|number)` is none and leaves the parser where it was.
+    fn value_list(&mut self) -> Option<Vec<Type>> {
+        if self.peek() != b'(' {
+            return None;
+        }
+        let start = (self.pos, self.names.as_ref().map(Vec::len));
+        self.pos += 1;
+        let first = self.parse();
+        self.skip_ws();
+        if self.peek() != b',' {
+            self.rewind(start);
+            return None;
+        }
+        self.pos += 1;
+        let mut values = vec![first];
+        values.extend(self.list_until(b')'));
+        Some(values)
+    }
+
+    /// Goes back to a position taken before a parse that did not work out, with the names it found.
+    fn rewind(&mut self, (pos, names): (usize, Option<usize>)) {
+        self.pos = pos;
+        if let (Some(found), Some(len)) = (&mut self.names, names) {
+            found.truncate(len);
+        }
     }
 
     /// Comma separated types, as used by `@return` and function returns.
@@ -556,8 +653,18 @@ impl<'a> TypeParser<'a> {
             }
             self.eat(b',');
         }
-        let returns = if self.eat(b':') { self.parse_return_list() } else { Vec::new() };
-        Type::Fun(Arc::new(FunType { params, returns, ..FunType::default() }))
+        let mut return_sets = Vec::new();
+        let returns = match self.eat(b':') {
+            true => match self.parse_return_sets() {
+                Some(sets) => {
+                    return_sets = sets;
+                    merged_returns(&return_sets)
+                }
+                None => self.parse_return_list(),
+            },
+            false => Vec::new(),
+        };
+        Type::Fun(Arc::new(FunType { params, returns, return_sets, ..FunType::default() }))
     }
 
     fn parse_return_list(&mut self) -> Vec<Type> {

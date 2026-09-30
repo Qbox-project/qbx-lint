@@ -1714,6 +1714,124 @@ local copy = name
 }
 
 #[test]
+fn guards_pick_the_set_of_values_a_call_returned() {
+    let mut client = Client::start(fixture_root());
+    let text = "\
+---@return false | (string, string)
+local function getName()
+    if math.random(1, 2) == 2 then
+        return false
+    end
+    return 'Joe', 'Doe'
+end
+
+local function find(id)
+    if id == 0 then
+        return nil, 'not found'
+    end
+    return 'name'
+end
+
+---@type fun(): false | (integer, string)
+local getter
+
+local function use()
+    local found, problem = find(1)
+    if found then
+        print(found, problem) -- held
+    else
+        print(found, problem) -- failed
+    end
+    local id, label = getter()
+    if id == false then
+        return label -- no label
+    end
+    print(id, label) -- typed
+    local first, last = getName()
+    last = last or 'unknown'
+    if not first then
+        return
+    end
+    print(first, last) -- reassigned
+end
+
+local firstname, lastname = getName()
+if not firstname then
+    print(firstname, lastname) -- inside
+    return use()
+end
+print(firstname, lastname) -- after
+";
+    client.open_with(CLIENT, text);
+    for (needle, expected) in [
+        ("getName()\n    if math", "local function getName(): false | (string, string)"),
+        // The sets of an undocumented function are those its `return`s pass.
+        ("find(id)", "local function find(id): (nil, string) | string"),
+        ("firstname, lastname = getName", "firstname: false|string\n"),
+        ("lastname = getName", "lastname: string?\n"),
+        ("firstname, lastname) -- inside", "firstname: false\n"),
+        ("lastname) -- inside", "lastname: nil\n"),
+        ("firstname, lastname) -- after", "firstname: string\n"),
+        ("lastname) -- after", "lastname: string\n"),
+        ("found, problem) -- held", "found: string\n"),
+        ("problem) -- held", "problem: nil\n"),
+        ("found, problem) -- failed", "found: nil\n"),
+        ("problem) -- failed", "problem: string\n"),
+        ("label -- no label", "label: nil\n"),
+        ("id, label) -- typed", "id: integer\n"),
+        ("label) -- typed", "label: string\n"),
+        // A local that is assigned again keeps its own type and tells nothing about the others.
+        ("first, last) -- reassigned", "first: string\n"),
+        ("last) -- reassigned", "last: string?\n"),
+    ] {
+        let (l, c) = pos(text, needle, 0);
+        let hover = client.hover_text(CLIENT, l, c);
+        assert!(hover.contains(expected), "{needle}: expected {expected:?} in {hover}");
+    }
+}
+
+#[test]
+fn returns_have_to_match_one_of_the_sets_of_values() {
+    let mut client = Client::start(fixture_root());
+    let text = "\
+---@param flag integer
+---@return false | (string, string)
+local function names(flag)
+    if flag == 1 then
+        return 'Joe'
+    elseif flag == 2 then
+        return 1, 'Doe'
+    elseif flag == 3 then
+        return false
+    end
+    return 'Joe', 'Doe'
+end
+
+---@return nil | (string, integer)
+local function entry(flag)
+    if flag then
+        return 'a', 1
+    end
+end
+";
+    client.open_with(CLIENT, text);
+    let line = |needle: &str| pos(text, needle, 0).0 as u64;
+    let finding = |code: &str, needle: &str, message: &str| (code.to_string(), line(needle), message.to_string());
+    assert_eq!(
+        findings(&mut client, CLIENT, &["return-type-mismatch", "missing-return"]),
+        [
+            finding("missing-return", "return 'Joe'\n", "`@return` requires 2 values, but this returns 1 value"),
+            finding(
+                "return-type-mismatch",
+                "return 1, 'Doe'",
+                "Cannot return `integer` as return value #1 of type `string`"
+            ),
+        ],
+        "`return false` and both names are sets the function lists, and falling off the end returns nil"
+    );
+}
+
+#[test]
 fn registrations_list_the_calls_that_trigger_them() {
     let mut client = Client::start(fixture_root());
     client.open_with(
