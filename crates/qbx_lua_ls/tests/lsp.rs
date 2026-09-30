@@ -2903,6 +2903,38 @@ end
 }
 
 #[test]
+fn cfxlua_extends_the_standard_libraries() {
+    let mut client = Client::start(fixture_root());
+    let text = "\
+local nano = os.nanotime()
+local delta = os.deltatime(nano, nano)
+local clock = os.clock()
+local trimmed = string.strtrim(' a ')
+local kind = table.type({})
+local entries = io.readdir('.')
+local length = utf8.strlenutf8('a')
+print(nano, delta, clock, trimmed, kind, entries, length)
+";
+    client.open_with(CLIENT, text);
+    for (needle, expected) in [
+        ("nano = os", "nano: integer\n"),
+        ("delta = os", "delta: integer\n"),
+        ("clock = os", "clock: number\n"),
+        ("trimmed = string", "trimmed: string\n"),
+        ("kind = table", "kind: string\n"),
+        ("entries = io", "entries: string[]\n"),
+        ("length = utf8", "length: integer\n"),
+        // The functions CfxLua adds belong to the same table as the ones Lua defines.
+        ("nanotime()", "function oslib.nanotime(): integer"),
+        ("strtrim(", "function stringlib.strtrim(s: string, chars?: string): string"),
+    ] {
+        let (l, c) = pos(text, needle, 0);
+        let hover = client.hover_text(CLIENT, l, c);
+        assert!(hover.contains(expected), "{needle}: expected {expected:?} in {hover}");
+    }
+}
+
+#[test]
 fn type_names_of_fivem_lls_addon_are_declared() {
     let mut client = Client::start(fixture_root());
     let text = "\
