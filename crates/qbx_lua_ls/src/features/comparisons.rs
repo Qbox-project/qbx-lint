@@ -101,9 +101,9 @@ impl Finder<'_, '_> {
         self.infer.narrowed(id, offset, ty)
     }
 
-    /// What the `local` statement `stmt` gives the name at `index`: its `---@type`, or the value it
-    /// is declared with. A call keeps the literals its `@return` lists, which the type of the local
-    /// widens, while a literal written out is widened: `local mode = 'dev'` is a setting to change.
+    /// What the `local` statement `stmt` gives the name at `index`: its `---@type`, or the declared
+    /// type of the value it takes. A literal written out is widened, as `local mode = 'dev'` is a
+    /// setting to change.
     fn local_value(&self, id: LocalId, stmt: &Stmt, index: usize, depth: u32) -> Type {
         let StmtKind::Local { exprs, in_unpack: false, .. } = &stmt.kind else { return Type::Unknown };
         let doc = self.infer.ctx.doc_at(stmt.span.start);

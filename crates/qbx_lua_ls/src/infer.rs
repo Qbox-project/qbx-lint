@@ -582,7 +582,10 @@ impl<'a> Infer<'a> {
         }
         let Some(decl) = self.ctx.decl(local.decl.start) else { return Type::Unknown };
         match decl {
-            Decl::Local { stmt, index } => self.local_stmt_type(stmt, *index, local.func == 0),
+            Decl::Local { stmt, index } => {
+                let reassigned = local.refs.iter().any(|r| r.write);
+                self.local_stmt_type(stmt, *index, local.func == 0, reassigned)
+            }
             Decl::LocalFunction { stmt, func } => {
                 Type::Fun(Arc::new(self.fun_type(func, Some(stmt.span.start), false)))
             }
@@ -605,7 +608,10 @@ impl<'a> Infer<'a> {
         }
     }
 
-    fn local_stmt_type(&self, stmt: &Stmt, index: usize, top_level: bool) -> Type {
+    /// The type of the name at `index` of a `local` statement. A name that takes what a call returns
+    /// has the type the call returns, unless it is `reassigned` after its declaration: it may then
+    /// hold other values of that kind, so `"active"|"busy"` becomes `string`.
+    fn local_stmt_type(&self, stmt: &Stmt, index: usize, top_level: bool, reassigned: bool) -> Type {
         let StmtKind::Local { names, exprs, in_unpack } = &stmt.kind else { return Type::Unknown };
         let doc = self.ctx.doc_at(stmt.span.start);
         if let Some(class) = doc.classes.last() {
@@ -626,11 +632,20 @@ impl<'a> Infer<'a> {
             let ty =
                 if is_last { self.expr_multi(expr).into_iter().next().unwrap_or_default() } else { self.expr(expr) };
             // The `false|string` of a call keeps its `false`, while `local done = false` is a boolean.
-            return if expr.is_call() { ty.widen_returned() } else { ty.widen() };
+            return match (expr.is_call(), reassigned) {
+                (true, false) => ty,
+                (true, true) => ty.widen_returned(),
+                (false, _) => ty.widen(),
+            };
         }
         match exprs.last() {
             Some(last) if last.is_multi_value() => {
-                self.expr_multi(last).into_iter().nth(index + 1 - exprs.len()).unwrap_or_default().widen_returned()
+                let ty = self.expr_multi(last).into_iter().nth(index + 1 - exprs.len()).unwrap_or_default();
+                if reassigned {
+                    ty.widen_returned()
+                } else {
+                    ty
+                }
             }
             _ => Type::Unknown,
         }
