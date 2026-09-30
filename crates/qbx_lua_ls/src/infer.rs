@@ -96,13 +96,15 @@ pub struct FileContext<'a> {
     pub chunk: &'a Chunk,
     pub resolution: &'a Resolution,
     decls: FxHashMap<u32, Decl<'a>>,
+    /// The start of the statement each call is the value of, by the start of the call.
+    call_anchors: FxHashMap<u32, u32>,
     docs: RefCell<FxHashMap<u32, Rc<DocGroup>>>,
     guards: OnceCell<Guards>,
 }
 
 impl<'a> FileContext<'a> {
     pub fn new(file: FileId, source: &'a str, chunk: &'a Chunk, resolution: &'a Resolution) -> Self {
-        let mut collector = DeclCollector { decls: FxHashMap::default() };
+        let mut collector = DeclCollector { decls: FxHashMap::default(), call_anchors: FxHashMap::default() };
         collector.block(&chunk.block);
         Self {
             file,
@@ -110,6 +112,7 @@ impl<'a> FileContext<'a> {
             chunk,
             resolution,
             decls: collector.decls,
+            call_anchors: collector.call_anchors,
             docs: RefCell::new(FxHashMap::default()),
             guards: OnceCell::new(),
         }
@@ -134,6 +137,12 @@ impl<'a> FileContext<'a> {
         doc
     }
 
+    /// Where the doc comment of the functions passed to a call is read: the start of the call, or
+    /// of the `x = f(...)` or `local x = f(...)` statement the call is the value of.
+    pub fn call_doc_anchor(&self, call_start: u32) -> u32 {
+        self.call_anchors.get(&call_start).copied().unwrap_or(call_start)
+    }
+
     pub fn local_owner_key(&self, decl_start: u32) -> SmolStr {
         SmolStr::new(format!("%f{}:{}", self.file, decl_start))
     }
@@ -147,6 +156,7 @@ impl<'a> FileContext<'a> {
 
 struct DeclCollector<'a> {
     decls: FxHashMap<u32, Decl<'a>>,
+    call_anchors: FxHashMap<u32, u32>,
 }
 
 impl<'a> DeclCollector<'a> {
@@ -192,7 +202,7 @@ impl<'a> DeclCollector<'a> {
                 self.expr(target, None);
                 self.expr(expr, None);
             }
-            StmtKind::Expr(expr) => self.expr(expr, None),
+            StmtKind::Expr(expr) => self.expr(expr, anchor),
             StmtKind::Do(body) | StmtKind::Defer(body) => self.block(body),
             StmtKind::While { cond, body } => {
                 self.expr(cond, None);
@@ -237,11 +247,11 @@ impl<'a> DeclCollector<'a> {
             ExprKind::Function(func) => self.func(func, doc_anchor, None),
             ExprKind::Call { callee, args, .. } => {
                 self.expr(callee, None);
-                self.call_args(expr, args);
+                self.call_args(expr, args, doc_anchor);
             }
             ExprKind::MethodCall { base, args, .. } => {
                 self.expr(base, None);
-                self.call_args(expr, args);
+                self.call_args(expr, args, doc_anchor);
             }
             ExprKind::Index { base, index, .. } => {
                 self.expr(base, None);
@@ -269,10 +279,15 @@ impl<'a> DeclCollector<'a> {
         }
     }
 
-    fn call_args(&mut self, call: &'a Expr, args: &'a [Expr]) {
+    /// `doc_anchor` is the statement the call is the value of, whose doc comment the functions
+    /// passed to the call take.
+    fn call_args(&mut self, call: &'a Expr, args: &'a [Expr], doc_anchor: Option<u32>) {
+        if let Some(anchor) = doc_anchor {
+            self.call_anchors.insert(call.span.start, anchor);
+        }
         for (arg_index, arg) in args.iter().enumerate() {
             match &arg.kind {
-                ExprKind::Function(func) => self.func(func, None, Some(Expected { call, arg_index })),
+                ExprKind::Function(func) => self.func(func, doc_anchor, Some(Expected { call, arg_index })),
                 _ => self.expr(arg, None),
             }
         }
@@ -558,7 +573,8 @@ impl<'a> Infer<'a> {
             Decl::Param { func, index, doc_anchor, expected } => {
                 let name = &func.params[*index].text;
                 // A function passed to a call takes the `@param` lines above that call's statement, as
-                // the handler of `RegisterServerCallback('name', function(source, id) end)` does.
+                // the handler of `RegisterServerCallback('name', function(source, id) end)` does,
+                // also when the statement assigns what the call returns.
                 if let Some(anchor) = doc_anchor.or_else(|| expected.as_ref().map(|e| e.call.span.start)) {
                     let doc = self.ctx.doc_at(anchor);
                     if let Some(param) = doc.params.iter().find(|p| p.name == *name) {
@@ -1811,23 +1827,29 @@ fn breaks(block: &Block) -> bool {
 
 /// The functions a statement defines under its doc comment: `function f()`, `local function f()`,
 /// function literals assigned directly, `local f = function()` or `M.f = function()`, and those
-/// passed to the call the statement makes, `RegisterServerCallback('name', function()`. These are
-/// the functions whose parameters take the `@param` lines above the statement.
+/// passed to the call the statement makes or assigns, `RegisterServerCallback('name', function()`
+/// or `handlers[name] = RegisterNetEvent(name, function()`. These are the functions whose
+/// parameters take the `@param` lines above the statement.
 pub fn documented_functions(stmt: &Stmt) -> Vec<&FuncBody> {
     match &stmt.kind {
         StmtKind::Function { func, .. } | StmtKind::LocalFunction { func, .. } => vec![func],
-        StmtKind::Local { exprs, .. } | StmtKind::Assign { exprs, .. } => function_literals(exprs),
-        StmtKind::Expr(Expr { kind: ExprKind::Call { args, .. } | ExprKind::MethodCall { args, .. }, .. }) => {
-            function_literals(args)
-        }
+        StmtKind::Local { exprs, .. } | StmtKind::Assign { exprs, .. } => exprs
+            .iter()
+            .flat_map(|expr| match &expr.kind {
+                ExprKind::Function(func) => vec![&**func],
+                _ => passed_functions(expr),
+            })
+            .collect(),
+        StmtKind::Expr(expr) => passed_functions(expr),
         _ => Vec::new(),
     }
 }
 
-fn function_literals(exprs: &[Expr]) -> Vec<&FuncBody> {
-    exprs
-        .iter()
-        .filter_map(|expr| match &expr.kind {
+/// The function literals among the arguments of `expr`, when it is a call.
+fn passed_functions(expr: &Expr) -> Vec<&FuncBody> {
+    let (ExprKind::Call { args, .. } | ExprKind::MethodCall { args, .. }) = &expr.kind else { return Vec::new() };
+    args.iter()
+        .filter_map(|arg| match &arg.kind {
             ExprKind::Function(func) => Some(&**func),
             _ => None,
         })

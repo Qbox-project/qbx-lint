@@ -1214,6 +1214,10 @@ RegisterServerCallback('getPlayerAppearance', function(source)
     end
     return FixAppearanceKeys(source)
 end)
+
+---@param plate string the plate to look for
+---@return number clamps
+local registered = RegisterServerCallback('countClamps', function(source, plate) return 1 end)
 ";
     client.open_with(SERVER, server);
     let text = "\
@@ -1225,6 +1229,7 @@ Shop:await('')
 local awaitAlias = AwaitServerCallback
 local aliased = awaitAlias('removeStoreLocation')
 local appearance = AwaitServerCallback('getPlayerAppearance')
+local counted = AwaitServerCallback('countClamps', 'ABC 123')
 ";
     client.open_with(CLIENT, text);
 
@@ -1237,6 +1242,10 @@ local appearance = AwaitServerCallback('getPlayerAppearance')
         (CLIENT, text, "appearance", "appearance: Appearance?"),
         // The doc comment above the registration types the handler's parameters.
         (SERVER, server, "storeId)", "storeId: number"),
+        // So does the one above a statement that keeps what the registration returns.
+        (SERVER, server, "plate)", "plate: string"),
+        (SERVER, server, "plate)", "the plate to look for"),
+        (CLIENT, text, "counted", "counted: number"),
     ] {
         let (l, c) = pos(source, needle, 0);
         let hover = client.hover_text(file, l, c);
@@ -1270,7 +1279,10 @@ local appearance = AwaitServerCallback('getPlayerAppearance')
         labels.sort();
         labels
     };
-    assert_eq!(names(&mut client, "AwaitServerCallback('')"), ["getPlayerAppearance", "removeStoreLocation"]);
+    assert_eq!(
+        names(&mut client, "AwaitServerCallback('')"),
+        ["countClamps", "getPlayerAppearance", "removeStoreLocation"]
+    );
     assert_eq!(names(&mut client, "Shop:await('')"), ["shop:price"]);
 
     let (l, c) = pos(text, "removeStoreLocation", 3);
@@ -2423,6 +2435,13 @@ end)
 RegisterNetEvent('demo:event', function(payload)
     print(payload)
 end)
+
+local handlers = {}
+
+---@param requestId number
+handlers['demo:request'] = RegisterNetEvent('demo:request', function(requestId, ...)
+    print(requestId, ...)
+end)
 ";
     write("strict/main.lua", text);
     write("loose.lua", "function other(bar) end\n");
@@ -2793,6 +2812,9 @@ end)
 
 ---@return string
 Test:register('test:name', function(source) return 1 end)
+
+---@return string
+local kept = RegisterServerCallback('test:kept', function(source) return 2 end)
 ";
     client.open_with(CLIENT, text);
     let line = |needle: &str| pos(text, needle, 0).0 as u64;
@@ -2834,6 +2856,8 @@ Test:register('test:name', function(source) return 1 end)
                 "The function can reach its end without returning, but `@return` requires `number`"
             ),
             finding(mismatch, line("return 1 end)"), "Cannot return `integer` as return value #1 of type `string`"),
+            // The same above a statement that keeps what the call returns.
+            finding(mismatch, line("return 2 end)"), "Cannot return `integer` as return value #1 of type `string`"),
         ],
         "optional values, endless loops, error(), reassigned locals and nested functions pass"
     );
