@@ -5643,12 +5643,20 @@ fn declared_types_describe_the_exports_of_a_resource() {
     let (l, c) = pos(&text, "IsInCall()", 0);
     let in_call = client.hover_text("app/client.lua", l, c);
     assert!(in_call.contains("IsInCall(self: PhoneExports): boolean"), "{in_call}");
+    let (l, c) = pos(&text, "local slots", 6);
+    let slots = client.hover_text("app/client.lua", l, c);
+    assert!(slots.contains("local slots: table[]"), "a method declared twice is an overload: {slots}");
+    let (l, c) = pos(&text, "local count", 6);
+    assert!(client.hover_text("app/client.lua", l, c).contains("local count: number"));
 
     let line = text.lines().count() as u32;
     client.change("app/client.lua", 2, &format!("{text}exports['']"));
     let mut resources = client.completion_labels("app/client.lua", line, 9);
     resources.sort();
-    assert_eq!(resources, ["app", "fleet", "garage", "mocker", "phone", "qbx_core", "rental", "tablet"]);
+    assert_eq!(
+        resources,
+        ["app", "fleet", "garage", "mocker", "ox_inventory", "phone", "qbx_core", "rental", "tablet"]
+    );
     client.change("app/client.lua", 3, &format!("{text}exports.tablet:"));
     assert_eq!(client.completion_labels("app/client.lua", line, 15), ["Ring"]);
 

@@ -1727,9 +1727,16 @@ impl<'a> Infer<'a> {
                         out.extend(self.guarded(|| self.members_matching(&symbol.ty, filter)));
                     }
                 }
+                let typed = out.len();
                 for (file, symbol) in self.index.declared_export_members(resource, self.ctx.file) {
-                    if wanted(&symbol.name) && !out.iter().any(|m| m.name == symbol.name) {
-                        out.push(member_from_symbol(file, symbol));
+                    if !wanted(&symbol.name) || out[..typed].iter().any(|m| m.name == symbol.name) {
+                        continue;
+                    }
+                    let declared = out[typed..].iter_mut().find(|m| m.name == symbol.name);
+                    match (declared.map(|m| &mut m.ty), &symbol.ty) {
+                        (Some(Type::Fun(fun)), Type::Fun(next)) => add_signature(fun, next),
+                        (Some(_), _) => {}
+                        (None, _) => out.push(member_from_symbol(file, symbol)),
                     }
                 }
                 let declared: FxHashSet<SmolStr> = out.iter().map(|m| m.name.clone()).collect();
@@ -1810,6 +1817,14 @@ fn holds_exports(ty: &Type) -> bool {
         Type::Union(types) => types.iter().any(holds_exports),
         _ => false,
     }
+}
+
+/// Adds `next` and its overloads to the signatures of `fun`, as a method that a definition file
+/// declares twice, like `Search` of `ox_inventory` for `'count'` and for `'slots'`, has both.
+fn add_signature(fun: &mut Arc<FunType>, next: &Arc<FunType>) {
+    let fun = Arc::make_mut(fun);
+    fun.overloads.push(Arc::new(FunType { overloads: Vec::new(), ..(**next).clone() }));
+    fun.overloads.extend(next.overloads.iter().cloned());
 }
 
 fn member_from_symbol(file: FileId, symbol: &crate::index::Symbol) -> MemberInfo {
