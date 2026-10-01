@@ -331,9 +331,7 @@ impl Workspace {
             let files = self.import_files(pattern).into_iter().filter_map(|id| self.index.file(id));
             env.add_import(pattern, side, files.map(|file| &file.index.summary));
         }
-        for (_, file) in self.index.files().filter(|(_, f)| f.defines_for_all()) {
-            env.add_declarations(&file.index.summary);
-        }
+        env.set_declarations(self.index.declarations());
         env
     }
 }
