@@ -1727,6 +1727,11 @@ impl<'a> Infer<'a> {
                         out.extend(self.guarded(|| self.members_matching(&symbol.ty, filter)));
                     }
                 }
+                for (file, symbol) in self.index.declared_export_members(resource, self.ctx.file) {
+                    if wanted(&symbol.name) && !out.iter().any(|m| m.name == symbol.name) {
+                        out.push(member_from_symbol(file, symbol));
+                    }
+                }
                 let declared: FxHashSet<SmolStr> = out.iter().map(|m| m.name.clone()).collect();
                 for (file, symbol) in self.index.exports_of(resource) {
                     if wanted(&symbol.name) && !declared.contains(&symbol.name) {

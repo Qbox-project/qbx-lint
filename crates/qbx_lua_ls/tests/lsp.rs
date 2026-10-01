@@ -5648,7 +5648,7 @@ fn declared_types_describe_the_exports_of_a_resource() {
     client.change("app/client.lua", 2, &format!("{text}exports['']"));
     let mut resources = client.completion_labels("app/client.lua", line, 9);
     resources.sort();
-    assert_eq!(resources, ["app", "garage", "mocker", "phone", "tablet"]);
+    assert_eq!(resources, ["app", "garage", "mocker", "phone", "qbx_core", "tablet"]);
     client.change("app/client.lua", 3, &format!("{text}exports.tablet:"));
     assert_eq!(client.completion_labels("app/client.lua", line, 15), ["Ring"]);
 
@@ -5660,6 +5660,9 @@ fn declared_types_describe_the_exports_of_a_resource() {
     );
     let (l, c) = pos(&server, "call =", 0);
     assert!(client.hover_text("app/server.lua", l, c).contains("local call: PhoneCall?"));
+    let (l, c) = pos(&server, "cid =", 0);
+    let cid = client.hover_text("app/server.lua", l, c);
+    assert!(cid.contains("local cid: string"), "methods declared on `exports.qbx_core`: {cid}");
 }
 
 #[test]

@@ -205,6 +205,13 @@ impl FileEntry {
     fn declares_export_type(&self, index: u32) -> bool {
         self.index.meta || self.defines_for_all() || self.index.typed_exports.contains(&index)
     }
+
+    /// Whether the file declares the exports of `resource` member by member: a definition file, or
+    /// one that types `exports.<resource>` itself.
+    fn describes_exports_of(&self, resource: &str) -> bool {
+        let typed = |i: &u32| self.index.members.get(*i as usize).is_some_and(|m| m.symbol.name == resource);
+        self.index.meta || self.defines_for_all() || self.index.typed_exports.iter().any(typed)
+    }
 }
 
 #[derive(Debug)]
@@ -575,6 +582,14 @@ impl Index {
     /// The types declared for the exports of `resource`, as `declared_exports` finds them.
     pub fn declared_exports_of(&self, resource: &str, from: FileId) -> Vec<(FileId, &Symbol)> {
         self.export_type_slots(self.export_types.get(resource).into_iter().flatten(), from)
+    }
+
+    /// What the files that describe the exports of `resource` set on them one by one, as
+    /// `function exports.qbx_core:GetCid(source) end` does below `exports.qbx_core = {}`.
+    pub fn declared_export_members(&self, resource: &str, from: FileId) -> Vec<(FileId, &Symbol)> {
+        let slots = self.members.get(format!("exports.{resource}").as_str()).into_iter().flatten();
+        let describes = |(file, _): &&Slot| self.file(*file).is_some_and(|entry| entry.describes_exports_of(resource));
+        self.export_type_slots(slots.filter(describes), from)
     }
 
     fn export_type_slots<'a>(
