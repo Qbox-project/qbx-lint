@@ -629,7 +629,7 @@ impl Index {
         let side = self.file(from).and_then(|f| f.side);
         slots
             .filter_map(|(file, i)| Some((*file, self.file(*file)?, i)))
-            .filter(|(_, entry, _)| match (side, entry.side) {
+            .filter(|(_, entry, _)| match (side, entry.side.or(entry.index.definition_scope.side)) {
                 (Some(side), Some(declared)) => declared.is_available_on(side),
                 _ => true,
             })
