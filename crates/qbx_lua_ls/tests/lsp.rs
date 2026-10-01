@@ -5671,6 +5671,9 @@ fn declared_types_describe_the_exports_of_a_resource() {
     let (l, c) = pos(&server, "cid =", 0);
     let cid = client.hover_text("app/server.lua", l, c);
     assert!(cid.contains("local cid: string"), "methods declared on `exports.qbx_core`: {cid}");
+    let (l, c) = pos(&server, "remote =", 0);
+    let remote = client.hover_text("app/server.lua", l, c);
+    assert!(!remote.contains("table[]"), "`ox_inventory/client.lua` declares for the client: {remote}");
 }
 
 #[test]
