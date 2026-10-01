@@ -5648,7 +5648,7 @@ fn declared_types_describe_the_exports_of_a_resource() {
     client.change("app/client.lua", 2, &format!("{text}exports['']"));
     let mut resources = client.completion_labels("app/client.lua", line, 9);
     resources.sort();
-    assert_eq!(resources, ["app", "phone", "tablet"]);
+    assert_eq!(resources, ["app", "garage", "phone", "tablet"]);
     client.change("app/client.lua", 3, &format!("{text}exports.tablet:"));
     assert_eq!(client.completion_labels("app/client.lua", line, 15), ["Ring"]);
 
@@ -5679,6 +5679,19 @@ fn definition_files_outside_resources_declare_globals_for_every_resource() {
     let found = client.diagnostics_for("app/server.lua");
     let undefined: Vec<u64> = found.iter().filter(|(code, _)| code == "undefined-global").map(|(_, l)| *l).collect();
     assert_eq!(undefined, [3], "{found:?}");
+}
+
+#[test]
+fn a_resource_keeps_its_own_types_and_globals_over_definition_files() {
+    let root = declared_exports_root();
+    let mut client = Client::start_with_library(root.join("workspace"), &root.join("types"));
+    let text = client.open("garage/server.lua");
+
+    let found = client.diagnostics_for("garage/server.lua");
+    assert!(!found.iter().any(|(code, _)| code == "missing-fields"), "its own `VehicleData` alias wins: {found:?}");
+    let (l, c) = pos(&text, "Vehicle)", 0);
+    let hover = client.hover_text("garage/server.lua", l, c);
+    assert!(hover.contains("(global) Vehicle") && !hover.contains("LibVehicle"), "its own global wins: {hover}");
 }
 
 #[test]

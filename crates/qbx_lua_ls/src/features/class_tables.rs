@@ -139,8 +139,10 @@ impl<'a, 'b> Classes<'a, 'b> {
         self.infer.ctx.file
     }
 
-    /// The classes and aliases called `name` that code in `from` sees. When it sees none, those of
-    /// the one resource that declares the name count; several resources make it ambiguous.
+    /// The classes and aliases called `name` that code in `from` sees, leaving those of definition
+    /// files outside any resource out when its own resource or imports declare the name too. When it
+    /// sees none, those of the one resource that declares the name count; several resources make it
+    /// ambiguous.
     #[allow(clippy::type_complexity)]
     fn declarations(&self, name: &str, from: FileId) -> (Vec<(FileId, &'b ClassDef)>, Vec<(FileId, &'b AliasDef)>) {
         let index = self.infer.index;
@@ -149,10 +151,15 @@ impl<'a, 'b> Classes<'a, 'b> {
         classes.retain(|(_, class)| applies_on(class.side, side));
         let mut aliases = index.alias_defs(name);
         aliases.retain(|(_, alias)| applies_on(alias.side, side));
-        let visible_classes: Vec<_> =
+        let mut visible_classes: Vec<_> =
             classes.iter().copied().filter(|(file, _)| index.is_visible(from, *file)).collect();
-        let visible_aliases: Vec<_> =
+        let mut visible_aliases: Vec<_> =
             aliases.iter().copied().filter(|(file, _)| index.is_visible(from, *file)).collect();
+        let own = |file: &FileId| !index.falls_back_on(from, *file);
+        if visible_classes.iter().map(|(file, _)| file).chain(visible_aliases.iter().map(|(file, _)| file)).any(own) {
+            visible_classes.retain(|(file, _)| own(file));
+            visible_aliases.retain(|(file, _)| own(file));
+        }
         if !visible_classes.is_empty() || !visible_aliases.is_empty() {
             return (visible_classes, visible_aliases);
         }
