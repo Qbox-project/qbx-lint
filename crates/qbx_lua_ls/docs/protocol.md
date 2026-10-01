@@ -114,7 +114,9 @@ literal where a function is stored or returned, though not where one is compared
 `---@type` above the `local` or assignment, what the assigned local or class field is declared as,
 the `@field` that a table typed as a class sets, the `@return` of the function, or what the other
 side of the comparison is declared as. A local typed by `---@type` or `@param` keeps that type
-where it is assigned again; types inferred from assigned values list nothing. `=` and space are
+where it is assigned again; types inferred from assigned values list nothing. Nothing is offered
+in front of a value already written, such as the `other` of `local enabled = other` with the
+cursor before it, or in a word the cursor is in. `=` and space are
 completion trigger characters for these items only: a request whose `context.triggerCharacter` is
 `=` or a space returns nothing else, and returns `null` where no type lists values or takes a
 function. Inside a string in one of those places, or on either side of the comparison, the string

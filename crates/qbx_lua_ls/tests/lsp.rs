@@ -5162,12 +5162,20 @@ function SetEnabled(enabled, mode) end
         ("---@type State\nlocal state = 'a = |'", " "),
         // The value after the cursor is already written.
         ("---@type State\nlocal state = | 'busy'", " "),
+        ("---@type boolean\nlocal enabled = |other", " "),
+        ("---@type boolean\nlocal enabled = |123", " "),
+        ("---@type boolean\nlocal enabled = |true", " "),
+        ("---@type State\nlocal state = 'busy'\nif state == |other then end", " "),
         // What the code assigns tells what a local holds today, not what it may.
         ("local mode = 'dev'\nmode = |", " "),
     ] {
         let found = values(typed, Some(trigger));
         assert!(found.is_none(), "{typed}: {found:?}");
     }
+    // Nor are they in front of the rest of a word, which a value would run into.
+    assert_eq!(values("---@type boolean\nlocal enabled = |other", None), None);
+    assert_eq!(values("---@type boolean\nlocal enabled = t|other", None), Some(Vec::new()));
+    assert_eq!(values("---@type boolean\nlocal enabled = t|", None), plain(&["true", "false"]));
 
     // A typed word filters them by the value, beside the names in scope.
     let (line, column) = pos("local bucket = 1\n---@type State\nlocal state = bu|", "|", 0);

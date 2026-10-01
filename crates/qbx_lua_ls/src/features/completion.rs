@@ -629,8 +629,7 @@ fn value_items(
     let typed = &before[..before.len() - prefix.len()];
     let head = typed.trim_end();
     let line_end = doc.text[offset as usize..].find('\n').map_or(doc.text.len(), |i| offset as usize + i);
-    let rest = doc.text[offset as usize..line_end].trim_start_matches(|c: char| c.is_ascii_alphanumeric() || c == '_');
-    if !takes_value(head) || !leaves_value_open(rest) {
+    if !takes_value(head) || !leaves_value_open(&doc.text[offset as usize..line_end]) {
         return Vec::new();
     }
     let at = offset - (before.len() - head.len()) as u32;
@@ -658,8 +657,11 @@ fn takes_value(head: &str) -> bool {
 
 /// Whether `rest`, the text after the cursor on its line, has no value that an inserted one would
 /// end up in front of: it is empty, a comment, or what closes or follows a value, like the `then`
-/// of `if state == then`.
+/// of `if state == then`. A word that starts right at the cursor is a value already written.
 fn leaves_value_open(rest: &str) -> bool {
+    if rest.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_') {
+        return false;
+    }
     let rest = rest.trim_start();
     let word = rest.trim_start_matches(|c: char| c.is_ascii_alphanumeric() || c == '_');
     let word = &rest[..rest.len() - word.len()];
