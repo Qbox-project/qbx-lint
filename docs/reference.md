@@ -401,6 +401,10 @@ name's alone, as lua-language-server binds it, so `---@type boolean` above
 type of their own, and other locals whose type is inferred from what they hold, take any value,
 and so do globals in assignments that have no `---@type` above them.
 
+The value stored is what the code is known to give. A global's `nil` tells nothing: one declared as
+`CurrentZone = nil` and set to a name by an event handler holds whatever the handler gives it, so
+storing it anywhere passes.
+
 ## Impossible comparisons
 
 `impossible-comparison` reports an `==` or `~=` whose two sides can never be equal, so that the

@@ -2933,6 +2933,33 @@ plain = 'text'
 }
 
 #[test]
+fn a_global_declared_as_nil_takes_any_value() {
+    let mut client = Client::start(fixture_root());
+    let text = "\
+TestCurrentZone = nil
+
+RegisterNetEvent('test:enterZone', function(name)
+    TestCurrentZone = name
+end)
+
+---@type string
+local zone = TestCurrentZone
+
+---@param name string
+local function enter(name)
+    name = TestCurrentZone
+end
+
+---@return string
+local function current()
+    return TestCurrentZone
+end
+";
+    client.open_with(CLIENT, text);
+    assert_eq!(findings(&mut client, CLIENT, &["assign-type-mismatch", "return-type-mismatch"]), []);
+}
+
+#[test]
 fn shared_calls_of_a_function_each_side_defines_differently_return_unknown() {
     let mut client = Client::start(fixture_root());
     client.open_with(CLIENT, "---@return string\nfunction TestGetJob()\n    return 'police'\nend\n");
