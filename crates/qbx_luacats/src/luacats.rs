@@ -453,7 +453,8 @@ fn add_signature(fields: &mut [DocField], field: DocField) -> Option<DocField> {
             .iter()
             .map(|overload| Arc::new(FunType { side: overload.side.or(side), ..(**overload).clone() })),
     );
-    if !field.description.is_empty() && !first.description.contains(&field.description) {
+    let described = first.description.split("\n\n").any(|part| part == field.description);
+    if !field.description.is_empty() && !described {
         let separator = if first.description.is_empty() { "" } else { "\n\n" };
         first.description = format!("{}{separator}{}", first.description, field.description);
     }
@@ -858,6 +859,9 @@ mod tests {
         let doc = parse("---@class Phone\n---@field (client) Has fun(): boolean\n---@field (server) Has fun(source: number): boolean");
         let sides: Vec<Option<Side>> = doc.classes[0].fields.iter().map(|f| f.side).collect();
         assert_eq!(sides, [Some(Side::Client), Some(Side::Server)], "fields scoped to a side stay apart");
+
+        let doc = parse("---@class Phone\n---@field Ring fun() # Rings the phone\n---@field Ring fun(times: number) # the phone\n---@field Ring fun(times: number, loud: boolean) # Rings the phone");
+        assert_eq!(doc.classes[0].fields[0].description, "Rings the phone\n\nthe phone", "only repeats are dropped");
     }
 
     #[test]
