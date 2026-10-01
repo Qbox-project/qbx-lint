@@ -1018,6 +1018,7 @@ fn argument_literals(
             }
         }
     }
+    literals.sort_by_key(|literal| literal.value == Type::Nil);
     literals
 }
 

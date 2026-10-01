@@ -100,7 +100,8 @@ Integers are offered as they are, and so are `true` and `false`, which a `boolea
 type that lists values also lists the `nil` it allows, last; a type such as `string?` lists
 nothing. Snippet clients also get a function literal labelled like `function(source)`, with the
 filter text `function`, when the argument takes a function. Values come from every signature that
-the arguments before it fit, and the function's parameters from the signature they fit best, so
+the arguments before it fit, with `nil` after those of all of them, and the function's parameters
+from the signature they fit best, so
 `OnAction("playerUnloaded", ` picks the `@overload` that lists `"playerUnloaded"`. Signatures that
 fit equally well each get an item. `(` and `,` are completion trigger characters for these items
 only: a request whose `context.triggerCharacter` is `(` or `,` returns nothing else, leaves out
