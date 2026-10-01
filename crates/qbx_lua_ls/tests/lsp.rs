@@ -5131,6 +5131,10 @@ function SetLevel(level, volume) end
 ---@param enabled boolean
 ---@param mode? \"auto\"|\"manual\"|false
 function SetEnabled(enabled, mode) end
+
+---@param mode \"auto\"|nil
+---@overload fun(mode: \"manual\")
+function SetMode(mode) end
 ";
     client.open_with("myresource/shared/config.lua", defs);
     // `|` marks the cursor; `trigger` is the character typed to ask for completions. Items come back
@@ -5261,6 +5265,11 @@ function SetEnabled(enabled, mode) end
         optional_states
     );
     assert_eq!(values(&format!("{machine}machine.fallback = |"), None), optional_states);
+    // Also after the values of other signatures.
+    assert_eq!(
+        values("SetMode(|)", Some("(")),
+        pairs(&[("'auto'", "'auto'"), ("'manual'", "'manual'"), ("nil", "nil")])
+    );
     assert_eq!(values("---@type boolean\nlocal enabled = '|'", None), Some(Vec::new()));
     // A typed `(` or `,` opens the list for strings and integers, not for booleans alone, which
     // are listed when asked for.
