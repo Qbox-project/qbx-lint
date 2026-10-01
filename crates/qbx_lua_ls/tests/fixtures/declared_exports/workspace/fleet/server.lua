@@ -1,0 +1,1 @@
+print(vehicle.plate, player)

@@ -5648,7 +5648,7 @@ fn declared_types_describe_the_exports_of_a_resource() {
     client.change("app/client.lua", 2, &format!("{text}exports['']"));
     let mut resources = client.completion_labels("app/client.lua", line, 9);
     resources.sort();
-    assert_eq!(resources, ["app", "garage", "mocker", "phone", "qbx_core", "tablet"]);
+    assert_eq!(resources, ["app", "fleet", "garage", "mocker", "phone", "qbx_core", "rental", "tablet"]);
     client.change("app/client.lua", 3, &format!("{text}exports.tablet:"));
     assert_eq!(client.completion_labels("app/client.lua", line, 15), ["Ring"]);
 
@@ -5691,6 +5691,27 @@ fn definition_files_outside_resources_declare_globals_for_every_resource() {
     client.change("types/sql.lua", 3, &sql);
     let found = client.diagnostics_for("app/server.lua");
     assert!(found.iter().filter(|(code, _)| code == "undefined-global").all(|(_, l)| *l == 3), "{found:?}");
+}
+
+#[test]
+fn definition_files_declare_globals_for_their_side_and_provider() {
+    fn undefined(client: &mut Client, file: &str) -> Vec<String> {
+        client.open(file);
+        findings(client, file, &["undefined-global"]).into_iter().map(|(_, _, message)| message).collect()
+    }
+    let root = declared_exports_root();
+    let mut client = Client::start_with_library(root.join("workspace"), &root.join("types"));
+
+    assert_eq!(undefined(&mut client, "fleet/server.lua"), ["undefined global 'player'"], "a client_ file");
+    assert_eq!(undefined(&mut client, "fleet/client.lua"), ["undefined global 'vehicle'"], "a server_ file");
+    assert_eq!(undefined(&mut client, "rental/server.lua"), ["undefined global 'vehicle'"], "no @ox_core import");
+
+    let fleet = std::fs::read_to_string(root.join("workspace/fleet/server.lua")).unwrap();
+    let (l, c) = pos(&fleet, "vehicle", 0);
+    assert!(client.hover_text("fleet/server.lua", l, c).contains("OxVehicleServer"));
+    let (l, c) = pos("print(vehicle)", "vehicle", 0);
+    let hover = client.hover_text("rental/server.lua", l, c);
+    assert!(!hover.contains("OxVehicleServer"), "{hover}");
 }
 
 #[test]
