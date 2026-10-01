@@ -226,6 +226,38 @@ from code that runs on both sides takes neither definition: what it returns is u
 every type check. Inside one of these guards the call takes that side's definition, as long as its
 arguments fit it.
 
+### Definition files outside resources
+
+qbx-lua-ls reads type libraries the way LuaLS reads its `library`: a file that belongs to no
+resource is a definition file when it comes from a folder of the `library` setting, or when it is a
+workspace file with a `---@meta` line above its first statement. A `---@meta` further down does
+not count, here or for `missing-return`. A `library` folder inside the workspace is indexed as
+workspace files first, so its files need `---@meta`. Other workspace files outside resources keep
+their globals to themselves.
+
+The globals, classes and aliases of definition files reach the scripts of every resource, unless
+the resource declares the same name itself, imports it, or gets it from the bundled stubs: a
+resource's own `---@alias VehicleData` wins over a library's `---@class VehicleData`, and its own
+`vehicle = GetVehiclePedIsIn(ped, false)` over a library's `vehicle`. Two things limit where a
+definition file applies:
+
+- Its side comes from an override's `side`, or else from the words of its file name or nearest
+  folder name: `client` or `cl` for the client, `server` or `sv` for the server, as in
+  `server_vehicle.lua`, `cl_main.lua` or a `client` folder. `shared`, `common`, or both sides make
+  it shared, and a name without any of these leaves the decision to the folder above it.
+- A file inside a folder named after a resource, one the workspace has or imports from, or one of
+  the well-known imports such as `ox_core` or `qbx_core`, declares what that resource's imports
+  provide. Its globals only reach resources that load a file of that resource on the script's side,
+  through the manifest, configured `imports`, `lib.load` or `require`. A library holding
+  `ox_core/server_vehicle.lua` with `vehicle = {}` thus declares `vehicle` for the server scripts
+  of resources that import `@ox_core/lib/init.lua`, and `undefined-global` still reports it
+  anywhere else.
+
+The globals of well-known imports, such as `lib` or `MySQL`, are reported by
+`fivem/import-not-declared` without their import, whatever a definition file declares. Folders
+above the workspace or library root that holds a file do not count for its side or resource. The
+CLI does not read definition files outside resources.
+
 ## Function arguments
 
 `missing-parameter` compares calls with the LuaCATS annotations of the function they call. A
@@ -237,6 +269,12 @@ lines is never reported. Every parameter before the last required one has to be 
 decides. An `@overload (server) fun(...)` or `@overload (client) fun(...)` only counts for calls
 on that side, as decided by the script's manifest side and any `IsDuplicityVersion()` or
 `lib.context` guard around the call; shared code counts both.
+
+A function `@field` that repeats the name of an unscoped one is another signature of it, as LuaLS
+reads it, rather than a second field: a call picks the signature its arguments fit, and hover shows
+the descriptions of both. Repeated with `(server)` or `(client)`, the signature only applies on
+that side. Fields that are themselves scoped to a side stay apart, and repeated fields that are not
+functions are kept as they are.
 
 Calls are checked when the function is:
 
@@ -482,6 +520,18 @@ Static event names can be checked for the target side and missing or excess argu
 checks report excess arguments and unknown names. Unavailable resources and computed names limit
 these checks. A diagnostic about missing event arguments may describe an intentional optional
 parameter.
+
+qbx-lua-ls also takes the type of a resource's exports from LuaLS definitions:
+`---@type PhoneExports` above `exports.phone = {}` or `exports['phone'] = {}`, or
+`---@class qbx_core` above `exports.qbx_core = {}` with methods such as
+`function exports.qbx_core:GetCid(source) end`. Such a declaration counts in a
+[definition file](#definition-files-outside-resources) or any file with `---@meta`, and elsewhere
+when the annotation is there; a plain `exports.Name = fn` registers an export of its own resource,
+and a table a test assigns to `exports.phone` declares nothing. `exports.phone` and
+`exports['phone']` then offer the members of the declared type first and the exports the resource
+registers after them, the declared one winning when both name a member, also for resources the
+workspace lacks. Completion of `exports['` and of resource names, as in `GetResourceState('`,
+lists those resources too. `fivem/unknown-export` only knows the exports resources register.
 
 Locale checks compare static `locale('key')` calls with `locales/en.json`, falling back to the first
 JSON file in `locales/` when that file is absent. Unused keys are reported on the JSON file when

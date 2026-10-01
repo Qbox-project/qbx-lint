@@ -26,7 +26,7 @@ Use absolute paths in `library`; Windows paths such as `C:/server/resources` wor
 
 | Setting | Default | Effect |
 | --- | --- | --- |
-| `library` | `[]` | Extra folders to index for types, definitions and resource imports. Restart after changing it. |
+| `library` | `[]` | Extra folders to index for types, definitions and resource imports. Their files that belong to no resource are [definition files](../../../docs/reference.md#definition-files-outside-resources), whose globals, types and export types reach every resource. Restart after changing it. |
 | `diagnostics.enable` | `true` | Publish diagnostics. |
 | `diagnostics.workspace` | `true` | Also report diagnostics for closed files in the workspace. |
 | `diagnostics.rules` | `{}` | Rule levels, as `off`, `hint`, `info`, `warning` or `error`, for the rules the config file does not set. |
