@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use lsp_types::Url;
-use qbx_fivem_data::{Side, STUBS};
+use qbx_fivem_data::{Side, KNOWN_IMPORTS, STUBS};
 use qbx_lua_analysis::glob::{is_glob, manifest_glob_match};
 use qbx_lua_analysis::manifest::Manifest;
 use qbx_lua_analysis::project::{
@@ -13,7 +13,9 @@ use qbx_lua_analysis::Config;
 use qbx_lua_syntax::{parse, SmolStr};
 use rustc_hash::FxHashSet;
 
-use crate::index::{normalize_path, FileEntry, FileId, FileIndex, FileOrigin, Index, ResourceEntry, ResourceId};
+use crate::index::{
+    normalize_path, DefinitionScope, FileEntry, FileId, FileIndex, FileOrigin, Index, ResourceEntry, ResourceId,
+};
 use crate::indexer::index_file;
 
 const MAX_INDEXED_FILE_BYTES: u64 = 2 * 1024 * 1024;
@@ -289,9 +291,43 @@ impl Workspace {
         if self.index.file(id).is_none() {
             self.index.set_file(id, entry(FileIndex::default()));
         }
-        let file_index = index_file(id, source, chunk, resolution, &self.index, side);
-        self.index.set_file(id, entry(file_index));
+        let mut file = entry(index_file(id, source, chunk, resolution, &self.index, side));
+        if file.defines_for_all() {
+            file.index.definition_scope = self.definition_scope(path);
+        }
+        self.index.set_file(id, file);
         id
+    }
+
+    /// Where a definition file outside any resource applies: on the side a `side` override, or else
+    /// the name of the file or of its nearest folder that names one, gives it, and for the resource
+    /// that the nearest folder named after one stands for. Folders above the workspace or library
+    /// root that holds the file do not count.
+    fn definition_scope(&self, path: &Path) -> DefinitionScope {
+        let normalized = normalize_path(path);
+        let root = self.roots.iter().chain(&self.library).map(|root| normalize_path(root));
+        let depth = root.filter(|root| normalized.starts_with(root)).map(|root| root.components().count()).max();
+        let parent = path.parent().unwrap_or(path);
+        let depth = depth.unwrap_or_else(|| parent.components().count().saturating_sub(1));
+        let mut folders: Vec<String> =
+            parent.components().skip(depth).map(|c| c.as_os_str().to_string_lossy().into_owned()).collect();
+        folders.reverse();
+        let stem = path.file_stem().map(|stem| stem.to_string_lossy().into_owned()).unwrap_or_default();
+        let named = std::iter::once(&stem).chain(&folders).find_map(|name| side_named_by(name));
+        DefinitionScope {
+            side: self.lint_config.side_for(path).or(named),
+            provider: folders.into_iter().find(|name| self.is_resource_name(name)).map(SmolStr::from),
+        }
+    }
+
+    /// Whether `name` is a resource that the workspace has, imports from, or that a well-known
+    /// import such as `@ox_core/lib/init.lua` names.
+    fn is_resource_name(&self, name: &str) -> bool {
+        let names =
+            |pattern: &str| split_import(pattern).is_some_and(|(resource, _)| resource.eq_ignore_ascii_case(name));
+        self.index.resource_by_name(name).is_some()
+            || KNOWN_IMPORTS.iter().any(|import| names(import.path))
+            || self.index.resources.iter().any(|r| r.manifest.imports().any(|script| names(&script.pattern)))
     }
 
     pub fn link_imports(&mut self) {
@@ -377,5 +413,18 @@ impl Workspace {
             }
         }
         refs
+    }
+}
+
+/// The side the name of a file or folder gives, as `server_vehicle.lua`, `cl_main.lua` or a `client`
+/// folder do. Names of both sides, or `shared` and `common`, give both.
+fn side_named_by(name: &str) -> Option<Side> {
+    let words: Vec<String> = name.split(['_', '-', '.', ' ']).map(str::to_ascii_lowercase).collect();
+    let has = |options: &[&str]| words.iter().any(|word| options.contains(&word.as_str()));
+    match (has(&["client", "cl"]), has(&["server", "sv"]), has(&["shared", "common"])) {
+        (false, false, false) => None,
+        (true, false, false) => Some(Side::Client),
+        (false, true, false) => Some(Side::Server),
+        _ => Some(Side::Shared),
     }
 }

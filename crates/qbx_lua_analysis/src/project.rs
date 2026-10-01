@@ -160,8 +160,16 @@ pub struct UnresolvedImport {
 /// The side of the file that assigns a function, and its signature as in `FunctionDef`.
 type SidedSignature = (Option<Side>, Option<Arc<FunType>>);
 
+/// Where a global that a definition file outside any resource declares exists at runtime.
+#[derive(Clone, Debug)]
+pub struct Declaration {
+    pub side: Option<Side>,
+    /// The resource whose import provides the global, as `ox_core` does for `player`.
+    pub provider: Option<SmolStr>,
+}
+
 /// The globals that definition files outside any resource declare, such as type libraries.
-pub type Declarations = FxHashSet<SmolStr>;
+pub type Declarations = FxHashMap<SmolStr, Vec<Declaration>>;
 
 /// The globals visible to scripts of one resource, split by the side they are loaded on.
 #[derive(Clone, Debug, Default)]
@@ -178,12 +186,21 @@ pub struct ResourceEnv {
     functions: FxHashMap<SmolStr, Vec<SidedSignature>>,
     aliases: FxHashMap<SmolStr, Type>,
     /// Globals that definition files outside any resource describe, such as type libraries. They
-    /// exist at runtime without the resource defining them, unless they come from an import it lacks.
+    /// exist at runtime on the side of their file, and those of a provider only with its import.
     declared: Arc<Declarations>,
     pub unresolved_imports: Vec<UnresolvedImport>,
     /// Part of the resource is encrypted or unreadable, so neither what it defines nor what it
     /// uses is known; rules that need the whole picture stay quiet.
     pub opaque: bool,
+}
+
+/// Whether what a file on side `def` defines is there for code on `side`.
+fn is_visible_on(def: Option<Side>, side: Option<Side>) -> bool {
+    match side {
+        Some(Side::Client) => def != Some(Side::Server),
+        Some(Side::Server) => def != Some(Side::Client),
+        _ => true,
+    }
 }
 
 /// The FiveM asset escrow leaves a `.fxap` file in the root of every resource it protects.
@@ -225,16 +242,11 @@ impl ResourceEnv {
     /// The signatures of the assignments to the global or global table field at `path` that code on
     /// `side` can see. `None` stands for a value whose parameters are unknown.
     pub fn function_defs(&self, path: &str, side: Option<Side>) -> impl Iterator<Item = Option<&Arc<FunType>>> {
-        let visible = move |def: Option<Side>| match side {
-            Some(Side::Client) => def != Some(Side::Server),
-            Some(Side::Server) => def != Some(Side::Client),
-            _ => true,
-        };
         self.functions
             .get(path)
             .into_iter()
             .flatten()
-            .filter(move |(def, _)| visible(*def))
+            .filter(move |(def, _)| is_visible_on(*def, side))
             .map(|(_, sig)| sig.as_ref())
     }
 
@@ -268,8 +280,20 @@ impl ResourceEnv {
         self.declared = declared;
     }
 
-    pub fn declares(&self, name: &str) -> bool {
-        self.declared.contains(name)
+    /// Whether a definition file declares `name` for scripts on `side` of this resource.
+    pub fn declares(&self, name: &str, side: Option<Side>) -> bool {
+        let Some(declarations) = self.declared.get(name) else { return false };
+        declarations.iter().any(|declaration| {
+            is_visible_on(declaration.side, side)
+                && declaration.provider.as_deref().is_none_or(|provider| self.imports_from(provider, side))
+        })
+    }
+
+    /// Whether a manifest, configured or runtime import loads a file of `resource` for `side`.
+    fn imports_from(&self, resource: &str, side: Option<Side>) -> bool {
+        let names = |pattern: &str| split_import(pattern).is_some_and(|(name, _)| name.eq_ignore_ascii_case(resource));
+        self.imports.iter().any(|(pattern, imported)| names(pattern) && is_visible_on(Some(*imported), side))
+            || self.module_imports.iter().any(|pattern| names(pattern))
     }
 
     pub fn declared_at_file_scope(&self, name: &str) -> bool {
@@ -439,5 +463,23 @@ mod tests {
         assert!(!is_not_source(table.as_bytes()));
         assert!(!is_not_source(format!("local avatar='{}'\n", "A".repeat(8000)).as_bytes()));
         assert!(!is_not_source(format!("local t={{{}}}\n", "functions=1,_function=2,".repeat(200)).as_bytes()));
+    }
+
+    #[test]
+    fn declarations_need_their_side_and_the_import_of_their_provider() {
+        let declare = |side, provider: Option<&str>| Declaration { side, provider: provider.map(SmolStr::new) };
+        let mut declarations = Declarations::default();
+        declarations.insert("Sql".into(), vec![declare(None, None)]);
+        declarations.insert("vehicle".into(), vec![declare(Some(Side::Server), Some("ox_core"))]);
+        let mut env = ResourceEnv::default();
+        env.set_declarations(Arc::new(declarations));
+
+        assert!(env.declares("Sql", Some(Side::Client)) && env.declares("Sql", None));
+        assert!(!env.declares("vehicle", Some(Side::Server)), "ox_core is not imported");
+        env.add_import("@ox_core/lib/init.lua", Side::Client, []);
+        assert!(!env.declares("vehicle", Some(Side::Server)), "imported for the client only");
+        env.add_import("@ox_core/lib/init.lua", Side::Shared, []);
+        assert!(env.declares("vehicle", Some(Side::Server)) && env.declares("vehicle", None));
+        assert!(!env.declares("vehicle", Some(Side::Client)), "declared for the server");
     }
 }

@@ -4,7 +4,7 @@ use std::sync::{Arc, OnceLock};
 use lsp_types::{Range, Url};
 use qbx_fivem_data::Side;
 use qbx_lua_analysis::manifest::Manifest;
-use qbx_lua_analysis::project::Declarations;
+use qbx_lua_analysis::project::{split_import, Declaration, Declarations};
 use qbx_lua_analysis::summary::FileSummary;
 use rustc_hash::FxHashMap;
 use smol_str::SmolStr;
@@ -168,7 +168,18 @@ pub struct FileIndex {
     /// The `members` set on `exports` below a `---@type` or `---@class`, by index, as
     /// `exports.phone = {}` below `---@type PhoneExports`, rather than registering an export.
     pub typed_exports: Vec<u32>,
+    /// Where the file applies when it is a definition file outside any resource.
+    pub definition_scope: DefinitionScope,
     pub summary: FileSummary,
+}
+
+/// The scripts a definition file outside any resource is written for.
+#[derive(Clone, Debug, Default)]
+pub struct DefinitionScope {
+    /// The side its path names, as `server_vehicle.lua` or a `client` folder do.
+    pub side: Option<Side>,
+    /// The resource it sits in a folder named after, whose import provides what it declares.
+    pub provider: Option<SmolStr>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -190,8 +201,9 @@ pub struct FileEntry {
 
 impl FileEntry {
     /// A definition file outside any resource: one from a `library` folder, as LuaLS reads its
-    /// library, or a workspace file marked `---@meta`. Every resource sees its globals. Built-in
-    /// stubs are visible anyway and their globals are known to the rules.
+    /// library, or a workspace file marked `---@meta`. Resources see its globals on the side of its
+    /// `definition_scope`, and only when they import from its provider. Built-in stubs are visible
+    /// anyway and their globals are known to the rules.
     pub fn defines_for_all(&self) -> bool {
         match self.origin {
             FileOrigin::Stub => false,
@@ -383,14 +395,18 @@ impl Index {
             return true;
         }
         let (Some(source), Some(other)) = (self.file(from), self.file(target)) else { return false };
-        let sides_match = match (source.side, other.side) {
+        let sides_match = match (source.side, other.side.or(other.index.definition_scope.side)) {
             (Some(a), Some(b)) => b.is_available_on(a),
             _ => true,
         };
         if !sides_match {
             return false;
         }
-        if other.origin == FileOrigin::Stub || other.defines_for_all() {
+        if other.defines_for_all() {
+            let provider = other.index.definition_scope.provider.as_deref();
+            return provider.is_none_or(|provider| self.imports_from(source, provider));
+        }
+        if other.origin == FileOrigin::Stub {
             return true;
         }
         match (source.resource, other.resource) {
@@ -403,6 +419,15 @@ impl Index {
             (None, None) => true,
             (None, Some(_)) => false,
         }
+    }
+
+    /// Whether the resource of `source` loads a file of the resource `provider` on its side.
+    fn imports_from(&self, source: &FileEntry, provider: &str) -> bool {
+        let Some(resource) = source.resource.and_then(|id| self.resource(id)) else { return true };
+        resource.manifest.imports().any(|script| {
+            split_import(&script.pattern).is_some_and(|(name, _)| name.eq_ignore_ascii_case(provider))
+                && source.side.is_none_or(|side| script.side.is_available_on(side))
+        })
     }
 
     /// Whether two files can share globals at all, regardless of the side either one runs on.
@@ -612,13 +637,18 @@ impl Index {
             .collect()
     }
 
-    /// The globals that definition files outside any resource declare for every resource.
+    /// The globals that definition files outside any resource declare, with where they apply.
     pub fn declarations(&self) -> Arc<Declarations> {
         let build = || {
-            let files = self.files().filter(|(_, file)| file.defines_for_all());
-            Arc::new(
-                files.flat_map(|(_, file)| file.index.summary.global_defs.iter().map(|def| def.name.clone())).collect(),
-            )
+            let mut declarations = Declarations::default();
+            for (_, file) in self.files().filter(|(_, file)| file.defines_for_all()) {
+                let DefinitionScope { side, provider } = &file.index.definition_scope;
+                for def in &file.index.summary.global_defs {
+                    let declaration = Declaration { side: *side, provider: provider.clone() };
+                    declarations.entry(def.name.clone()).or_default().push(declaration);
+                }
+            }
+            Arc::new(declarations)
         };
         self.declarations.get_or_init(build).clone()
     }
