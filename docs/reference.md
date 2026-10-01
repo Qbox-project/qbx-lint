@@ -221,6 +221,11 @@ Recognized runtime guards narrow side checks within a file. Examples include
 An early return such as `if not IsDuplicityVersion() then return end` narrows the following code
 to the server. Event registrations inside these regions use that effective side.
 
+Where client and server scripts define a global function differently, as two `GetJob`s, a call
+from code that runs on both sides takes neither definition: what it returns is unknown and passes
+every type check. Inside one of these guards the call takes that side's definition, as long as its
+arguments fit it.
+
 ## Function arguments
 
 `missing-parameter` compares calls with the LuaCATS annotations of the function they call. A

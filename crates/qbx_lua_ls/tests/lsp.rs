@@ -2912,6 +2912,65 @@ plain = 'text'
 }
 
 #[test]
+fn shared_calls_of_a_function_each_side_defines_differently_return_unknown() {
+    let mut client = Client::start(fixture_root());
+    client.open_with(CLIENT, "---@return string\nfunction TestGetJob()\n    return 'police'\nend\n");
+    client.open_with(
+        SERVER,
+        "---@param source number\n---@return { name: string }\nfunction TestGetJob(source)\n    return { name = 'police' }\nend\n",
+    );
+    let shared = "myresource/shared/config.lua";
+    let text = "\
+local function check(source)
+    ---@type string?
+    local jobName
+    if source then
+        jobName = TestGetJob(source).name
+    else
+        jobName = TestGetJob()
+    end
+    return jobName
+end
+
+---@return string
+local function current()
+    return TestGetJob()
+end
+
+---@return { name: string }
+local function record()
+    return TestGetJob()
+end
+
+---@type table
+local job = TestGetJob(1)
+
+if IsDuplicityVersion() then
+    ---@type string
+    local onServer = TestGetJob(1)
+else
+    ---@type table
+    local onClient = TestGetJob()
+    ---@type table
+    local unfit = TestGetJob(1)
+end
+";
+    client.open_with(shared, text);
+    let finding = |needle: &str, message: &str| {
+        ("assign-type-mismatch".to_string(), pos(text, needle, 0).0 as u64, message.to_string())
+    };
+    assert_eq!(
+        findings(&mut client, shared, &["assign-type-mismatch", "return-type-mismatch"]),
+        [
+            finding("local onServer", "Cannot assign `{ name: string }` to `onServer` of type `string`"),
+            finding("local onClient", "Cannot assign `string` to `onClient` of type `table`"),
+        ],
+        "code that runs on both sides calls neither definition, and one that its arguments do not fit \
+         is none either"
+    );
+}
+
+#[test]
 fn literal_keyed_class_fields_type_their_own_keys() {
     let mut client = Client::start(fixture_root());
     let text = "\

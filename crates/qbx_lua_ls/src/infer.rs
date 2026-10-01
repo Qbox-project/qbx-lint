@@ -1095,8 +1095,15 @@ impl<'a> Infer<'a> {
                 _ => {}
             }
         }
-        let Some((fun, _)) = self.callee_fun(base, method) else { return Default::default() };
         let args = CallArgs::new(args);
+        let fun = match self.sided_definition(base, method, &args) {
+            Some(Some(fun)) => fun,
+            Some(None) => return Default::default(),
+            None => match self.callee_fun(base, method) {
+                Some((fun, _)) => fun,
+                None => return Default::default(),
+            },
+        };
         let fun = self.signature_for(&fun, &args, method.is_some(), base.span.start);
         // `AwaitServerCallback('name', ...)` returns what the handler of `name` returns.
         if let Some(wrapper) = Wrapper::of(&fun, method.is_some()).filter(|w| w.tag.role == CallbackRole::Await) {
@@ -1117,6 +1124,43 @@ impl<'a> Infer<'a> {
             sets: fun.return_sets.iter().map(bound).collect(),
             declared: !fun.returns_inferred && fun.generics.is_empty(),
         }
+    }
+
+    /// The definition that a call of the global function `base` uses when client and server files
+    /// define it differently, as a `shared_script` sees two `GetJob`s: the one left for the side the
+    /// call runs on, if its arguments fit it. `Some(None)` when no single definition is left or the
+    /// arguments do not fit it, and `None` when the sides do not split the global.
+    fn sided_definition(&self, base: &Expr, method: Option<&Name>, args: &CallArgs) -> Option<Option<Arc<FunType>>> {
+        let (None, ExprKind::Name(name)) = (method, &base.kind) else { return None };
+        if !matches!(self.ctx.resolution.resolve_at(name.span.start), Some(Resolved::Global(_))) {
+            return None;
+        }
+        let side_of = |file: FileId| self.index.file(file).and_then(|f| f.side);
+        let defined: Vec<(Option<Side>, &Arc<FunType>)> = self
+            .index
+            .globals_named(&name.text, self.ctx.file)
+            .into_iter()
+            .filter_map(|(file, symbol)| Some((side_of(file), symbol.ty.as_fun()?)))
+            .collect();
+        let defined_on = |side| defined.iter().any(|(on, _)| *on == Some(side));
+        if !defined_on(Side::Client) || !defined_on(Side::Server) {
+            return None;
+        }
+        let side = self.side_at(base.span.start);
+        let mut left: Vec<&Arc<FunType>> = Vec::new();
+        for (on, fun) in defined {
+            if applies_on(on, side) && !left.contains(&fun) {
+                left.push(fun);
+            }
+        }
+        let fits = |fun: &Arc<FunType>| {
+            let signature = self.signature_for(fun, args, false, base.span.start);
+            self.fit(&signature, args, false) != Fit::No
+        };
+        Some(match left[..] {
+            [fun] if fits(fun) => Some(fun.clone()),
+            _ => None,
+        })
     }
 
     /// Binds the generics of `fun` from the arguments of a call. Function literals go last, and only
