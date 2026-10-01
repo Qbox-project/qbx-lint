@@ -1722,8 +1722,8 @@ impl<'a> Infer<'a> {
             Type::Exports(Some(resource)) => {
                 // A declared type describes the exports on purpose, so it wins over the type
                 // inferred from the function a resource registers under the same name.
-                for (_, symbol) in self.index.declared_exports(self.ctx.file) {
-                    if symbol.name == *resource && !holds_exports(&symbol.ty) {
+                for (_, symbol) in self.index.declared_exports_of(resource, self.ctx.file) {
+                    if !holds_exports(&symbol.ty) {
                         out.extend(self.guarded(|| self.members_matching(&symbol.ty, filter)));
                     }
                 }

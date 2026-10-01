@@ -558,6 +558,12 @@ impl<'a> Indexer<'a> {
         if symbol.kind == SymbolKind::Variable {
             symbol.kind = SymbolKind::Field;
         }
+        if owner == "exports" && self.out.members.len() < MAX_MEMBERS_PER_FILE {
+            let doc = self.ctx.doc_at(stmt.span.start);
+            if doc.ty.is_some() || !doc.classes.is_empty() {
+                self.out.typed_exports.push(self.out.members.len() as u32);
+            }
+        }
         self.push_member(owner, symbol, typed_as_class && !class_table);
     }
 
