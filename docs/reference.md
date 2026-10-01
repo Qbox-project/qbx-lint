@@ -403,7 +403,10 @@ and so do globals in assignments that have no `---@type` above them.
 
 The value stored is what the code is known to give. A global's `nil` tells nothing: one declared as
 `CurrentZone = nil` and set to a name by an event handler holds whatever the handler gives it, so
-storing it anywhere passes.
+storing it anywhere passes. A `--[[@as T]]` or `---@as T` right after a value, on its line, casts
+it to `T` as in lua-language-server, which silences a check that the code knows better than:
+`local count = GetValue() --[[@as integer]]` stores an `integer`. On a call, the cast types its
+first value.
 
 ## Impossible comparisons
 

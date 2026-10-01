@@ -8,14 +8,14 @@ use qbx_lua_analysis::env::leading_doc_lines;
 use qbx_lua_analysis::scope::{LocalId, LocalKind, Resolution, Resolved};
 use qbx_lua_analysis::side_guard::SideRegions;
 use qbx_lua_syntax::ast::*;
-use qbx_lua_syntax::{NumberValue, SmolStr};
+use qbx_lua_syntax::{CommentKind, NumberValue, SmolStr};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::callback_wrappers::{self, Wrapper};
 use crate::index::{FileId, Index, SymbolKind};
 use crate::luacats::{applies_on, parse_doc_lines, DocGroup};
 use crate::narrow::Guards;
-use crate::types::{CallbackRole, FunType, Param, Shape, ShapeField, Type};
+use crate::types::{CallbackRole, FunType, Param, Shape, ShapeField, Type, TypeParser};
 
 const MAX_DEPTH: u32 = 24;
 const MAX_SHAPE_FIELDS: usize = 96;
@@ -399,11 +399,37 @@ impl<'a> Infer<'a> {
     }
 
     pub fn expr_multi(&self, expr: &Expr) -> Vec<Type> {
-        self.guarded(|| match &expr.kind {
+        let mut values = self.guarded(|| match &expr.kind {
             ExprKind::Call { callee, args, .. } => self.call(callee, None, args),
             ExprKind::MethodCall { base, method, args, .. } => self.call(base, Some(method), args),
             _ => vec![self.single(expr)],
-        })
+        });
+        if let Some(cast) = self.cast_after(expr.span.end) {
+            match values.first_mut() {
+                Some(first) => *first = cast,
+                None => values.push(cast),
+            }
+        }
+        values
+    }
+
+    /// The type that a `--[[@as T]]` or `---@as T` comment casts the expression ending at `end` to,
+    /// when nothing but spaces stands between them.
+    fn cast_after(&self, end: u32) -> Option<Type> {
+        let comments = &self.ctx.chunk.comments;
+        let comment = comments.get(comments.partition_point(|c| c.span.start < end))?;
+        let between = self.ctx.source.get(end as usize..comment.span.start as usize)?;
+        if !between.bytes().all(|b| b == b' ' || b == b'\t') {
+            return None;
+        }
+        let content = comment.content.text(self.ctx.source);
+        let content = match comment.kind {
+            CommentKind::Long => content,
+            CommentKind::Line => content.strip_prefix('-')?,
+            CommentKind::CStyle => return None,
+        };
+        let ty = content.trim_start().strip_prefix("@as")?;
+        ty.starts_with(char::is_whitespace).then(|| TypeParser::new(ty.trim()).parse())
     }
 
     fn single(&self, expr: &Expr) -> Type {

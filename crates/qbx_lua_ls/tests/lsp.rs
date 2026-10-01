@@ -2933,6 +2933,43 @@ plain = 'text'
 }
 
 #[test]
+fn as_casts_type_the_expression_right_before_them() {
+    let mut client = Client::start(fixture_root());
+    let text = "\
+---@return integer, string
+local function pair() return 1, 'a' end
+
+---@type string
+local a = 5 --[[@as string]]
+---@type string, string
+local b, c = pair() --[[@as string]]
+---@type string
+local d = 5 ---@as string
+---@type string
+local e = 5 -- @as string
+---@type string
+local f = 5
+--[[@as string]]
+local cast = 5 --[[@as string]]
+";
+    client.open_with(CLIENT, text);
+    let finding = |needle: &str, message: &str| {
+        ("assign-type-mismatch".to_string(), pos(text, needle, 0).0 as u64, message.to_string())
+    };
+    assert_eq!(
+        findings(&mut client, CLIENT, &["assign-type-mismatch"]),
+        [
+            finding("local e", "Cannot assign `integer` to `e` of type `string`"),
+            finding("local f =", "Cannot assign `integer` to `f` of type `string`"),
+        ],
+        "a cast on the line of its value types the first value, and a plain comment or a line of its own casts nothing"
+    );
+    let (line, column) = pos(text, "cast =", 0);
+    let hover = client.hover_text(CLIENT, line, column);
+    assert!(hover.contains("local cast: string"), "{hover}");
+}
+
+#[test]
 fn a_global_declared_as_nil_takes_any_value() {
     let mut client = Client::start(fixture_root());
     let text = "\
