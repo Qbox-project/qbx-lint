@@ -5682,6 +5682,15 @@ fn definition_files_outside_resources_declare_globals_for_every_resource() {
     let found = client.diagnostics_for("app/server.lua");
     let undefined: Vec<u64> = found.iter().filter(|(code, _)| code == "undefined-global").map(|(_, l)| *l).collect();
     assert_eq!(undefined, [3], "{found:?}");
+
+    let sql = client.open("types/sql.lua");
+    client.change("types/sql.lua", 2, sql.trim_start_matches("---@meta"));
+    let found = client.diagnostics_for("app/server.lua");
+    let undefined: Vec<u64> = found.iter().filter(|(code, _)| code == "undefined-global").map(|(_, l)| *l).collect();
+    assert_eq!(undefined, [1, 3], "dropping `---@meta` takes the globals back: {found:?}");
+    client.change("types/sql.lua", 3, &sql);
+    let found = client.diagnostics_for("app/server.lua");
+    assert!(found.iter().filter(|(code, _)| code == "undefined-global").all(|(_, l)| *l == 3), "{found:?}");
 }
 
 #[test]

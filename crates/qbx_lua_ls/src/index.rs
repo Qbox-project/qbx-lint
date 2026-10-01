@@ -1,9 +1,10 @@
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use lsp_types::{Range, Url};
 use qbx_fivem_data::Side;
 use qbx_lua_analysis::manifest::Manifest;
+use qbx_lua_analysis::project::Declarations;
 use qbx_lua_analysis::summary::FileSummary;
 use rustc_hash::FxHashMap;
 use smol_str::SmolStr;
@@ -241,6 +242,8 @@ pub struct Index {
     aliases: FxHashMap<SmolStr, Vec<Slot>>,
     /// The `members` on `exports` that declare the type of a resource's exports, by resource name.
     export_types: FxHashMap<SmolStr, Vec<Slot>>,
+    /// Built on first use after the files change, since every lint of a resource needs them.
+    declarations: OnceLock<Arc<Declarations>>,
 }
 
 pub fn normalize_path(path: &Path) -> PathBuf {
@@ -353,6 +356,7 @@ impl Index {
     }
 
     fn clear_slots(&mut self, id: FileId) {
+        self.declarations.take();
         let Some(old) = self.files.get_mut(id as usize).and_then(Option::take) else { return };
         remove_file_slots(&mut self.globals, old.index.globals.iter().map(|s| &s.name), id);
         remove_file_slots(&mut self.members, old.index.members.iter().map(|m| &m.owner), id);
@@ -606,6 +610,17 @@ impl Index {
             })
             .filter_map(|(id, entry, i)| Some((id, &entry.index.members.get(*i as usize)?.symbol)))
             .collect()
+    }
+
+    /// The globals that definition files outside any resource declare for every resource.
+    pub fn declarations(&self) -> Arc<Declarations> {
+        let build = || {
+            let files = self.files().filter(|(_, file)| file.defines_for_all());
+            Arc::new(
+                files.flat_map(|(_, file)| file.index.summary.global_defs.iter().map(|def| def.name.clone())).collect(),
+            )
+        };
+        self.declarations.get_or_init(build).clone()
     }
 
     pub fn exports_of(&self, resource: &str) -> Vec<(FileId, &Symbol)> {

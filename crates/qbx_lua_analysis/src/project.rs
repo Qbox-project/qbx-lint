@@ -160,6 +160,9 @@ pub struct UnresolvedImport {
 /// The side of the file that assigns a function, and its signature as in `FunctionDef`.
 type SidedSignature = (Option<Side>, Option<Arc<FunType>>);
 
+/// The globals that definition files outside any resource declare, such as type libraries.
+pub type Declarations = FxHashSet<SmolStr>;
+
 /// The globals visible to scripts of one resource, split by the side they are loaded on.
 #[derive(Clone, Debug, Default)]
 pub struct ResourceEnv {
@@ -176,7 +179,7 @@ pub struct ResourceEnv {
     aliases: FxHashMap<SmolStr, Type>,
     /// Globals that definition files outside any resource describe, such as type libraries. They
     /// exist at runtime without the resource defining them, unless they come from an import it lacks.
-    declared: FxHashSet<SmolStr>,
+    declared: Arc<Declarations>,
     pub unresolved_imports: Vec<UnresolvedImport>,
     /// Part of the resource is encrypted or unreadable, so neither what it defines nor what it
     /// uses is known; rules that need the whole picture stay quiet.
@@ -261,9 +264,8 @@ impl ResourceEnv {
         }
     }
 
-    /// Adds the globals of a definition file that belongs to no resource.
-    pub fn add_declarations(&mut self, summary: &FileSummary) {
-        self.declared.extend(summary.global_defs.iter().map(|def| def.name.clone()));
+    pub fn set_declarations(&mut self, declared: Arc<Declarations>) {
+        self.declared = declared;
     }
 
     pub fn declares(&self, name: &str) -> bool {
