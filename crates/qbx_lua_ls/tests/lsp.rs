@@ -2842,6 +2842,10 @@ holder.name = true
 holder.label = 5
 ---@type string
 TestLabel = false
+---@type string, integer
+TestName, TestCount = 'a', 1
+---@type integer
+local counted = TestCount
 
 ---@return string, integer
 local function pair() return 'a', 1 end
@@ -2892,6 +2896,9 @@ plain = 'text'
     let (line, column) = pos(text, "second = pair()", 0);
     let hover = client.hover_text(CLIENT, line, column);
     assert!(hover.contains("local second: integer"), "{hover}");
+    let (line, column) = pos(text, "TestCount =", 0);
+    let hover = client.hover_text(CLIENT, line, column);
+    assert!(hover.contains("TestCount: integer"), "{hover}");
 }
 
 #[test]
