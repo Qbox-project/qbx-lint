@@ -403,8 +403,23 @@ impl Index {
         slots.iter().filter(|(f, _)| self.is_visible(from, *f)).filter_map(resolve).collect()
     }
 
+    /// Whether `target` is a definition file outside any resource that code in `from` only falls back
+    /// on: what the resource of `from` declares itself, imports, or gets from the stubs comes first.
+    pub fn falls_back_on(&self, from: FileId, target: FileId) -> bool {
+        from != target && self.file(target).is_some_and(FileEntry::defines_for_all)
+    }
+
+    /// Drops what definition files outside any resource declare when other files declare it too.
+    pub fn prefer_own<T>(&self, from: FileId, found: &mut Vec<T>, file: impl Fn(&T) -> FileId) {
+        if found.iter().any(|item| !self.falls_back_on(from, file(item))) {
+            found.retain(|item| !self.falls_back_on(from, file(item)));
+        }
+    }
+
     pub fn globals_named(&self, name: &str, from: FileId) -> Vec<(FileId, &Symbol)> {
-        self.visible_first(self.globals.get(name), from, |f, i| f.index.globals.get(i as usize))
+        let mut found = self.visible_first(self.globals.get(name), from, |f, i| f.index.globals.get(i as usize));
+        self.prefer_own(from, &mut found, |(file, _)| *file);
+        found
     }
 
     /// Members are looked up per resource rather than per file: libraries such as ox_lib load the
@@ -458,7 +473,8 @@ impl Index {
         let is_own = |target: FileId| {
             target == from || (own_resource.is_some() && self.file(target).and_then(|f| f.resource) == own_resource)
         };
-        let in_scope: Vec<Slot> = slots.iter().copied().filter(|(f, _)| self.is_visible(from, *f)).collect();
+        let mut in_scope: Vec<Slot> = slots.iter().copied().filter(|(f, _)| self.is_visible(from, *f)).collect();
+        self.prefer_own(from, &mut in_scope, |(file, _)| *file);
         if in_scope.iter().any(|(f, _)| is_own(*f)) {
             return in_scope;
         }
