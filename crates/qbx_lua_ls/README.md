@@ -37,6 +37,10 @@ Available features depend on the editor's LSP client.
 - Definitions, references and rename for locals, globals and fields, including static string
   keys such as `Config['name']` and supported `---@field` declarations.
 - Hover and definitions for the classes, aliases and enums named in LuaCATS annotations.
+- Exports typed by LuaLS definitions, as `---@type PhoneExports` above `exports.phone = {}`, or
+  `---@class qbx_core` above `exports.qbx_core = {}` with `function exports.qbx_core:GetCid()`
+  methods: `exports.phone` and `exports['phone']` take the members of the declared type before the
+  exports the resource registers, also for resources the workspace lacks.
 - Type guards: after `if not name then return end`, inside `if name then`, and in the other
   [guarded code](#type-guards), a local is no longer `nil` or `false`. A guard on one value of
   `local ok, err = f()` also narrows the others, for functions that return
@@ -67,7 +71,12 @@ Custom requests are documented in the [protocol reference](docs/protocol.md).
 The VS Code asset/utility interfaces and assistant MCP adapter live in `qbx-editor`.
 
 Opening a resource also indexes dependencies and imported scripts found in sibling resource
-folders. Add other locations through the `library` setting.
+folders. Add other locations through the `library` setting. As LuaLS reads its library, files there
+that belong to no resource, and workspace files outside resources with `---@meta` above their
+first statement, are definition files: their globals, classes and export types reach every
+resource, on the side their names give and only through the imports of the resource their folder
+is named after, while a resource's own declarations of a name come first. The
+[reference](../../docs/reference.md#definition-files-outside-resources) has the details.
 
 Hovering `38` in `IsControlJustPressed(0, 38)` shows `INPUT_PICKUP` and its default
 QWERTY/Xbox bindings. Ped configuration flag hovers show the documented symbol;
@@ -88,8 +97,10 @@ A `(server)` or `(client)` attribute scopes a LuaCATS declaration to one side:
 ```
 
 Overloads follow the side of the call, including `IsDuplicityVersion()` and `lib.context`
-guards. Classes, fields, aliases and enums follow the manifest side of the file. Shared files
-and files of an unknown side see both sides. A `side` in a `qbxlint.toml` override gives a side
+guards. A function `@field` that repeats the name of an unscoped one is another signature of it,
+as in LuaLS, and `---@field (server) Name fun(...)` repeated adds a signature for server calls
+only. Classes, fields, aliases and enums follow the manifest side of the file. Shared files and
+files of an unknown side see both sides. A `side` in a `qbxlint.toml` override gives a side
 to files a loader runs without a manifest entry. Naming a type in a script of a side that only
 the other side declares is reported as `undefined-doc-name`.
 
