@@ -101,12 +101,11 @@ impl DocGroup {
     }
 
     /// The `@type` of the name at `index` of the statement below. A line that lists several types
-    /// gives each name its own, and one type covers every name.
+    /// gives each name its own, and one type only the first name, as LuaLS binds it.
     pub fn type_at(&self, index: usize) -> Option<&Type> {
-        if index == 0 || self.ty_rest.is_empty() {
-            self.ty.as_ref()
-        } else {
-            self.ty_rest.get(index - 1)
+        match index {
+            0 => self.ty.as_ref(),
+            _ => self.ty_rest.get(index - 1),
         }
     }
 
@@ -834,7 +833,8 @@ mod tests {
     fn type_and_generics() {
         let doc = parse("---@generic T: table, K\n---@type table<string, fun(): boolean>");
         assert_eq!(doc.generics, ["T", "K"]);
-        assert_eq!(doc.type_at(1).unwrap().to_string(), "table<string, fun(): boolean>", "one type covers every name");
+        assert_eq!(doc.type_at(0).unwrap().to_string(), "table<string, fun(): boolean>");
+        assert_eq!(doc.type_at(1), None, "one type is the first name's alone");
         assert_eq!(doc.ty.unwrap().to_string(), "table<string, fun(): boolean>");
 
         let doc = parse("---@type boolean, table<string, number> | string");
