@@ -108,7 +108,6 @@ pub fn capabilities() -> ServerCapabilities {
                 "{".into(),
                 "(".into(),
                 ",".into(),
-                "=".into(),
                 " ".into(),
             ]),
             ..CompletionOptions::default()
@@ -898,5 +897,12 @@ mod tests {
             .filter(|m| matches!(m, Message::Notification(n) if n.method == notif::PublishDiagnostics::METHOD))
             .count();
         assert_eq!(published, 1);
+    }
+
+    #[test]
+    fn completion_triggers_on_a_space_and_not_on_an_equals_sign() {
+        let triggers = capabilities().completion_provider.and_then(|c| c.trigger_characters).unwrap_or_default();
+        assert!(triggers.iter().any(|c| c == " "), "{triggers:?}");
+        assert!(!triggers.iter().any(|c| c == "="), "Enter after a typed `=` makes a new line: {triggers:?}");
     }
 }

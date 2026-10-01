@@ -116,11 +116,13 @@ the `@field` that a table typed as a class sets, the `@return` of the function, 
 side of the comparison is declared as. A local typed by `---@type` or `@param` keeps that type
 where it is assigned again; types inferred from assigned values list nothing. Nothing is offered
 in front of a value already written, such as the `other` of `local enabled = other` with the
-cursor before it, or in a word the cursor is in. `=` and space are
-completion trigger characters for these items only: a request whose `context.triggerCharacter` is
-`=` or a space returns nothing else, and returns `null` where no type lists values or takes a
-function. Inside a string in one of those places, or on either side of the comparison, the string
-values replace the string's contents.
+cursor before it, or in a word the cursor is in. A space is a completion trigger character for
+these items only: a request whose `context.triggerCharacter` is a space returns nothing else,
+returns `null` where no type lists values or takes a function, and marks its list `isIncomplete`,
+so that the client asks again once a word is typed and gets the names in scope beside the values.
+`=` is no trigger character, so Enter right after a typed `=` still starts a new line. Inside a
+string in one of those places, or on either side of the comparison, the string values replace the
+string's contents.
 
 The server requests file watches only when
 `workspace.didChangeWatchedFiles.dynamicRegistration` is `true`. It watches Lua, lint config,
