@@ -539,10 +539,11 @@ impl<'a> Infer<'a> {
             return Type::Exports(None);
         }
         let symbols = self.index.globals_named(name, self.ctx.file);
+        // `Zone = nil` declares a global that some handler sets later, not what it holds.
         let known = symbols
             .iter()
             .map(|(_, s)| &s.ty)
-            .filter(|ty| !ty.is_unknown())
+            .filter(|ty| !ty.is_unknown() && !matches!(ty, Type::Nil))
             .max_by_key(|ty| (matches!(ty, Type::GlobalTable(_) | Type::Named(..)), ty.specificity()));
         if let Some(ty) = known.filter(|ty| !(matches!(ty, Type::Table) && self.index.has_members(name))) {
             // `local lib = {}` published with `_ENV.lib = lib` and then extended as `function lib.x()`
