@@ -1723,7 +1723,7 @@ impl<'a> Infer<'a> {
                 // A declared type describes the exports on purpose, so it wins over the type
                 // inferred from the function a resource registers under the same name.
                 for (_, symbol) in self.index.declared_exports(self.ctx.file) {
-                    if symbol.name == *resource {
+                    if symbol.name == *resource && !holds_exports(&symbol.ty) {
                         out.extend(self.guarded(|| self.members_matching(&symbol.ty, filter)));
                     }
                 }
@@ -1794,6 +1794,16 @@ impl<'a> Infer<'a> {
                 self.class_members(parent, filter, out, depth + 1);
             }
         }
+    }
+}
+
+/// Whether `ty` is the exports of a resource, as `exports.phone = saved` holds after
+/// `local saved = exports.phone`. Such a value adds nothing to the exports it is assigned to.
+fn holds_exports(ty: &Type) -> bool {
+    match ty {
+        Type::Exports(_) => true,
+        Type::Union(types) => types.iter().any(holds_exports),
+        _ => false,
     }
 }
 
