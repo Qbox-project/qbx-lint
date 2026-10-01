@@ -14,7 +14,7 @@ use qbx_lua_syntax::visit::{self, Visitor};
 use qbx_lua_syntax::Span;
 
 use super::class_tables::Classes;
-use crate::indexer::is_meta_comment;
+use crate::indexer::is_meta_file;
 use crate::infer::{always_exits, documented_functions, return_stmts, Infer};
 use crate::types::Type;
 
@@ -95,11 +95,6 @@ pub fn missing_returns(infer: &Infer, chunk: &Chunk) -> Vec<(Span, String)> {
         }
     }
     out
-}
-
-/// Whether a `---@meta` line marks the file as a definition file.
-fn is_meta_file(source: &str, chunk: &Chunk) -> bool {
-    chunk.comments.iter().any(|comment| is_meta_comment(comment.span.text(source)))
 }
 
 fn values(count: usize) -> String {

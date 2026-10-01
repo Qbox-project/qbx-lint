@@ -3493,6 +3493,8 @@ local kept = RegisterServerCallback('test:kept', function(source) return 2 end)
     client.change(SERVER, 2, &format!("---@meta\n\n{declared}"));
     let found = findings(&mut client, SERVER, &[missing]);
     assert!(found.is_empty(), "{found:?}");
+    client.change(SERVER, 3, &format!("local loaded = true\n---@meta\n\n{declared}"));
+    assert_eq!(findings(&mut client, SERVER, &[missing]).len(), 1, "`---@meta` only counts above the first statement");
 }
 
 #[test]
