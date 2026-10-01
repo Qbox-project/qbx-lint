@@ -2901,8 +2901,8 @@ plain = 'text'
             finding("holder.name = true", "Cannot assign `boolean` to field `name` of type `string`"),
             finding("holder.label = 5", "Cannot assign `integer` to `holder.label` of type `string`"),
             finding("TestLabel = false", "Cannot assign `boolean` to `TestLabel` of type `string`"),
-            finding("second = pair()", "Cannot assign `integer` to `second` of type `string`"),
-            // A list of types gives each name its own, and the names after it none.
+            // A list of types gives each name its own, and the names after it none, as one type
+            // gives every name after the first.
             finding("name, count, extra = 1", "Cannot assign `integer` to `name` of type `string`"),
             finding("name, count, extra = 1", "Cannot assign `string` to `count` of type `integer?`"),
             finding("id = tostring(id)", "Cannot assign `string` to `id` of type `number`"),
@@ -2910,6 +2910,9 @@ plain = 'text'
         "values the type takes, a guarded local, a local without a value, a reassigned local as the value, \
          the table a `---@class` declares, optional and undocumented parameters and untyped locals pass"
     );
+    let (line, column) = pos(text, "second = pair()", 0);
+    let hover = client.hover_text(CLIENT, line, column);
+    assert!(hover.contains("local second: integer"), "{hover}");
 }
 
 #[test]

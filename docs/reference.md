@@ -388,9 +388,11 @@ the assignment narrow it to, so `name = "x"` inside `if not name then` passes fo
 at the end of the values gives each name the value it returns at that position.
 
 A `---@type` line that lists several types gives each name of the statement its own, as
-`---@type boolean, string?` does above `local ok, err = pcall(...)`; one type covers every name.
-Locals without a `---@type`, whose type is inferred from what they hold, take any value, and so do
-globals in assignments that have no `---@type` above them.
+`---@type boolean, string?` does above `local ok, err = pcall(...)`. A single type is the first
+name's alone, as lua-language-server binds it, so `---@type boolean` above
+`local onScreen, x, y = GetScreenCoordFromWorldCoord(...)` types only `onScreen`. Names without a
+type of their own, and other locals whose type is inferred from what they hold, take any value,
+and so do globals in assignments that have no `---@type` above them.
 
 ## Impossible comparisons
 
