@@ -53,42 +53,58 @@ impl Finder<'_, '_> {
     }
 
     /// Reports each of `exprs` that the declared type of the target it is stored in does not take.
-    /// A target is where its name is written, with its type when one is declared.
-    fn check(&mut self, targets: &[(Span, Option<Type>)], exprs: &[Expr]) {
-        if targets.iter().all(|(_, ty)| ty.is_none()) {
+    fn check(&mut self, targets: &[Target], exprs: &[Expr]) {
+        if targets.iter().all(|target| target.ty.is_none()) {
             return;
         }
         let from = self.classes.file();
-        for ((name, expected), (given, span)) in targets.iter().zip(self.classes.values(exprs)) {
-            let Some(expected) = expected else { continue };
+        for (index, (target, (given, span))) in targets.iter().zip(self.classes.values(exprs)).enumerate() {
+            let Some(expected) = &target.ty else { continue };
+            // LuaLS lets the statement whose `---@type` declares a name give it `nil`.
+            if target.annotated && exprs.get(index).is_some_and(|expr| matches!(expr.kind, ExprKind::Nil)) {
+                continue;
+            }
             if self.classes.rejects(expected, from, &given) {
                 let shown = if self.classes.literal_mismatch(expected, from, &given) { given } else { given.widen() };
-                let name = name.text(self.infer.ctx.source);
+                let name = target.name.text(self.infer.ctx.source);
                 self.out.push((span, format!("Cannot assign `{shown}` to `{name}` of type `{expected}`")));
             }
         }
     }
 }
 
+/// Where a value is stored: the name it is written to, the type declared for it, and whether the
+/// `---@type` of the statement that stores it declares that type.
+struct Target {
+    name: Span,
+    ty: Option<Type>,
+    annotated: bool,
+}
+
 impl<'c> Visitor<'c> for Finder<'_, '_> {
     fn visit_stmt(&mut self, stmt: &'c Stmt) {
         match &stmt.kind {
             StmtKind::Local { names, exprs, in_unpack: false } => {
-                let declared = |(index, name): (usize, &AttribName)| (name.name.span, self.stmt_type(stmt, index));
+                let declared = |(index, name): (usize, &AttribName)| {
+                    let ty = self.stmt_type(stmt, index);
+                    Target { name: name.name.span, annotated: ty.is_some(), ty }
+                };
                 let targets: Vec<_> = names.iter().enumerate().map(declared).collect();
                 self.check(&targets, exprs);
             }
             StmtKind::Assign { targets, exprs } => {
                 // The `---@type` above the assignment, or else the type its target is declared with.
                 let declared = |(index, target): (usize, &Expr)| {
-                    let ty = self.stmt_type(stmt, index).or_else(|| match &target.kind {
+                    let own = self.stmt_type(stmt, index);
+                    let annotated = own.is_some();
+                    let ty = own.or_else(|| match &target.kind {
                         ExprKind::Name(name) => match self.infer.ctx.resolution.resolve_at(name.span.start) {
                             Some(Resolved::Local(id)) => self.local_type(id),
                             _ => None,
                         },
                         _ => None,
                     });
-                    (target.span, ty)
+                    Target { name: target.span, ty, annotated }
                 };
                 let targets: Vec<_> = targets.iter().enumerate().map(declared).collect();
                 self.check(&targets, exprs);

@@ -2821,6 +2821,14 @@ local maybe = nil
 if not maybe then maybe = 1 end
 maybe = {}
 
+---@type number
+local handle = nil
+if handle then handle = nil end
+---@type string
+TestZone = nil
+---@type number, string
+local width, caption = nil, nil
+
 ---@type string
 local unset
 unset = 'later'
@@ -2879,6 +2887,8 @@ plain = 'text'
             finding("state = 4", "Cannot assign `4` to `state` of type `Test.State`"),
             finding("state = nil", "Cannot assign `nil` to `state` of type `Test.State`"),
             finding("maybe = {}", "Cannot assign `table` to `maybe` of type `Test.State?`"),
+            // The statement whose `---@type` declares a name may give it `nil`, as in LuaLS.
+            finding("then handle = nil", "Cannot assign `nil` to `handle` of type `number`"),
             finding("local letter", "Cannot assign `\"c\"` to `letter` of type `\"a\"|\"b\"`"),
             // The `@field` decides what a class field takes, and reports it once.
             finding("holder.name = true", "Cannot assign `boolean` to field `name` of type `string`"),
