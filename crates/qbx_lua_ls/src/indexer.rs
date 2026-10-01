@@ -244,11 +244,13 @@ impl<'a> Indexer<'a> {
     }
 
     /// The symbol for `name = value`, registering nested table fields under `nested_owner`.
+    /// `position` is where `name` is among the targets of its statement, which picks its `@type`.
     fn value_symbol(
         &mut self,
         name: &Name,
         value: Option<&Expr>,
         doc_anchor: u32,
+        position: usize,
         nested_owner: &str,
         table_depth: u32,
     ) -> Symbol {
@@ -260,7 +262,7 @@ impl<'a> Indexer<'a> {
             }
             kind = SymbolKind::Table;
             Type::Named(class.name.clone(), Vec::new())
-        } else if let Some(ty) = &doc.ty {
+        } else if let Some(ty) = doc.type_at(position) {
             ty.clone()
         } else {
             match value.map(|v| (&v.kind, v)) {
@@ -343,7 +345,7 @@ impl<'a> Indexer<'a> {
                 TableField::Keyed { .. } | TableField::Positional(_) | TableField::SetMember(_) => continue,
             };
             let nested = format!("{owner}.{}", name.text);
-            let mut symbol = self.value_symbol(&name, Some(value), name.span.start, &nested, depth);
+            let mut symbol = self.value_symbol(&name, Some(value), name.span.start, 0, &nested, depth);
             if symbol.kind == SymbolKind::Variable {
                 symbol.kind = SymbolKind::Field;
             }
@@ -409,7 +411,7 @@ impl<'a> Indexer<'a> {
             }
             StmtKind::Assign { targets, exprs } => {
                 for (i, target) in targets.iter().enumerate() {
-                    self.assignment(stmt, target, exprs.get(i));
+                    self.assignment(stmt, target, i, exprs.get(i));
                     self.expr(target);
                 }
                 exprs.iter().for_each(|e| self.expr(e));
@@ -488,29 +490,29 @@ impl<'a> Indexer<'a> {
         self.push_member(owner, symbol, injected);
     }
 
-    fn assignment(&mut self, stmt: &Stmt, target: &Expr, value: Option<&Expr>) {
+    fn assignment(&mut self, stmt: &Stmt, target: &Expr, position: usize, value: Option<&Expr>) {
         match &target.kind {
             ExprKind::Name(name) if self.is_global(name) => {
-                let symbol = self.value_symbol(name, value, stmt.span.start, &name.text.clone(), 0);
+                let symbol = self.value_symbol(name, value, stmt.span.start, position, &name.text.clone(), 0);
                 self.out.globals.push(symbol);
             }
             ExprKind::Field { base, name, .. } if !name.is_missing() => {
-                self.member_assignment(stmt, base, name, value);
+                self.member_assignment(stmt, base, name, position, value);
             }
             ExprKind::Index { base, index, .. } => {
                 if let Some(text) = index.as_string() {
                     let name = Name { text: text.clone(), span: index.span };
-                    self.member_assignment(stmt, base, &name, value);
+                    self.member_assignment(stmt, base, &name, position, value);
                 }
             }
             _ => {}
         }
     }
 
-    fn member_assignment(&mut self, stmt: &Stmt, base: &Expr, name: &Name, value: Option<&Expr>) {
+    fn member_assignment(&mut self, stmt: &Stmt, base: &Expr, name: &Name, position: usize, value: Option<&Expr>) {
         if let ExprKind::Name(root) = &base.kind {
             if self.is_global(root) && matches!(root.text.as_str(), "_ENV" | "_G") {
-                let symbol = self.value_symbol(name, value, stmt.span.start, &name.text.clone(), 0);
+                let symbol = self.value_symbol(name, value, stmt.span.start, position, &name.text.clone(), 0);
                 self.out.globals.push(symbol);
                 return;
             }
@@ -536,7 +538,7 @@ impl<'a> Indexer<'a> {
         };
         let class_table = matches!(&base.kind, ExprKind::Name(root) if self.is_class_table(root));
         let nested = format!("{owner}.{}", name.text);
-        let mut symbol = self.value_symbol(name, value, stmt.span.start, &nested, 1);
+        let mut symbol = self.value_symbol(name, value, stmt.span.start, position, &nested, 1);
         if symbol.kind == SymbolKind::Variable {
             symbol.kind = SymbolKind::Field;
         }
