@@ -449,14 +449,14 @@ pub fn completion(
         let items = with_infer(ws, doc, |infer| argument_items(infer, doc, offset, before, snippets, quote, true));
         return (!items.is_empty()).then(|| respond(items, false));
     }
-    // A typed `=` or space only asks for the values that what follows it can be, so that no other
-    // space opens a list.
-    if matches!(trigger_character, Some("=" | " ")) {
+    // A typed space only asks for the values that what follows it can be, so that no other space
+    // opens a list. The list is incomplete, so a typed word asks again for the names in scope too.
+    if trigger_character == Some(" ") {
         if comment.is_some() || in_string.is_some() {
             return None;
         }
         let items = value_items(ws, doc, offset, before, snippets, quote);
-        return (!items.is_empty()).then(|| respond(items, false));
+        return (!items.is_empty()).then(|| respond(items, true));
     }
 
     if let Some(comment) = comment {

@@ -27,7 +27,8 @@ Available features depend on the editor's LSP client.
   an overload, so the handler written next matches it.
 - The same values where a value of such a type, like `"busy"|"ready"`, `1|2|3` or `boolean`, is
   assigned, set as a field of a class, returned or compared with `==` or `~=`, and the function
-  literal where a function is assigned or returned.
+  literal where a function is assigned or returned. They open on the space typed after the `=`,
+  `==`, `~=` or `return`, beside the names in scope once a word is typed.
 - `---@` continuation on Enter inside LuaCATS annotation blocks, through on-type formatting.
 - Reference hovers for literal control IDs in PAD natives and ped configuration flags
   in `SetPedConfigFlag` / `GetPedConfigFlag`, using bundled Cfx documentation.
