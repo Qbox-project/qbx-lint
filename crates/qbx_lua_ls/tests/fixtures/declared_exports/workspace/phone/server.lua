@@ -5,3 +5,7 @@ end)
 exports('Extra', function()
     return 'extra'
 end)
+
+exports.Ping = function()
+    return true
+end

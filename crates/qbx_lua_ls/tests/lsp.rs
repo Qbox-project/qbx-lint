@@ -5648,7 +5648,7 @@ fn declared_types_describe_the_exports_of_a_resource() {
     client.change("app/client.lua", 2, &format!("{text}exports['']"));
     let mut resources = client.completion_labels("app/client.lua", line, 9);
     resources.sort();
-    assert_eq!(resources, ["app", "garage", "phone", "tablet"]);
+    assert_eq!(resources, ["app", "garage", "mocker", "phone", "tablet"]);
     client.change("app/client.lua", 3, &format!("{text}exports.tablet:"));
     assert_eq!(client.completion_labels("app/client.lua", line, 15), ["Ring"]);
 
@@ -5679,6 +5679,24 @@ fn definition_files_outside_resources_declare_globals_for_every_resource() {
     let found = client.diagnostics_for("app/server.lua");
     let undefined: Vec<u64> = found.iter().filter(|(code, _)| code == "undefined-global").map(|(_, l)| *l).collect();
     assert_eq!(undefined, [3], "{found:?}");
+}
+
+#[test]
+fn plain_assignments_to_exports_declare_no_types() {
+    let root = declared_exports_root();
+    let mut client = Client::start_with_library(root.join("workspace"), &root.join("types"));
+    let text = client.open("mocker/server.lua");
+
+    let (l, c) = pos(&text, "local config", 6);
+    let config = client.hover_text("mocker/server.lua", l, c);
+    assert!(config.contains("local config: PhoneConfig"), "a mock leaves the declared type: {config}");
+    let line = text.lines().count() as u32;
+    client.change("mocker/server.lua", 2, &format!("{text}exports['']"));
+    let resources = client.completion_labels("mocker/server.lua", line, 9);
+    assert!(!resources.iter().any(|r| r == "Ping"), "`exports.Ping = fn` registers an export: {resources:?}");
+    client.change("mocker/server.lua", 3, &format!("{text}exports.phone:"));
+    let members = client.completion_labels("mocker/server.lua", line, 14);
+    assert!(members.contains(&"GetConfig".to_string()) && !members.contains(&"Fake".to_string()), "{members:?}");
 }
 
 #[test]

@@ -164,6 +164,9 @@ pub struct FileIndex {
     pub dynamic_exports: bool,
     /// A `---@meta` line above the first statement marks a definition file.
     pub meta: bool,
+    /// The `members` set on `exports` below a `---@type` or `---@class`, by index, as
+    /// `exports.phone = {}` below `---@type PhoneExports`, rather than registering an export.
+    pub typed_exports: Vec<u32>,
     pub summary: FileSummary,
 }
 
@@ -195,6 +198,13 @@ impl FileEntry {
             FileOrigin::Workspace => self.resource.is_none() && self.index.meta,
         }
     }
+
+    /// Whether the member at `index`, set on `exports`, declares the type of a resource's exports:
+    /// one with a `---@type` or `---@class` above it, or any in a definition file. Elsewhere
+    /// `exports.Name = fn` registers an export of the file's own resource, and tests mock exports so.
+    fn declares_export_type(&self, index: u32) -> bool {
+        self.index.meta || self.defines_for_all() || self.index.typed_exports.contains(&index)
+    }
 }
 
 #[derive(Debug)]
@@ -222,6 +232,8 @@ pub struct Index {
     elements: FxHashMap<SmolStr, Vec<Slot>>,
     classes: FxHashMap<SmolStr, Vec<Slot>>,
     aliases: FxHashMap<SmolStr, Vec<Slot>>,
+    /// The `members` on `exports` that declare the type of a resource's exports, by resource name.
+    export_types: FxHashMap<SmolStr, Vec<Slot>>,
 }
 
 pub fn normalize_path(path: &Path) -> PathBuf {
@@ -320,6 +332,11 @@ impl Index {
         for (i, alias) in entry.index.aliases.iter().enumerate() {
             self.aliases.entry(alias.name.clone()).or_default().push((id, i as u32));
         }
+        for (i, member) in entry.index.members.iter().enumerate() {
+            if member.owner == "exports" && entry.declares_export_type(i as u32) {
+                self.export_types.entry(member.symbol.name.clone()).or_default().push((id, i as u32));
+            }
+        }
         if let Some(resource) = entry.resource.and_then(|r| self.resources.get_mut(r as usize)) {
             if !resource.files.contains(&id) {
                 resource.files.push(id);
@@ -335,6 +352,8 @@ impl Index {
         remove_file_slots(&mut self.elements, old.index.elements.iter().map(|e| &e.owner), id);
         remove_file_slots(&mut self.classes, old.index.classes.iter().map(|c| &c.name), id);
         remove_file_slots(&mut self.aliases, old.index.aliases.iter().map(|a| &a.name), id);
+        let exports = old.index.members.iter().filter(|m| m.owner == "exports");
+        remove_file_slots(&mut self.export_types, exports.map(|m| &m.symbol.name), id);
     }
 
     pub fn remove_file(&mut self, path: &Path) {
@@ -550,10 +569,21 @@ impl Index {
     /// `exports['phone'] = {}`, that code in `from` sees. Exports cross resources, so these are
     /// looked up in every file whose side fits, like registered exports are.
     pub fn declared_exports(&self, from: FileId) -> Vec<(FileId, &Symbol)> {
+        self.export_type_slots(self.export_types.values().flatten(), from)
+    }
+
+    /// The types declared for the exports of `resource`, as `declared_exports` finds them.
+    pub fn declared_exports_of(&self, resource: &str, from: FileId) -> Vec<(FileId, &Symbol)> {
+        self.export_type_slots(self.export_types.get(resource).into_iter().flatten(), from)
+    }
+
+    fn export_type_slots<'a>(
+        &'a self,
+        slots: impl Iterator<Item = &'a Slot>,
+        from: FileId,
+    ) -> Vec<(FileId, &'a Symbol)> {
         let side = self.file(from).and_then(|f| f.side);
-        let Some(slots) = self.members.get("exports") else { return Vec::new() };
         slots
-            .iter()
             .filter_map(|(file, i)| Some((*file, self.file(*file)?, i)))
             .filter(|(_, entry, _)| match (side, entry.side) {
                 (Some(side), Some(declared)) => declared.is_available_on(side),
