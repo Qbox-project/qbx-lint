@@ -7,7 +7,7 @@ use serde_json::Value;
 mod references;
 
 const SOURCES: &[&str] =
-    &["https://runtime.fivem.net/doc/natives.json", "https://runtime.fivem.net/doc/natives_cfx.json"];
+    &["https://static.cfx.re/natives/natives.json", "https://static.cfx.re/natives/natives_cfx.json"];
 
 struct Native {
     side: char,
